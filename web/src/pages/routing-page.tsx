@@ -114,7 +114,7 @@ export function RoutingPage({ onNotice }: RoutingPageProps) {
   }
 
   return (
-    <div className="space-y-4 lg:flex lg:h-full lg:min-h-0 lg:flex-col lg:gap-4 lg:space-y-0">
+    <div className="space-y-4 xl:flex xl:h-full xl:min-h-0 xl:flex-col xl:gap-4 xl:space-y-0">
       <div className="flex shrink-0 flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
         <div>
           <h1 className="text-xl font-semibold">代理服务</h1>
@@ -137,10 +137,15 @@ export function RoutingPage({ onNotice }: RoutingPageProps) {
         </div>
       )}
 
-      <div className="grid gap-4 lg:min-h-0 lg:flex-1 xl:grid-cols-[minmax(0,1.2fr)_minmax(390px,0.8fr)]">
+      {/*
+        高度锁必须跟双栏同断点 (xl)。lg 锁高、xl 才两列时, 单列里
+        flex-1 min-h-0 会把服务行压成 0 高。
+        见 .agents/notes/implemented/bug-fix/2026-09-18-proxy-service-list-collapses.md
+      */}
+      <div className="grid gap-4 xl:min-h-0 xl:flex-1 xl:grid-cols-[minmax(0,1.2fr)_minmax(390px,0.8fr)]">
         <section className="flex min-h-0 flex-col overflow-hidden rounded-lg border bg-card">
           <PanelHeader title="服务列表" description="入口与节点策略保持一一对应" count={listeners.length} />
-          {listeners.length === 0 ? <EmptyState /> : <div className="min-h-0 flex-1 divide-y overflow-y-auto">{listeners.map((listener) => {
+          {listeners.length === 0 ? <EmptyState /> : <div className="min-h-48 divide-y overflow-y-auto xl:min-h-0 xl:flex-1">{listeners.map((listener) => {
             const group = groups.find((item) => item.id === listener.proxy_group_id)
             const residential = residentialChannels.find((channel) => channel.listener_id === listener.id)
             return <ServiceRow key={listener.id} listener={listener} group={group} groups={groups} routingRules={routingRules} nodes={serviceNodes.get(listener.id) ?? []} subscriptions={subscriptions} allNodes={nodes} residential={residential} expanded={expanded.has(listener.id)} editing={editing === listener.id} onToggle={() => setExpanded((current) => { const next = new Set(current); if (next.has(listener.id)) next.delete(listener.id); else next.add(listener.id); return next })} onEdit={() => { setExpanded((current) => new Set(current).add(listener.id)); setEditing(listener.id) }} onCloseEdit={() => setEditing(null)} onRoutingChanged={setRoutingRules} onChanged={async () => { setEditing(null); await load() }} onDelete={() => setDeleteTarget({ listener, group })} onNotice={onNotice} />

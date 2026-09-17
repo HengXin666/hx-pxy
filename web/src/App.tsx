@@ -292,7 +292,7 @@ export default function App() {
         </div>
       </aside>
 
-      <div className={cn("min-w-0 lg:h-screen", page === "routing" ? "lg:overflow-hidden" : "lg:overflow-y-auto")}>
+      <div className={cn("min-w-0 lg:h-screen", page === "routing" ? "lg:overflow-y-auto xl:overflow-hidden" : "lg:overflow-y-auto")}>
         <header className="sticky top-0 z-40 border-b bg-card lg:hidden">
           <div className="flex h-13 items-center gap-2 px-3">
             <div className="flex size-7 items-center justify-center rounded-md bg-[#24292f] text-white">
@@ -324,7 +324,7 @@ export default function App() {
           </nav>
         </header>
 
-        <main className={cn("mx-auto w-full max-w-[1440px] px-4 py-5 sm:px-6 lg:px-8 lg:py-7", (page === "routing" || page === "terminal") && "lg:h-full lg:max-w-none lg:overflow-hidden")}>
+        <main className={cn("mx-auto w-full max-w-[1440px] px-4 py-5 sm:px-6 lg:px-8 lg:py-7", page === "terminal" && "lg:h-full lg:max-w-none lg:overflow-hidden", page === "routing" && "xl:h-full xl:max-w-none xl:overflow-hidden")}>
           {healthy === false && (
             <div className="mb-4 flex items-start gap-2.5 rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2.5 text-sm text-destructive">
               <CircleX className="mt-0.5 size-4 shrink-0" />
@@ -338,7 +338,7 @@ export default function App() {
           )}
 
           {page !== "terminal" && (
-            <div key={page} className={cn("page-enter", page === "routing" && "lg:h-full")}>
+            <div key={page} className={cn("page-enter", page === "routing" && "xl:h-full")}>
               <Suspense fallback={<PageFallback />}>
                 {page === "overview" && <OverviewPage onNotice={showNotice} />}
                 {page === "subscriptions" && <InventoryPage initialView={window.location.hash.includes("nodes") ? "nodes" : "subscriptions"} onNotice={showNotice} />}
