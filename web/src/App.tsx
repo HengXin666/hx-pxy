@@ -2,6 +2,7 @@ import { lazy, Suspense, useCallback, useEffect, useState } from "react"
 import {
   Archive,
   BellRing,
+  Bot,
   CheckCircle2,
   CircleX,
   Globe,
@@ -28,7 +29,7 @@ import { AuthPage } from "@/pages/auth-page"
 import { api, setCsrfToken, setUnauthenticatedHandler } from "@/lib/api"
 import { cn } from "@/lib/utils"
 
-type Page = "overview" | "subscriptions" | "routing" | "residential" | "rules" | "settings" | "alerts" | "artifacts" | "terminal" | "about"
+type Page = "overview" | "subscriptions" | "routing" | "residential" | "rules" | "settings" | "alerts" | "artifacts" | "terminal" | "ai-entry" | "about"
 type Notice = { id: number; message: string; tone: "success" | "error" }
 const sidebarStorageKey = "hx-proxygroup.sidebar-collapsed"
 
@@ -46,6 +47,7 @@ const pageLoaders = {
   alerts: () => import("@/pages/alerts-page"),
   artifacts: () => import("@/pages/artifacts-page"),
   terminal: () => import("@/pages/terminal-page"),
+  "ai-entry": () => import("@/pages/ai-entry-page"),
   about: () => import("@/pages/about-page"),
 }
 
@@ -60,6 +62,7 @@ const RulesPage = lazy(() => pageLoaders.rules().then((module) => ({ default: mo
 const SettingsPage = lazy(() => pageLoaders.settings().then((module) => ({ default: module.SettingsPage })))
 const AlertsPage = lazy(() => pageLoaders.alerts().then((module) => ({ default: module.AlertsPage })))
 const ArtifactsPage = lazy(() => pageLoaders.artifacts().then((module) => ({ default: module.ArtifactsPage })))
+const AiEntryPage = lazy(() => pageLoaders["ai-entry"]().then((module) => ({ default: module.AiEntryPage })))
 const AboutPage = lazy(() => pageLoaders.about().then((module) => ({ default: module.AboutPage })))
 
 const preloadedPages = new Set<Page>()
@@ -90,6 +93,7 @@ const pages: Array<{
   { id: "alerts", label: "告警", description: "状态与邮件通知", icon: BellRing },
   { id: "artifacts", label: "备份", description: "Backup 与 Export", icon: Archive },
   { id: "terminal", label: "终端", description: "服务器 Shell", icon: TerminalSquare },
+  { id: "ai-entry", label: "接入 AI", description: "复制实时节点给 AI", icon: Bot },
   { id: "about", label: "关于", description: "版本、GitHub 与更新", icon: Info },
 ]
 
@@ -344,6 +348,7 @@ export default function App() {
                 {page === "settings" && <SettingsPage onNotice={showNotice} username={authGate.username} onSignedOut={requireLogin} />}
                 {page === "alerts" && <AlertsPage onNotice={showNotice} />}
                 {page === "artifacts" && <ArtifactsPage onNotice={showNotice} />}
+                {page === "ai-entry" && <AiEntryPage onNotice={showNotice} />}
                 {page === "about" && <AboutPage onNotice={showNotice} />}
               </Suspense>
             </div>

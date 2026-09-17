@@ -2,16 +2,21 @@
  * 「交给 AI」文案的唯一事实来源。
  *
  * 两个地方读它:
- *   1. web/src/pages/about-page.tsx —— 管理员复制这段文字, 粘贴给任意 AI;
- *   2. scripts/verify-ai-entry.ts   —— 门禁, 断言文案引用的事实在磁盘上真的存在。
+ *   1. web/src/pages/ai-entry-page.tsx —— 管理员选一个接入源, 复制这段文字给任意 AI;
+ *   2. scripts/verify-ai-entry.ts     —— 门禁, 断言文案引用的事实在磁盘上真的存在。
  *
  * 因此本文件**不导入任何模块**: 门禁在 CI 里直接 import 它, 不经过 Vite、不解析 @/ 别名、
  * 也不需要 npm ci。改动前先读
- * .agents/notes/implemented/feature/2026-09-17-ai-entry-prompt.md。
+ * .agents/notes/implemented/feature/2026-09-17-ai-entry-prompt.md 与
+ * .agents/notes/implemented/feature/2026-09-17-ai-entry-live-source.md。
  *
  * 为什么文档 URL 带版本号: 钉在**运行中的版本**上而不是 main 分支。否则程序还是 v0.12.0,
  * AI 读到的却是 main 上还没发布的接口面 —— 这正是要避免的「口径不一」。非发布构建
  * (version=dev) 退回 main, 并在文案里显式说明。
+ *
+ * 实时接入源: 文案可以附带 GET /nodes/<share-token>(以及住宅的 POST /rot/<token>/next)。
+ * 这两个路径与 /sub/ 同属 token 寻址的公开契约, 不走管理员 Session。share token 就是凭据,
+ * 这是用户明确要的「复制后立刻能拉到真实节点」。
  */
 
 export interface AiEntryDoc {
@@ -94,6 +99,59 @@ function trimTrailingSlashes(value: string): string {
   return result
 }
 
+/** 面板所在的对外根: origin + 子路径前缀 (HX-Webx 下是 /proxy/hx-proxygroup)。 */
+export function publicBaseURL(location?: { protocol: string; host: string; pathname: string }): string {
+  const loc = location ?? (typeof window === "undefined" ? undefined : window.location)
+  if (!loc) return ""
+  let path = loc.pathname || ""
+  while (path.endsWith("/")) path = path.slice(0, -1)
+  return loc.protocol + "//" + loc.host + path
+}
+
+/**
+ * /sub/<share-token> → /nodes/<share-token>。
+ * 两个路径共用同一份 token, 所以已经握着订阅 URL 的人天然握着清单 URL。
+ * 对不上 /sub/ 前缀时返回空串, 调用方不得编造 token。
+ */
+export function nodesPathFromSharePath(sharePath: string): string {
+  const trimmed = sharePath.trim()
+  const prefix = "/sub/"
+  if (!trimmed.startsWith(prefix) || trimmed.length <= prefix.length) return ""
+  const token = trimmed.slice(prefix.length)
+  if (token.includes("/") || token.includes("?")) return ""
+  return "/nodes/" + token
+}
+
+/** /rot/<token> → /rot/<token>/next。对不上前缀时返回空串。 */
+export function rotateNextPathFromRotatePath(rotatePath: string): string {
+  const trimmed = rotatePath.trim()
+  const prefix = "/rot/"
+  if (!trimmed.startsWith(prefix) || trimmed.length <= prefix.length) return ""
+  const rest = trimmed.slice(prefix.length)
+  if (rest.includes("?") || rest.split("/").filter(Boolean).length !== 1) return ""
+  return trimTrailingSlashes(trimmed) + "/next"
+}
+
+export function absolutePublicURL(
+  path: string,
+  location?: { protocol: string; host: string; pathname: string },
+): string {
+  const base = publicBaseURL(location)
+  if (!base || !path) return ""
+  return base + (path.startsWith("/") ? path : "/" + path)
+}
+
+/** 管理员选中的一个接入源。kind 只有两种: 普通代理 / 住宅代理。 */
+export interface AiEntrySource {
+  kind: "proxy" | "residential"
+  /** 给人看的名字, 写入「我的诉求」。 */
+  name: string
+  /** Listener / 住宅渠道的 /sub/<token>。 */
+  sharePath: string
+  /** 仅住宅 sticky 渠道有 /rot/<token>; 普通代理没有换出口。 */
+  rotatePath?: string
+}
+
 export interface AiEntryPromptOptions {
   /** 控制面运行版本, 来自 GET /api/v1/system/info。 */
   version: string
@@ -103,6 +161,10 @@ export interface AiEntryPromptOptions {
   sourceRoot?: string
   /** 用户选中的诉求; 省略时留一句占位提示。 */
   scenario?: AiEntryScenario
+  /** 选中的实时接入源; 省略时文案只给文档, 不含令牌。 */
+  source?: AiEntrySource
+  /** 覆盖 window.location, 供门禁在 Node 里断言绝对 URL。 */
+  location?: { protocol: string; host: string; pathname: string }
 }
 
 /** 文档在原始仓库里的地址。 */
@@ -121,8 +183,33 @@ export function buildAiEntryPrompt(options: AiEntryPromptOptions): string {
     "",
   ]
 
-  // 每个文件单独定地址: 未发布的文件即使程序是发布版也必须走 main, 否则死链。
   const docRef = (doc: AiEntryDoc) => (doc.unreleased ? "main" : ref)
+
+  const source = options.source
+  if (source) {
+    const nodesPath = nodesPathFromSharePath(source.sharePath)
+    const nodesURL = absolutePublicURL(nodesPath, options.location)
+    const kindLabel = source.kind === "residential" ? "住宅代理" : "普通代理"
+    lines.push(
+      "我选中的接入源是「" + source.name + "」(" + kindLabel + ")。",
+      "节点清单是实时的: 每次任务开始时重新 GET, 不要把结果写进配置或缓存。",
+      "控制面不探测、不选点、不轮询; 轮询节奏由你自己负责。",
+      "",
+    )
+    if (nodesURL) {
+      lines.push("· 实时节点清单 GET " + nodesURL)
+    }
+    if (source.kind === "residential") {
+      const rotateNext = source.rotatePath ? rotateNextPathFromRotatePath(source.rotatePath) : ""
+      const rotateURL = absolutePublicURL(rotateNext, options.location)
+      if (rotateURL) {
+        lines.push("· 换出口 POST " + rotateURL + "  —— 每个任务开始前先换一个新出口, 不要用 /ctl/ (那是管理员凭据, 能烧供应商配额)")
+      } else {
+        lines.push("· 这条住宅渠道当前没有 /rot/ 换出口入口 (通常是非 sticky 模式); 先读住宅文档, 不要猜。")
+      }
+    }
+    lines.push("")
+  }
 
   for (const scenario of AI_ENTRY_SCENARIOS) {
     lines.push("· " + scenario.label + " —— " + scenario.intent)
@@ -136,13 +223,19 @@ export function buildAiEntryPrompt(options: AiEntryPromptOptions): string {
     for (const path of AI_ENTRY_PATHS) lines.push("    " + root + "/" + path)
   }
 
-  lines.push(
-    "",
-    "我的诉求: " +
-      (options.scenario
-        ? options.scenario.label + " —— " + options.scenario.intent
-        : "<补一句你要做什么>"),
-  )
+  const intent = source
+    ? (source.kind === "residential"
+        ? "接入住宅代理「" + source.name + "」—— 用它的出口 IP, 每个任务开始前先换一个新出口"
+        : "接入代理「" + source.name + "」—— 把我的程序接到它当前的节点上")
+    : options.scenario
+      ? options.scenario.label + " —— " + options.scenario.intent
+      : "<补一句你要做什么>"
+
+  lines.push("", "我的诉求: " + intent)
+
+  if (source) {
+    lines.push("", "这段话含 share token, 等同于订阅 URL, 只发给你信任的 AI。")
+  }
 
   if (!pinned) {
     lines.push(

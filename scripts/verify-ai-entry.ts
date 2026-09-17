@@ -29,7 +29,16 @@ const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 // 那一层不支持顶层 await。
 async function main() {
 const source = await import(resolve(root, "web/src/lib/ai-entry.ts"));
-const { AI_ENTRY_SCENARIOS, AI_ENTRY_PATHS, aiEntryRawURL, buildAiEntryPrompt } = source;
+const {
+  AI_ENTRY_SCENARIOS,
+  AI_ENTRY_PATHS,
+  aiEntryRawURL,
+  absolutePublicURL,
+  buildAiEntryPrompt,
+  nodesPathFromSharePath,
+  publicBaseURL,
+  rotateNextPathFromRotatePath,
+} = source;
 
 let failures = 0;
 function report(label, problems) {
@@ -151,6 +160,48 @@ if (!buildAiEntryPrompt({ ...options, scenario: AI_ENTRY_SCENARIOS[0] }).include
   promptProblems.push("a release version must pin the docs to that tag, not to main");
 }
 report("generated prompt carries every scenario", promptProblems);
+
+// --- 6. 实时接入源必须把绝对 URL 写进文案 --------------------------------
+// 用户选一个 Listener / 住宅渠道后, 文案必须含 GET /nodes/<token>, 住宅还必须含
+// POST /rot/<token>/next。路径派生失败时返回空串, 不得编造 token。
+const location = { protocol: "https:", host: "panel.example:36000", pathname: "/proxy/hx-proxygroup/" };
+const liveProblems = [];
+if (publicBaseURL(location) !== "https://panel.example:36000/proxy/hx-proxygroup") {
+  liveProblems.push("publicBaseURL must keep the subpath prefix and drop the trailing slash");
+}
+if (nodesPathFromSharePath("/sub/share-token-16xx") !== "/nodes/share-token-16xx") {
+  liveProblems.push("nodesPathFromSharePath must rewrite /sub/<token> to /nodes/<token>");
+}
+if (nodesPathFromSharePath("/rot/nope") !== "" || nodesPathFromSharePath("/sub/") !== "") {
+  liveProblems.push("nodesPathFromSharePath must refuse anything that is not /sub/<token>");
+}
+if (rotateNextPathFromRotatePath("/rot/rotate-token-16x") !== "/rot/rotate-token-16x/next") {
+  liveProblems.push("rotateNextPathFromRotatePath must append /next");
+}
+if (rotateNextPathFromRotatePath("/ctl/admin") !== "") {
+  liveProblems.push("rotateNextPathFromRotatePath must refuse /ctl/ — that token burns provider quota");
+}
+const proxyPrompt = buildAiEntryPrompt({
+  ...options,
+  location,
+  source: { kind: "proxy", name: "香港专线", sharePath: "/sub/share-token-16xx" },
+});
+const expectedNodes = absolutePublicURL("/nodes/share-token-16xx", location);
+if (!proxyPrompt.includes("GET " + expectedNodes)) liveProblems.push("proxy prompt omits GET " + expectedNodes);
+if (!proxyPrompt.includes("接入代理「香港专线」")) liveProblems.push("proxy prompt omits the selected source name");
+if (proxyPrompt.includes("/rot/")) liveProblems.push("a normal proxy prompt must not mention /rot/");
+if (proxyPrompt.includes("/ctl/")) liveProblems.push("a normal proxy prompt must not mention /ctl/");
+
+const residentialPrompt = buildAiEntryPrompt({
+  ...options,
+  location,
+  source: { kind: "residential", name: "美国住宅", sharePath: "/sub/share-token-16xx", rotatePath: "/rot/rotate-token-16x" },
+});
+const expectedRotate = absolutePublicURL("/rot/rotate-token-16x/next", location);
+if (!residentialPrompt.includes("GET " + expectedNodes)) liveProblems.push("residential prompt omits GET " + expectedNodes);
+if (!residentialPrompt.includes("POST " + expectedRotate)) liveProblems.push("residential prompt omits POST " + expectedRotate);
+if (!residentialPrompt.includes("不要用 /ctl/")) liveProblems.push("residential prompt must warn against /ctl/");
+report("live source URLs are derived and copied", liveProblems);
 
 if (failures > 0) {
   console.log("");

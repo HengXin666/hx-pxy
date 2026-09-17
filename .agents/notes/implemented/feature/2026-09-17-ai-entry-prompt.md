@@ -30,10 +30,10 @@ Status: implemented
 不需要 Vite、不需要 `npm ci`、不解析 `@/` 别名。文案与门禁读的是同一份数据,
 所以「文案里的路径」和「门禁检查的路径」在结构上不可能分叉。
 
-**2. 管理员的诉求是选项, 不是填空题。** About 页每个场景一行 (接入代理 / 接入住宅代理 /
-配置控制面), 各配一个「复制给 AI」按钮 (`about-page.tsx` 已有 `copyUpdateCommand` 的
-剪贴板模式, 沿用同一套)。复制的文本里**直接写好**「我的诉求: <选中的那条>」,
-用户不需要再补一句 —— 这正是「能理解用户的诉求」的落点。
+**2. 管理员的诉求是选项, 不是填空题。** 入口现为独立的「接入 AI」页 (`#/ai-entry`,
+见 [live-source note](2026-09-17-ai-entry-live-source.md)): 选一个真实节点源,
+文案里**直接写好**「我的诉求」与实时 `GET /nodes/<token>`。三个场景注册表仍在
+`ai-entry.ts` 里, 作为文档索引与「配置控制面」这条不带令牌的入口。
 
 **3. 文档地址钉在运行版本上, 而不是 main。** 这是本决策的核心, 也是唯一有技术难度的地方。
 文案里的 URL 形如 `.../raw/<ref>/<path>`, `ref` 来自 `SystemInfo.version`。
@@ -86,9 +86,9 @@ AI 就读到什么, 中间没有 tag 这一层。先验证了 `go:embed`: **显�
 真相, 门禁只能检查「文案里出现的路径存在」, 查不出**注册表里加了一个场景而文案没跟上**;
 而且字符串拼接的结果仍然没人验证。事实来源集中到 TS 模块后, 两个方向都被覆盖。否决。
 
-**把文案放 Settings 新开一个标签页。** 设置页已经是 Tabs 结构, 放得下。但这段文案是
-「关于这套程序, 我怎么把它接出去」, 与版本、更新、协议列表同类; About 页也已经有现成的
-剪贴板交互可以复用。多开一个标签页只为一段文字, 反而降低发现率。否决。
+**把文案放 Settings 新开一个标签页。** 当时否决是因为「只为一段文字」; 后一轮变成
+按节点源列出的动态列表, 用户选择独立「接入 AI」子页, 见 live-source note。此处保留
+当时的理由, 以免下一次又把列表塞回 Settings。
 
 **`source_root` 用环境变量 `HX_PROXYGROUP_SOURCE_ROOT` 自动探测 CWD。** 不新增 flag 更省事,
 但 CWD 在生产上恒为 `/var/lib/hx-proxygroup` (systemd `WorkingDirectory`), 探测它等于靠巧合;
@@ -100,8 +100,8 @@ AI 就读到什么, 中间没有 tag 这一层。先验证了 `go:embed`: **显�
 - **加场景或改路径只改一处** (`web/src/lib/ai-entry.ts`), 页面与门禁自动跟随;
   但漏改 `unreleased` 会被门禁拦下, 这是刻意的失败方向: 宁可 CI 报错, 也不要在
   别人的 AI 会话里留一条 404。
-- **文案里没有任何凭据**。它只含仓库地址、版本号和文件路径 —— 这三样本来就是公开的。
-  分享 token / 控制 token 仍只在各自的复制入口里出现, 不进这段文字。
+- **文档索引本身不含凭据**; 选中接入源之后, 文案会带上 share token
+  (见 [live-source note](2026-09-17-ai-entry-live-source.md))。`/ctl/` 仍不进这段文字。
 - **`source_root` 泄露本机路径给已登录的管理员**。这是刻意的: 管理员本就能用终端,
   路径不构成新的权限边界; 而它换来的是 AI 读到与运行版本逐字一致的文档。
 - **文案是中文的**。三个 skill 的 `description` 与正文都是中文, 场景名也是用户原话
@@ -121,5 +121,4 @@ AI 就读到什么, 中间没有 tag 这一层。先验证了 `go:embed`: **显�
 - `npx tsc -b`: 通过 (并顺带修掉 `dialer_proxy_group_id` 的 TS2353)。
 - `npx tsx@4 scripts/verify-admin-catalog.ts` / `verify-consumer-contract.ts`: 保持通过。
 - `node .agents/skills/hx-agent-notes/scripts/verify-all.ts`: 本 note 使覆盖率门禁通过。
-- 浏览器实测: About 页三个场景各复制一次, 剪贴板内容与 `buildAiEntryPrompt()` 一致;
-  本机运行时附带源码路径, 生产形态 (无 `source_root`) 只给 URL。
+- 浏览器实测(第一轮): About 页三个场景各复制一次。入口已迁到「接入 AI」页, 见 live-source note。
