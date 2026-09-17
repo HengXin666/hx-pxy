@@ -161,9 +161,13 @@ func (s *Service) exportRecord(
 	}
 	host := exportHost(record.BindAddress, requestHost)
 	port := record.Port
-	if endpoint.Host == "" && isLoopbackBind(record.BindAddress) {
-		// Do not turn an internal Mihomo port into an externally advertised
-		// subscription just because a reverse proxy forwarded the request.
+	if endpoint.Host == "" && isLoopbackBind(record.BindAddress) && !isLoopbackHost(requestHost) {
+		// A loopback-only listener is reachable by the machine that runs it and
+		// nobody else, so it may only be advertised back to a caller that also
+		// arrived over loopback (a local CLI or local service). Anything else —
+		// including a reverse proxy that forwarded a public Host header — must
+		// not turn an internal Mihomo port into an externally advertised
+		// subscription.
 		return ShareExport{}, ErrShareDisabled
 	}
 	if endpoint.Host != "" {
@@ -206,6 +210,26 @@ func NewShareExport(
 
 func isLoopbackBind(value string) bool {
 	ip := net.ParseIP(strings.TrimSpace(value))
+	return ip != nil && ip.IsLoopback()
+}
+
+// isLoopbackHost reports whether a request host (with or without a port) names
+// the loopback interface. An empty host is not loopback: callers that cannot
+// establish the client's host must keep the conservative refusal.
+func isLoopbackHost(value string) bool {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return false
+	}
+	host, _, err := net.SplitHostPort(value)
+	if err != nil {
+		host = value
+	}
+	host = strings.Trim(host, "[]")
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	ip := net.ParseIP(host)
 	return ip != nil && ip.IsLoopback()
 }
 

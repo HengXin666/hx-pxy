@@ -47,3 +47,19 @@ jobs:
       # See docs/CONSUMER_INTEGRATION_CONTRACT.md.
       - name: Consumer contract gate
         run: npx --yes tsx@4 scripts/verify-consumer-contract.ts
+
+      # The admin capability catalog is what lets an agent drive the management
+      # API without reading Go source. It stays a promise only while the
+      # published catalog, the skill and its script agree; the Go test locks the
+      # catalog against the validators it republishes, this locks the
+      # agent-facing seam.
+      - name: Admin capability catalog gate
+        run: npx --yes tsx@4 scripts/verify-admin-catalog.ts
+
+      # The About page hands the administrator one paragraph to paste into an
+      # external AI. That paragraph names documents by URL, so a stale path
+      # becomes a dead link inside someone else's session — a failure the
+      # administrator never sees. This gate resolves every referenced path
+      # against the working tree, git, and the newest release tag.
+      - name: AI entry prompt gate
+        run: npx --yes tsx@4 scripts/verify-ai-entry.ts

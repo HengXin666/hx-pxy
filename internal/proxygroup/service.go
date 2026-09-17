@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -59,16 +60,22 @@ type SourceSpec struct {
 }
 
 type Group struct {
-	ID               string     `json:"id"`
-	Name             string     `json:"name"`
-	Strategy         string     `json:"strategy"`
-	SourceSpec       SourceSpec `json:"source_spec"`
-	Enabled          bool       `json:"enabled"`
-	EmptyBehavior    string     `json:"empty_behavior"`
-	FallbackTargetID string     `json:"fallback_target_id,omitempty"`
-	Version          int        `json:"version"`
-	CreatedAt        time.Time  `json:"created_at"`
-	UpdatedAt        time.Time  `json:"updated_at"`
+	ID            string     `json:"id"`
+	Name          string     `json:"name"`
+	Strategy      string     `json:"strategy"`
+	SourceSpec    SourceSpec `json:"source_spec"`
+	Enabled       bool       `json:"enabled"`
+	EmptyBehavior string     `json:"empty_behavior"`
+	// FallbackTargetID is retained for compatibility but is not compiled into
+	// the data plane; see the Agent Note on egress chaining.
+	FallbackTargetID string `json:"fallback_target_id,omitempty"`
+	// DialerProxyGroupID tunnels this group's egress through another group.
+	// Every member this group selects is dialled through that group, at any
+	// depth. Empty means the group dials out directly.
+	DialerProxyGroupID string    `json:"dialer_proxy_group_id,omitempty"`
+	Version            int       `json:"version"`
+	CreatedAt          time.Time `json:"created_at"`
+	UpdatedAt          time.Time `json:"updated_at"`
 }
 
 type CreateRequest struct {
@@ -78,6 +85,8 @@ type CreateRequest struct {
 	Enabled        *bool      `json:"enabled,omitempty"`
 	EmptyBehavior  string     `json:"empty_behavior,omitempty"`
 	FallbackTarget string     `json:"fallback_target_id,omitempty"`
+	// DialerProxyGroup is the group id whose exit this group's traffic uses.
+	DialerProxyGroup string `json:"dialer_proxy_group_id,omitempty"`
 }
 
 type UpdateRequest struct {
@@ -88,6 +97,8 @@ type UpdateRequest struct {
 	Enabled        bool       `json:"enabled"`
 	EmptyBehavior  string     `json:"empty_behavior"`
 	FallbackTarget string     `json:"fallback_target_id,omitempty"`
+	// DialerProxyGroup is the group id whose exit this group's traffic uses.
+	DialerProxyGroup string `json:"dialer_proxy_group_id,omitempty"`
 }
 
 type Service struct {
@@ -115,23 +126,24 @@ func (s *Service) Create(ctx context.Context, request CreateRequest) (Group, err
 	if err != nil {
 		return Group{}, err
 	}
-	normalized, err := s.normalize(ctx, id, request.Name, request.Strategy, request.SourceSpec, enabled, request.EmptyBehavior, request.FallbackTarget)
+	normalized, err := s.normalize(ctx, id, request.Name, request.Strategy, request.SourceSpec, enabled, request.EmptyBehavior, request.FallbackTarget, request.DialerProxyGroup)
 	if err != nil {
 		return Group{}, err
 	}
 	now := s.now().UTC()
 	record := store.ProxyGroupRecord{
-		ID:               id,
-		Name:             normalized.Name,
-		Strategy:         normalized.Strategy,
-		SourceSpecJSON:   normalized.SourceSpecJSON,
-		RulePipelineJSON: "{}",
-		Enabled:          normalized.Enabled,
-		EmptyBehavior:    normalized.EmptyBehavior,
-		FallbackTargetID: normalized.FallbackTargetID,
-		Version:          1,
-		CreatedAt:        now,
-		UpdatedAt:        now,
+		ID:                 id,
+		Name:               normalized.Name,
+		Strategy:           normalized.Strategy,
+		SourceSpecJSON:     normalized.SourceSpecJSON,
+		RulePipelineJSON:   "{}",
+		Enabled:            normalized.Enabled,
+		EmptyBehavior:      normalized.EmptyBehavior,
+		FallbackTargetID:   normalized.FallbackTargetID,
+		DialerProxyGroupID: normalized.DialerProxyGroupID,
+		Version:            1,
+		CreatedAt:          now,
+		UpdatedAt:          now,
 	}
 	created, err := s.repository.CreateProxyGroup(ctx, record)
 	if err != nil {
@@ -167,7 +179,7 @@ func (s *Service) Update(ctx context.Context, id string, request UpdateRequest) 
 	if request.Version < 1 {
 		return Group{}, fmt.Errorf("%w: version must be positive", ErrInvalid)
 	}
-	normalized, err := s.normalize(ctx, id, request.Name, request.Strategy, request.SourceSpec, request.Enabled, request.EmptyBehavior, request.FallbackTarget)
+	normalized, err := s.normalize(ctx, id, request.Name, request.Strategy, request.SourceSpec, request.Enabled, request.EmptyBehavior, request.FallbackTarget, request.DialerProxyGroup)
 	if err != nil {
 		return Group{}, err
 	}
@@ -181,6 +193,7 @@ func (s *Service) Update(ctx context.Context, id string, request UpdateRequest) 
 	existing.Enabled = normalized.Enabled
 	existing.EmptyBehavior = normalized.EmptyBehavior
 	existing.FallbackTargetID = normalized.FallbackTargetID
+	existing.DialerProxyGroupID = normalized.DialerProxyGroupID
 	existing.UpdatedAt = s.now().UTC()
 	updated, err := s.repository.UpdateProxyGroup(ctx, existing, request.Version)
 	if err != nil {
@@ -221,12 +234,13 @@ func (s *Service) Delete(ctx context.Context, id string, version int) error {
 }
 
 type normalizedGroup struct {
-	Name             string
-	Strategy         string
-	SourceSpecJSON   string
-	Enabled          bool
-	EmptyBehavior    string
-	FallbackTargetID string
+	Name               string
+	Strategy           string
+	SourceSpecJSON     string
+	Enabled            bool
+	EmptyBehavior      string
+	FallbackTargetID   string
+	DialerProxyGroupID string
 }
 
 func (s *Service) normalize(
@@ -238,6 +252,7 @@ func (s *Service) normalize(
 	enabled bool,
 	emptyBehavior string,
 	fallbackTarget string,
+	dialerProxyGroup string,
 ) (normalizedGroup, error) {
 	name = strings.TrimSpace(name)
 	if len(name) < 1 || len(name) > 128 {
@@ -247,6 +262,13 @@ func (s *Service) normalize(
 		if strings.EqualFold(name, reserved) {
 			return normalizedGroup{}, fmt.Errorf("%w: name %q is reserved", ErrInvalid, name)
 		}
+	}
+	// The compiler names a chained group's derived proxies "<node>|via|<group id>".
+	// The separator must stay impossible in an operator-supplied name, or a group
+	// could be named to collide with a derived proxy and Mihomo would reject the
+	// whole document as a duplicate name.
+	if strings.Contains(name, derivedProxySeparator()) {
+		return normalizedGroup{}, fmt.Errorf("%w: name must not contain %q", ErrInvalid, derivedProxySeparator())
 	}
 	strategy = strings.ToLower(strings.TrimSpace(strategy))
 	if !validStrategy(strategy) {
@@ -258,7 +280,18 @@ func (s *Service) normalize(
 	if len(spec.NodeIDs) == 0 && len(spec.GroupIDs) == 0 && len(spec.SubscriptionIDs) == 0 && !spec.IncludeDirect && !spec.AllowEmpty {
 		return normalizedGroup{}, fmt.Errorf("%w: at least one node, group, subscription, or DIRECT is required", ErrInvalid)
 	}
-	if len(spec.GroupIDs) > 0 {
+	// Reject a chained group that also offers DIRECT: DIRECT is a builtin and
+	// cannot carry a dialer, so that member would genuinely bypass the chain.
+	// Silently honouring it would leak traffic outside the path the operator
+	// asked for.
+	dialerProxyGroup = strings.TrimSpace(dialerProxyGroup)
+	if dialerProxyGroup != "" && spec.IncludeDirect {
+		return normalizedGroup{}, fmt.Errorf("%w: a chained group cannot also include DIRECT, which would bypass the chain", ErrInvalid)
+	}
+	// The dialer edge is a reference like any member edge, so it must be
+	// validated and cycle-checked in the same pass. A group with only node_ids
+	// plus a dialer would otherwise skip validation entirely.
+	if len(spec.GroupIDs) > 0 || dialerProxyGroup != "" {
 		records, err := s.repository.ListProxyGroups(ctx)
 		if err != nil {
 			return normalizedGroup{}, err
@@ -279,7 +312,19 @@ func (s *Service) normalize(
 				return normalizedGroup{}, fmt.Errorf("%w: referenced group %q is disabled", ErrInvalid, referenced.Name)
 			}
 		}
-		if cycle := findCycle(groupEdges(records, selfID, spec), selfID); cycle != nil {
+		if dialerProxyGroup != "" {
+			if dialerProxyGroup == selfID {
+				return normalizedGroup{}, fmt.Errorf("%w: a group cannot use itself as its dialer", ErrInvalid)
+			}
+			referenced, exists := known[dialerProxyGroup]
+			if !exists {
+				return normalizedGroup{}, fmt.Errorf("%w: dialer group %q does not exist", ErrInvalid, dialerProxyGroup)
+			}
+			if !referenced.Enabled {
+				return normalizedGroup{}, fmt.Errorf("%w: dialer group %q is disabled", ErrInvalid, referenced.Name)
+			}
+		}
+		if cycle := findCycle(groupEdges(records, selfID, spec, dialerProxyGroup), selfID); cycle != nil {
 			names := make([]string, 0, len(cycle))
 			for _, member := range cycle {
 				if record, exists := known[member]; exists {
@@ -330,8 +375,8 @@ func (s *Service) normalize(
 	if spec.SortBy == "" && len(spec.SubscriptionIDs) > 0 {
 		spec.SortBy = "latency"
 	}
-	if spec.SortBy != "" && spec.SortBy != "latency" && spec.SortBy != "name" {
-		return normalizedGroup{}, fmt.Errorf("%w: sort_by must be latency or name", ErrInvalid)
+	if spec.SortBy != "" && !slices.Contains(SupportedSortOrders(), spec.SortBy) {
+		return normalizedGroup{}, fmt.Errorf("%w: sort_by must be one of %s", ErrInvalid, strings.Join(SupportedSortOrders(), ", "))
 	}
 	if spec.Limit < 0 || spec.Limit > 500 {
 		return normalizedGroup{}, fmt.Errorf("%w: limit must be between 0 and 500", ErrInvalid)
@@ -358,7 +403,7 @@ func (s *Service) normalize(
 	if emptyBehavior == "" {
 		emptyBehavior = "fail-closed"
 	}
-	if emptyBehavior != "fail-closed" && emptyBehavior != "direct" {
+	if !slices.Contains(SupportedEmptyBehaviors(), emptyBehavior) {
 		return normalizedGroup{}, fmt.Errorf("%w: unsupported empty_behavior %q", ErrInvalid, emptyBehavior)
 	}
 	fallbackTarget = strings.TrimSpace(fallbackTarget)
@@ -367,22 +412,50 @@ func (s *Service) normalize(
 		return normalizedGroup{}, fmt.Errorf("encode source spec: %w", err)
 	}
 	return normalizedGroup{
-		Name:             name,
-		Strategy:         strategy,
-		SourceSpecJSON:   string(encoded),
-		Enabled:          enabled,
-		EmptyBehavior:    emptyBehavior,
-		FallbackTargetID: fallbackTarget,
+		Name:               name,
+		Strategy:           strategy,
+		SourceSpecJSON:     string(encoded),
+		Enabled:            enabled,
+		EmptyBehavior:      emptyBehavior,
+		FallbackTargetID:   fallbackTarget,
+		DialerProxyGroupID: dialerProxyGroup,
 	}, nil
 }
 
+// derivedProxySeparator returns the string the data-plane compiler uses to join
+// a node name with the id of the group that chains it. It is a function rather
+// than a constant so the validator states the constraint it enforces instead of
+// importing the data plane, which the layering rules forbid.
+func derivedProxySeparator() string {
+	return "|via|"
+}
+
+// SupportedStrategies lists the selection strategies a proxy group may use. It
+// is shared by the validator and the capability catalog so the published list
+// cannot drift from the accepted one.
+func SupportedStrategies() []string {
+	return []string{"manual", "url-test", "fallback", "round-robin", "consistent-hashing", "sticky-sessions"}
+}
+
+// SupportedEmptyBehaviors lists what a group does when its source selects no
+// node. "fail-closed" refuses traffic; "direct" falls back to a direct dial.
+func SupportedEmptyBehaviors() []string {
+	return []string{"fail-closed", "direct"}
+}
+
+// SupportedNodeStates lists the node lifecycle states a source spec may filter
+// on. They mirror the probe state machine, not a separate vocabulary.
+func SupportedNodeStates() []string {
+	return []string{"candidate", "healthy", "degraded", "quarantined"}
+}
+
+// SupportedSortOrders lists the accepted source-spec sort keys.
+func SupportedSortOrders() []string {
+	return []string{"latency", "name"}
+}
+
 func validStrategy(value string) bool {
-	switch value {
-	case "manual", "url-test", "fallback", "round-robin", "consistent-hashing", "sticky-sessions":
-		return true
-	default:
-		return false
-	}
+	return slices.Contains(SupportedStrategies(), value)
 }
 
 func deduplicateIDs(values []string) []string {
@@ -413,28 +486,24 @@ func normalizeValues(values []string, lowercase bool) []string {
 }
 
 func validNodeState(value string) bool {
-	switch value {
-	case "candidate", "healthy", "degraded", "quarantined":
-		return true
-	default:
-		return false
-	}
+	return slices.Contains(SupportedNodeStates(), value)
 }
 
 func fromRecord(record store.ProxyGroupRecord) Group {
 	var spec SourceSpec
 	_ = json.Unmarshal([]byte(record.SourceSpecJSON), &spec)
 	return Group{
-		ID:               record.ID,
-		Name:             record.Name,
-		Strategy:         record.Strategy,
-		SourceSpec:       spec,
-		Enabled:          record.Enabled,
-		EmptyBehavior:    record.EmptyBehavior,
-		FallbackTargetID: record.FallbackTargetID,
-		Version:          record.Version,
-		CreatedAt:        record.CreatedAt,
-		UpdatedAt:        record.UpdatedAt,
+		ID:                 record.ID,
+		Name:               record.Name,
+		Strategy:           record.Strategy,
+		SourceSpec:         spec,
+		Enabled:            record.Enabled,
+		EmptyBehavior:      record.EmptyBehavior,
+		FallbackTargetID:   record.FallbackTargetID,
+		DialerProxyGroupID: record.DialerProxyGroupID,
+		Version:            record.Version,
+		CreatedAt:          record.CreatedAt,
+		UpdatedAt:          record.UpdatedAt,
 	}
 }
 

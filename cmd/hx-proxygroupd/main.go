@@ -33,6 +33,7 @@ import (
 	"github.com/HengXin666/HX-ProxyGroup/internal/proxygroup"
 	"github.com/HengXin666/HX-ProxyGroup/internal/proxylog"
 	"github.com/HengXin666/HX-ProxyGroup/internal/proxyservice"
+	"github.com/HengXin666/HX-ProxyGroup/internal/quickstart"
 	"github.com/HengXin666/HX-ProxyGroup/internal/residential"
 	"github.com/HengXin666/HX-ProxyGroup/internal/routingrules"
 	"github.com/HengXin666/HX-ProxyGroup/internal/scheduler"
@@ -83,6 +84,7 @@ func run(logger *slog.Logger) error {
 	flags.StringVar(&cfg.RuntimeConfigPath, "runtime-config", cfg.RuntimeConfigPath, "active Mihomo configuration path")
 	flags.StringVar(&cfg.SnapshotsPath, "snapshots", cfg.SnapshotsPath, "subscription snapshot directory")
 	flags.StringVar(&cfg.WebRoot, "web-root", cfg.WebRoot, "production web asset directory")
+	flags.StringVar(&cfg.SourceRoot, "source-root", cfg.SourceRoot, "repository checkout holding .agents/skills and docs (development only)")
 	flags.StringVar(&cfg.MihomoBinary, "mihomo", cfg.MihomoBinary, "Mihomo executable path or command name")
 	flags.BoolVar(&cfg.MihomoExternal, "mihomo-external", cfg.MihomoExternal, "coordinate a systemd-managed Mihomo process")
 	flags.StringVar(&cfg.MihomoEgressInterface, "mihomo-egress-interface", cfg.MihomoEgressInterface, "Mihomo outbound interface: auto, off, or an interface name")
@@ -201,6 +203,10 @@ func run(logger *slog.Logger) error {
 		return err
 	}
 	proxyService, err := proxyservice.NewService(proxyGroupService, listenerService, settingsService)
+	if err != nil {
+		return err
+	}
+	quickstartService, err := quickstart.NewService(subscriptionService, proxyService)
 	if err != nil {
 		return err
 	}
@@ -411,6 +417,7 @@ func run(logger *slog.Logger) error {
 		api.WithProxyGroups(proxyGroupService),
 		api.WithListeners(listenerService),
 		api.WithProxyServices(proxyService),
+		api.WithQuickstart(quickstartService),
 		api.WithResidential(residentialService),
 		api.WithFleet(fleetService),
 		api.WithTraffic(trafficService),
@@ -430,6 +437,7 @@ func run(logger *slog.Logger) error {
 			UpdateCommand:      "sudo hx-proxygroup-install upgrade",
 			AutomaticUpdate:    cfg.MihomoExternal && strings.TrimSpace(cfg.TerminalPrivilegedSocket) != "",
 			SupportedProtocols: nodeparse.SupportedProtocols(),
+			SourceRoot:         resolvedSourceRoot(cfg.SourceRoot),
 		}),
 	)
 	if err != nil {
@@ -616,4 +624,29 @@ func writePortableState(destination string, cfg config.Config, databaseSchemaVer
 		return fmt.Errorf("publish state file: %w", err)
 	}
 	return nil
+}
+
+// resolvedSourceRoot returns the checkout directory only when it actually holds
+// the agent-facing material, so the About page never advertises a local path
+// that a production install cannot serve. A release bundle ships web/ and the
+// binaries, not .agents/skills or docs/, so this stays empty there.
+func resolvedSourceRoot(configured string) string {
+	candidate := strings.TrimSpace(configured)
+	if candidate == "" {
+		return ""
+	}
+	absolute, err := filepath.Abs(candidate)
+	if err != nil {
+		return ""
+	}
+	for _, probe := range []string{
+		filepath.Join(".agents", "skills", "hx-consumer-api", "SKILL.md"),
+		filepath.Join("docs", "RESIDENTIAL_AI_QUICKSTART.md"),
+	} {
+		info, err := os.Stat(filepath.Join(absolute, probe))
+		if err != nil || info.IsDir() {
+			return ""
+		}
+	}
+	return absolute
 }

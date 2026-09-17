@@ -46,7 +46,7 @@ func TestGroupEdgesSubstitutesCandidate(t *testing.T) {
 		{ID: "a", SourceSpecJSON: `{"node_ids":[],"group_ids":["b"]}`},
 		{ID: "b", SourceSpecJSON: `{"node_ids":[]}`},
 	}
-	edges := groupEdges(records, "b", SourceSpec{GroupIDs: []string{"a"}})
+	edges := groupEdges(records, "b", SourceSpec{GroupIDs: []string{"a"}}, "")
 	cycle := findCycle(edges, "b")
 	if cycle == nil {
 		t.Fatal("expected cycle after substituting the candidate spec")
@@ -54,6 +54,47 @@ func TestGroupEdgesSubstitutesCandidate(t *testing.T) {
 	joined := strings.Join(cycle, "->")
 	if !strings.Contains(joined, "a") || !strings.Contains(joined, "b") {
 		t.Fatalf("unexpected cycle members: %v", cycle)
+	}
+}
+
+// An egress chain is a dependency edge, so closing a chain into a loop must be
+// rejected by the same walker that catches membership cycles. Mihomo accepts a
+// cyclic dialer at load time, so nothing downstream would catch it.
+func TestGroupEdgesIncludeDialerEdge(t *testing.T) {
+	records := []store.ProxyGroupRecord{
+		{ID: "a", SourceSpecJSON: `{"node_ids":["n1"]}`, DialerProxyGroupID: "b"},
+		{ID: "b", SourceSpecJSON: `{"node_ids":["n2"]}`},
+	}
+	edges := groupEdges(records, "b", SourceSpec{NodeIDs: []string{"n3"}}, "a")
+	cycle := findCycle(edges, "b")
+	if cycle == nil {
+		t.Fatal("expected the chain b -> a -> b to be detected as a cycle")
+	}
+}
+
+// Deleting a group another one dials through would silently turn that chain into
+// a direct connection, so the dialer relation must block the delete too.
+func TestReferencedByIncludesDialerRelation(t *testing.T) {
+	records := []store.ProxyGroupRecord{
+		{ID: "a", SourceSpecJSON: `{"node_ids":["n1"]}`, DialerProxyGroupID: "b"},
+		{ID: "b", SourceSpecJSON: `{"node_ids":["n2"]}`},
+	}
+	owners := referencedBy(records, "b")
+	if len(owners) != 1 || owners[0] != "a" {
+		t.Fatalf("owners = %v, want [a]", owners)
+	}
+}
+
+// A group that is both a member and a dialer of the target must be reported
+// once, not twice: the delete error renders these names to the operator.
+func TestReferencedByReportsDialerAndMemberOnce(t *testing.T) {
+	records := []store.ProxyGroupRecord{
+		{ID: "a", SourceSpecJSON: `{"group_ids":["b"]}`, DialerProxyGroupID: "b"},
+		{ID: "b", SourceSpecJSON: `{"node_ids":["n2"]}`},
+	}
+	owners := referencedBy(records, "b")
+	if len(owners) != 1 || owners[0] != "a" {
+		t.Fatalf("owners = %v, want exactly [a]", owners)
 	}
 }
 

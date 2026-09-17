@@ -194,6 +194,43 @@ func TestShareExportDoesNotExposeLoopbackPortThroughExternalHost(t *testing.T) {
 	}
 }
 
+func TestShareExportServesLoopbackListenerToLoopbackCaller(t *testing.T) {
+	service, database, ctx := newShareTestService(t)
+	groupID := createShareTestGroup(t, ctx, database)
+	created, err := service.Create(ctx, CreateRequest{
+		Name: "local-only", Kind: "http", BindAddress: "127.0.0.1", Port: 32825, ProxyGroupID: groupID,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	token := strings.TrimPrefix(created.SharePath, "/sub/")
+	// A local CLI or local service reaches the control plane on loopback, so the
+	// listener it just created is reachable by that same machine.
+	cases := map[string]string{
+		"127.0.0.1:19090": "127.0.0.1",
+		"localhost:19090": "localhost",
+		"[::1]:19090":     "::1",
+	}
+	for requestHost, wantHost := range cases {
+		export, err := service.ExportByShareToken(ctx, token, requestHost)
+		if err != nil {
+			t.Fatalf("loopback export for %q error = %v, want success", requestHost, err)
+		}
+		// The advertised host is whichever local name the caller used; both are
+		// reachable by the machine requesting them. The port stays the listener's.
+		if export.Host != wantHost || export.Port != 32825 {
+			t.Fatalf("loopback export for %q = %s:%d, want %s:32825", requestHost, export.Host, export.Port, wantHost)
+		}
+		if !strings.Contains(export.Body, ":32825") {
+			t.Fatalf("loopback export body for %q = %q", requestHost, export.Body)
+		}
+	}
+	// An empty request host cannot prove the caller is local, so it stays refused.
+	if _, err := service.ExportByShareToken(ctx, token, ""); !errors.Is(err, ErrShareDisabled) {
+		t.Fatalf("empty request host error = %v, want ErrShareDisabled", err)
+	}
+}
+
 func TestShareExportUsesConfiguredPublicEndpointAndRejectsLoopbackFallback(t *testing.T) {
 	service, database, ctx := newShareTestService(t)
 	groupID := createShareTestGroup(t, ctx, database)

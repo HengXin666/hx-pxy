@@ -1,11 +1,12 @@
 import { useEffect, useState } from "react"
-import { Check, Copy, Download, ExternalLink, GitFork, LoaderCircle, PackageCheck, RefreshCw, ServerCog, ShieldCheck } from "lucide-react"
+import { Bot, Check, Copy, Download, ExternalLink, GitFork, LoaderCircle, PackageCheck, RefreshCw, ServerCog, ShieldCheck } from "lucide-react"
 
 import { ConfirmDialog } from "@/components/confirm-dialog"
 import { Badge } from "@/components/ui/badge"
 import { Button, buttonVariants } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { api, type TwoFactorStatus } from "@/lib/api"
+import { AI_ENTRY_SCENARIOS, aiEntryRef, buildAiEntryPrompt, type AiEntryScenario } from "@/lib/ai-entry"
 import type { SystemInfo } from "@/lib/types"
 import { cn } from "@/lib/utils"
 
@@ -13,6 +14,7 @@ export function AboutPage({ onNotice }: { onNotice: (message: string, tone?: "su
   const [info, setInfo] = useState<SystemInfo | null>(null)
   const [loading, setLoading] = useState(true)
   const [copied, setCopied] = useState(false)
+  const [copiedScenario, setCopiedScenario] = useState("")
   const [confirmingUpdate, setConfirmingUpdate] = useState(false)
   const [updating, setUpdating] = useState(false)
   const [twoFactor, setTwoFactor] = useState<TwoFactorStatus | null>(null)
@@ -43,6 +45,24 @@ export function AboutPage({ onNotice }: { onNotice: (message: string, tone?: "su
       onNotice("更新命令已复制")
     } catch {
       onNotice("浏览器未允许复制，请手动选择命令", "error")
+    }
+  }
+
+  async function copyAiEntry(scenario: AiEntryScenario) {
+    if (!info) return
+    const text = buildAiEntryPrompt({
+      version: info.version,
+      repositoryUrl: info.repository_url,
+      sourceRoot: info.source_root,
+      scenario,
+    })
+    try {
+      await navigator.clipboard.writeText(text)
+      setCopiedScenario(scenario.id)
+      window.setTimeout(() => setCopiedScenario(""), 1800)
+      onNotice(`「${scenario.label}」的接入说明已复制，粘贴给任意 AI 即可`)
+    } catch {
+      onNotice("浏览器未允许复制，请手动选择文字", "error")
     }
   }
 
@@ -161,6 +181,51 @@ export function AboutPage({ onNotice }: { onNotice: (message: string, tone?: "su
               {updating ? "更新中" : "更新至最新版"}
             </Button>
           )}
+        </div>
+      </section>
+
+      <section className="rounded-lg border bg-card">
+        <div className="border-b px-4 py-3">
+          <h2 className="flex items-center gap-2 text-sm font-semibold"><Bot className="size-4" />交给 AI 接入</h2>
+          <p className="mt-0.5 text-xs text-muted-foreground">
+            选一个诉求，复制这段说明，粘贴给任意 AI（网页版、IDE 里的助手、命令行 Agent 都可以）。它会先读对应的接入文档，再动手写代码或调接口 —— 不需要你解释端点、字段名或枚举值。
+          </p>
+        </div>
+        <div className="divide-y">
+          {AI_ENTRY_SCENARIOS.map((scenario) => <div key={scenario.id} className="flex flex-col gap-2 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
+            <div className="min-w-0">
+              <div className="text-sm font-medium">{scenario.label}</div>
+              <p className="mt-0.5 text-xs text-muted-foreground">{scenario.intent}</p>
+              <p className="mt-1 truncate font-mono text-[11px] text-muted-foreground" title={scenario.docs.map((doc) => doc.path).join("  ")}>
+                {scenario.docs.map((doc) => doc.path).join("  ")}
+              </p>
+            </div>
+            <Button
+              variant="outline"
+              className="shrink-0"
+              onClick={() => void copyAiEntry(scenario)}
+              title={`复制「${scenario.label}」的 AI 接入说明`}
+            >
+              {copiedScenario === scenario.id ? <Check className="text-success" /> : <Copy />}
+              {copiedScenario === scenario.id ? "已复制" : "复制给 AI"}
+            </Button>
+          </div>)}
+        </div>
+        <div className="border-t px-4 py-3 text-xs text-muted-foreground">
+          {(() => {
+            // The footer must describe where the URL actually points, not merely
+            // where we wish it pointed: a development build has no release tag to
+            // pin to, so its links fall back to main and say so inside the prompt.
+            const { ref, pinned } = aiEntryRef(info.version)
+            return <>
+              {pinned
+                ? <>文档地址钉在 <span className="font-mono">{ref}</span> 上</>
+                : <>当前是开发构建（<span className="font-mono">{info.version}</span>），文档地址取自 <span className="font-mono">main</span> 分支</>}
+              {info.source_root
+                ? <>，并附带这台机器上的源码路径 —— 优先读本机源码，它与你正在用的版本逐字一致。</>
+                : <>；当前是生产安装，机器上没有源码，因此只给文档地址。</>}
+            </>
+          })()}
         </div>
       </section>
 

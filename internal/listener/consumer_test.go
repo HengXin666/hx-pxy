@@ -101,6 +101,32 @@ func TestConsumerPayloadMarksWebSocketNodesNotBrowserCompatible(t *testing.T) {
 	}
 }
 
+// A TLS endpoint must stay browser compatible: Chromium accepts an
+// "https://host:port" --proxy-server and completes a request through it. This
+// pins the verified behaviour so the "browsers cannot use HTTPS proxies"
+// intuition (which is wrong for Chromium) is not re-applied as a fix.
+func TestConsumerPayloadKeepsTLSTCPNodesBrowserCompatible(t *testing.T) {
+	t.Parallel()
+
+	export := NewShareExport(
+		"香港专线", "mixed", "proxy.example.com", 7890,
+		[]ShareNode{{Name: "香港专线-01", Auth: &Auth{Username: "svc-3f9c", Password: "secret"}}},
+		Transport{},
+		PublicEndpoint{Host: "proxy.example.com", Port: 443, TLS: true},
+	)
+	payload := export.ConsumerPayload("/sub/" + strings.Repeat("d", 32))
+	if len(payload.Nodes) != 1 {
+		t.Fatalf("nodes = %d", len(payload.Nodes))
+	}
+	node := payload.Nodes[0]
+	if node.Transport != "tcp" || !node.TLS {
+		t.Fatalf("transport = %q tls = %v, want tcp/true", node.Transport, node.TLS)
+	}
+	if !node.BrowserCompatible {
+		t.Fatal("a TLS TCP node is browser compatible; Chromium completes requests through an https:// proxy")
+	}
+}
+
 // Two reads of the same token must be byte-identical; consumers rely on the
 // order for sharding and rotation, and a map-backed rendering would break it.
 func TestConsumerPayloadOrderIsStable(t *testing.T) {

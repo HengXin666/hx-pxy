@@ -131,21 +131,30 @@ func (c *Compiler) Compile(ctx context.Context) (Compiled, error) {
 	if err := validateResidentialDialerChains(groups, nodeRecords, nodeByID, candidates, groupNameByID); err != nil {
 		return Compiled{}, err
 	}
+	// Backstop for rows that never went through the service validator: a chain
+	// that cannot be honoured must fail here, not silently dial out directly.
+	if err := validateGroupDialerChains(groups); err != nil {
+		return Compiled{}, err
+	}
 	sort.Slice(proxies, func(left, right int) bool {
 		return fmt.Sprint(proxies[left]["name"]) < fmt.Sprint(proxies[right]["name"])
 	})
 
+	derived := newDerivedProxySet()
 	proxyGroups := make([]map[string]any, 0, len(enabledGroups))
 	for _, record := range sortGroupsByDependency(groups) {
 		if !record.Enabled {
 			continue
 		}
-		compiledGroup, err := compileGroup(record, nodeByID, candidates, groupNameByID)
+		compiledGroup, err := compileGroup(record, nodeByID, candidates, groupNameByID, derived)
 		if err != nil {
 			return Compiled{}, err
 		}
 		proxyGroups = append(proxyGroups, compiledGroup)
 	}
+	// Every derived proxy must reach the document or each dialer-proxy dangles,
+	// which Mihomo rejects outright.
+	proxies = derived.merged(proxies)
 
 	listenerConfigs := make([]map[string]any, 0, len(listeners))
 	endpoints := make([]Endpoint, 0, len(listeners))
@@ -387,11 +396,17 @@ func sortGroupsByDependency(groups []store.ProxyGroupRecord) []store.ProxyGroupR
 		}
 		visited[position] = true
 		spec, err := decodeSourceSpec(groups[position].SourceSpecJSON)
+		var referenced []string
 		if err == nil {
-			for _, referenced := range spec.GroupIDs {
-				if referencedPosition, exists := index[referenced]; exists {
-					visit(referencedPosition)
-				}
+			referenced = spec.GroupIDs
+		}
+		// A dialer is a dependency too: emit the group it dials through first.
+		if dialer := strings.TrimSpace(groups[position].DialerProxyGroupID); dialer != "" {
+			referenced = append(referenced, dialer)
+		}
+		for _, referencedID := range referenced {
+			if referencedPosition, exists := index[referencedID]; exists {
+				visit(referencedPosition)
 			}
 		}
 		ordered = append(ordered, groups[position])
@@ -402,10 +417,28 @@ func sortGroupsByDependency(groups []store.ProxyGroupRecord) []store.ProxyGroupR
 	return ordered
 }
 
-func compileGroup(record store.ProxyGroupRecord, nodes map[string]compiledNode, candidates []store.GroupNodeCandidate, groupNameByID map[string]string) (map[string]any, error) {
+func compileGroup(
+	record store.ProxyGroupRecord,
+	nodes map[string]compiledNode,
+	candidates []store.GroupNodeCandidate,
+	groupNameByID map[string]string,
+	derived *derivedProxySet,
+) (map[string]any, error) {
 	spec, err := decodeSourceSpec(record.SourceSpecJSON)
 	if err != nil {
 		return nil, fmt.Errorf("decode group %q source spec: %w", record.Name, err)
+	}
+	// A group chain is expressed per member: this group's members are emitted as
+	// derived proxies that dial out through the dialer group's name.
+	dialerName := ""
+	if dialerID := strings.TrimSpace(record.DialerProxyGroupID); dialerID != "" {
+		name, exists := groupNameByID[dialerID]
+		if !exists {
+			// validateGroupDialerChains already rejected this; refuse rather
+			// than let the chain quietly become a direct connection.
+			return nil, fmt.Errorf("proxy group %q dials through a group that is missing or disabled", record.Name)
+		}
+		dialerName = name
 	}
 	resolvedNodeIDs := proxygroup.ResolveNodeIDs(spec, candidates)
 	members := make([]string, 0, len(spec.GroupIDs)+len(resolvedNodeIDs)+1)
@@ -428,11 +461,19 @@ func compileGroup(record store.ProxyGroupRecord, nodes map[string]compiledNode, 
 		if !exists {
 			continue
 		}
-		if _, duplicate := seen[node.Name]; duplicate {
+		memberName := node.Name
+		if dialerName != "" {
+			derivedName, err := derived.derive(node, record.ID, record.Name, dialerName)
+			if err != nil {
+				return nil, err
+			}
+			memberName = derivedName
+		}
+		if _, duplicate := seen[memberName]; duplicate {
 			continue
 		}
-		seen[node.Name] = struct{}{}
-		members = append(members, node.Name)
+		seen[memberName] = struct{}{}
+		members = append(members, memberName)
 	}
 	if spec.IncludeDirect {
 		members = append(members, "DIRECT")

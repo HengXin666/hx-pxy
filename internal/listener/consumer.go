@@ -11,6 +11,10 @@ import "strings"
 // listing and the human subscription are rendered from one export structure and
 // cannot disagree about what exists. See docs/CONSUMER_INTEGRATION_CONTRACT.md.
 //
+// The decision — and what it beat, notably reusing the high-privilege /ctl/
+// token — is recorded in
+// .agents/notes/implemented/feature/2026-09-14-consumer-nodes-api.md.
+//
 // It sits in the token-addressed root namespace beside /sub/ and /ctl/, not
 // under /api/v1/. That namespace separation is load-bearing: /api/v1/ is
 // session-authenticated administrator space, and an earlier revision of this
@@ -85,6 +89,10 @@ type ConsumerNode struct {
 	// BrowserCompatible reports whether the node can be used directly as a
 	// browser or plain-HTTP-client proxy. WebSocket transports always are not:
 	// a browser cannot speak a WebSocket proxy.
+	//
+	// A TLS endpoint does NOT disqualify a node: Chromium accepts an
+	// "https://host:port" --proxy-server and completes requests through it,
+	// verified end to end. So this stays keyed on transport alone.
 	BrowserCompatible bool `json:"browser_compatible"`
 	// URI is this node's share URI, for pasting into an existing config.
 	URI string `json:"uri"`

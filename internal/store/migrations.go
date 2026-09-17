@@ -887,6 +887,20 @@ CREATE UNIQUE INDEX listeners_share_token ON listeners(share_token);
 `,
 		disableForeignKeys: true,
 	},
+	{
+		version: 34,
+		name:    "proxy_group_egress_chain",
+		// 20260916 用户决策：形态是"任意代理组的任意链路代理"。Mihomo 1.19.30
+		// 明确拒绝在 proxy-group 上设 dialer-proxy（只打 error 日志后忽略，
+		// 会静默退化成直连），所以本列只声明「组 G 经组 D 出网」这一关系，
+		// 由编译器为 G 的每个成员节点派生带 dialer-proxy 的副本。
+		// ON DELETE RESTRICT：dialer 是承载流量的关系，目标组消失必须变成
+		// 干净的冲突错误，而不是让链路静默变直连。
+		sql: `
+ALTER TABLE proxy_groups
+    ADD COLUMN dialer_proxy_group_id TEXT REFERENCES proxy_groups(id) ON DELETE RESTRICT;
+`,
+	},
 }
 
 func (s *Store) migrate(ctx context.Context) error {

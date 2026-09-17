@@ -48,7 +48,9 @@ type CreateRequest struct {
 	SourceSpec    proxygroup.SourceSpec `json:"source_spec"`
 	EmptyBehavior string                `json:"empty_behavior,omitempty"`
 	Enabled       *bool                 `json:"enabled,omitempty"`
-	Listener      ListenerCreateRequest `json:"listener"`
+	// DialerProxyGroup tunnels this service's egress through another group.
+	DialerProxyGroup string                `json:"dialer_proxy_group_id,omitempty"`
+	Listener         ListenerCreateRequest `json:"listener"`
 }
 
 type ListenerCreateRequest struct {
@@ -75,17 +77,19 @@ type ListenerUpdateRequest struct {
 }
 
 type UpdateRequest struct {
-	GroupID         string                `json:"group_id"`
-	GroupVersion    int                   `json:"group_version"`
-	Name            string                `json:"name"`
-	Strategy        string                `json:"strategy"`
-	SourceSpec      proxygroup.SourceSpec `json:"source_spec"`
-	Enabled         *bool                 `json:"enabled,omitempty"`
-	EmptyBehavior   string                `json:"empty_behavior,omitempty"`
-	FallbackTarget  string                `json:"fallback_target_id,omitempty"`
-	ListenerID      string                `json:"listener_id"`
-	ListenerVersion int                   `json:"listener_version"`
-	Listener        ListenerUpdateRequest `json:"listener"`
+	GroupID        string                `json:"group_id"`
+	GroupVersion   int                   `json:"group_version"`
+	Name           string                `json:"name"`
+	Strategy       string                `json:"strategy"`
+	SourceSpec     proxygroup.SourceSpec `json:"source_spec"`
+	Enabled        *bool                 `json:"enabled,omitempty"`
+	EmptyBehavior  string                `json:"empty_behavior,omitempty"`
+	FallbackTarget string                `json:"fallback_target_id,omitempty"`
+	// DialerProxyGroup tunnels this service's egress through another group.
+	DialerProxyGroup string                `json:"dialer_proxy_group_id,omitempty"`
+	ListenerID       string                `json:"listener_id"`
+	ListenerVersion  int                   `json:"listener_version"`
+	Listener         ListenerUpdateRequest `json:"listener"`
 }
 
 type ServiceRecord struct {
@@ -113,11 +117,12 @@ func NewService(groups GroupService, listeners ListenerService, settings Setting
 
 func (s *Service) Create(ctx context.Context, request CreateRequest) (ServiceRecord, error) {
 	group, err := s.groups.Create(ctx, proxygroup.CreateRequest{
-		Name:          request.Name,
-		Strategy:      request.Strategy,
-		SourceSpec:    request.SourceSpec,
-		Enabled:       request.Enabled,
-		EmptyBehavior: request.EmptyBehavior,
+		Name:             request.Name,
+		Strategy:         request.Strategy,
+		SourceSpec:       request.SourceSpec,
+		Enabled:          request.Enabled,
+		EmptyBehavior:    request.EmptyBehavior,
+		DialerProxyGroup: request.DialerProxyGroup,
 	})
 	if err != nil {
 		if group.ID != "" {
@@ -273,13 +278,14 @@ func (s *Service) Update(ctx context.Context, request UpdateRequest) (ServiceRec
 		groupEnabled = *request.Enabled
 	}
 	updatedGroup, err := s.groups.Update(ctx, request.GroupID, proxygroup.UpdateRequest{
-		Version:        request.GroupVersion,
-		Name:           request.Name,
-		Strategy:       request.Strategy,
-		SourceSpec:     request.SourceSpec,
-		Enabled:        groupEnabled,
-		EmptyBehavior:  request.EmptyBehavior,
-		FallbackTarget: request.FallbackTarget,
+		Version:          request.GroupVersion,
+		Name:             request.Name,
+		Strategy:         request.Strategy,
+		SourceSpec:       request.SourceSpec,
+		Enabled:          groupEnabled,
+		EmptyBehavior:    request.EmptyBehavior,
+		FallbackTarget:   request.FallbackTarget,
+		DialerProxyGroup: request.DialerProxyGroup,
 	})
 	if err != nil {
 		return ServiceRecord{}, err
@@ -320,13 +326,14 @@ func (s *Service) Update(ctx context.Context, request UpdateRequest) (ServiceRec
 		// this rollback apply compiles from a consistent state. Join any
 		// rollback failure into the returned error instead of swallowing it.
 		if _, rollbackErr := s.groups.Update(ctx, request.GroupID, proxygroup.UpdateRequest{
-			Version:        updatedGroup.Version,
-			Name:           original.Name,
-			Strategy:       original.Strategy,
-			SourceSpec:     original.SourceSpec,
-			Enabled:        original.Enabled,
-			EmptyBehavior:  original.EmptyBehavior,
-			FallbackTarget: original.FallbackTargetID,
+			Version:          updatedGroup.Version,
+			Name:             original.Name,
+			Strategy:         original.Strategy,
+			SourceSpec:       original.SourceSpec,
+			Enabled:          original.Enabled,
+			EmptyBehavior:    original.EmptyBehavior,
+			FallbackTarget:   original.FallbackTargetID,
+			DialerProxyGroup: original.DialerProxyGroupID,
 		}); rollbackErr != nil {
 			return ServiceRecord{}, errors.Join(err, fmt.Errorf("restore proxy group after failed listener update: %w", rollbackErr))
 		}

@@ -9,25 +9,33 @@ import (
 )
 
 type ProxyGroupRecord struct {
-	ID               string
-	Name             string
-	Strategy         string
-	SourceSpecJSON   string
+	ID             string
+	Name           string
+	Strategy       string
+	SourceSpecJSON string
+	// RulePipelineJSON is the per-group rule pipeline.
 	RulePipelineJSON string
 	Enabled          bool
 	EmptyBehavior    string
 	FallbackTargetID string
-	Version          int
-	CreatedAt        time.Time
-	UpdatedAt        time.Time
+	// DialerProxyGroupID names the group this group's egress is tunnelled
+	// through. It is a group-level chain: every member this group selects is
+	// dialled through that group. Mihomo rejects dialer-proxy on a proxy-group,
+	// so the compiler turns this into derived per-member proxies instead of a
+	// group key; see .agents/notes/implemented/architecture/
+	// 2026-09-16-mihomo-dialer-proxy-is-node-level.md.
+	DialerProxyGroupID string
+	Version            int
+	CreatedAt          time.Time
+	UpdatedAt          time.Time
 }
 
 func (s *Store) CreateProxyGroup(ctx context.Context, record ProxyGroupRecord) (ProxyGroupRecord, error) {
 	_, err := s.db.ExecContext(ctx, `
 INSERT INTO proxy_groups(
     id, name, strategy, source_spec_json, rule_pipeline_json, enabled,
-    empty_behavior, fallback_target_id, version, created_at, updated_at
-) VALUES (?, ?, ?, ?, ?, ?, ?, NULLIF(?, ''), ?, ?, ?)
+    empty_behavior, fallback_target_id, dialer_proxy_group_id, version, created_at, updated_at
+) VALUES (?, ?, ?, ?, ?, ?, ?, NULLIF(?, ''), NULLIF(?, ''), ?, ?, ?)
 `,
 		record.ID,
 		record.Name,
@@ -37,6 +45,7 @@ INSERT INTO proxy_groups(
 		boolToInteger(record.Enabled),
 		record.EmptyBehavior,
 		record.FallbackTargetID,
+		record.DialerProxyGroupID,
 		record.Version,
 		record.CreatedAt.UTC().Format(time.RFC3339Nano),
 		record.UpdatedAt.UTC().Format(time.RFC3339Nano),
@@ -91,6 +100,7 @@ UPDATE proxy_groups
 SET
     name = ?, strategy = ?, source_spec_json = ?, rule_pipeline_json = ?,
     enabled = ?, empty_behavior = ?, fallback_target_id = NULLIF(?, ''),
+    dialer_proxy_group_id = NULLIF(?, ''),
     version = version + 1, updated_at = ?
 WHERE id = ? AND version = ?
 `,
@@ -101,6 +111,7 @@ WHERE id = ? AND version = ?
 		boolToInteger(record.Enabled),
 		record.EmptyBehavior,
 		record.FallbackTargetID,
+		record.DialerProxyGroupID,
 		record.UpdatedAt.UTC().Format(time.RFC3339Nano),
 		record.ID,
 		expectedVersion,
@@ -148,7 +159,8 @@ func (s *Store) DeleteProxyGroup(ctx context.Context, id string, expectedVersion
 const proxyGroupSelect = `
 SELECT
     id, name, strategy, source_spec_json, rule_pipeline_json, enabled,
-    empty_behavior, COALESCE(fallback_target_id, ''), version, created_at, updated_at
+    empty_behavior, COALESCE(fallback_target_id, ''),
+    COALESCE(dialer_proxy_group_id, ''), version, created_at, updated_at
 FROM proxy_groups`
 
 func scanProxyGroup(source scanner) (ProxyGroupRecord, error) {
@@ -165,6 +177,7 @@ func scanProxyGroup(source scanner) (ProxyGroupRecord, error) {
 		&enabled,
 		&record.EmptyBehavior,
 		&record.FallbackTargetID,
+		&record.DialerProxyGroupID,
 		&record.Version,
 		&createdAt,
 		&updatedAt,

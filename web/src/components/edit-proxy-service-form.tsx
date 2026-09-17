@@ -53,6 +53,9 @@ export function EditProxyServiceForm({ listener, group, nodes, subscriptions, on
         empty_behavior: mode === "direct" ? "direct" : "fail-closed",
         enabled: group.enabled,
         fallback_target_id: group.fallback_target_id,
+        // Carried through unchanged: this form does not edit the egress chain, and
+        // omitting it would silently drop the chain on an unrelated save.
+        dialer_proxy_group_id: group.dialer_proxy_group_id,
         listener_id: listener.id,
         listener_version: listener.version,
         listener: {

@@ -294,6 +294,7 @@ start_backend() {
         --master-key "${DATA_DIR}/master.key" \
         --runtime-config "${DATA_DIR}/runtime/active.yaml" \
         --snapshots "${DATA_DIR}/snapshots" \
+        --source-root "${SCRIPT_DIR}" \
         --mihomo "${MIHOMO_BINARY}" >>"${BACKEND_LOG}" 2>&1 &
     BACKEND_PID="$!"
     BACKEND_PROCESS_GROUP="${BACKEND_PID}"

@@ -277,6 +277,8 @@ export interface ProxyGroup {
   enabled: boolean
   empty_behavior: "fail-closed" | "direct"
   fallback_target_id?: string
+  /** Group whose exit this group's traffic is tunnelled through, at any depth. */
+  dialer_proxy_group_id?: string
   version: number
   created_at: string
   updated_at: string
@@ -292,6 +294,7 @@ export interface CreateProxyGroupRequest {
   source_spec: ProxyGroupSourceSpec
   enabled?: boolean
   empty_behavior?: "fail-closed" | "direct"
+  dialer_proxy_group_id?: string
 }
 
 export interface UpdateProxyGroupRequest {
@@ -302,6 +305,7 @@ export interface UpdateProxyGroupRequest {
   enabled: boolean
   empty_behavior: "fail-closed" | "direct"
   fallback_target_id?: string
+  dialer_proxy_group_id?: string
 }
 
 export type ListenerKind = "http" | "socks" | "mixed" | "vless" | "vmess" | "trojan"
@@ -385,6 +389,8 @@ export interface CreateProxyServiceRequest {
   strategy: ProxyGroupStrategy
   source_spec: ProxyGroupSourceSpec
   empty_behavior?: "fail-closed" | "direct"
+  /** Group this service's egress is tunnelled through, at any depth. */
+  dialer_proxy_group_id?: string
   listener: Omit<CreateListenerRequest, "proxy_group_id">
 }
 
@@ -397,6 +403,8 @@ export interface UpdateProxyServiceRequest {
   empty_behavior: "fail-closed" | "direct"
   enabled?: boolean
   fallback_target_id?: string
+  /** Group this service's egress is tunnelled through, at any depth. Omit to leave the existing chain untouched. */
+  dialer_proxy_group_id?: string
   listener_id: string
   listener_version: number
   listener: {
@@ -451,6 +459,8 @@ export interface SystemInfo {
   update_command: string
   automatic_update: boolean
   supported_protocols: string[]
+  /** Present only when the control plane runs from a source checkout that still has .agents/skills and docs/. */
+  source_root?: string
 }
 
 export interface OverviewSample {

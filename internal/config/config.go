@@ -20,8 +20,12 @@ type Config struct {
 	RuntimeConfigPath string
 	SnapshotsPath     string
 	WebRoot           string
-	MihomoBinary      string
-	MihomoExternal    bool
+	// SourceRoot is the repository checkout this process was launched from, when
+	// there is one. Production installs do not have the skills or docs on disk,
+	// so it stays empty there and the About page falls back to released URLs.
+	SourceRoot     string
+	MihomoBinary   string
+	MihomoExternal bool
 	// MihomoEgressInterface selects the physical interface used by the managed
 	// data plane. "auto" resolves the Linux main-table default route; "off"
 	// leaves routing to the host policy tables.
@@ -55,6 +59,7 @@ func Default() Config {
 		RuntimeConfigPath: envOrDefault("HX_PROXYGROUP_RUNTIME_CONFIG", filepath.Join(dataDirectory, "runtime", "active.yaml")),
 		SnapshotsPath:     envOrDefault("HX_PROXYGROUP_SNAPSHOTS", filepath.Join(dataDirectory, "snapshots")),
 		WebRoot:           envOrDefault("HX_PROXYGROUP_WEB_ROOT", ""),
+		SourceRoot:        envOrDefault("HX_PROXYGROUP_SOURCE_ROOT", ""),
 		MihomoBinary:      envOrDefault("HX_PROXYGROUP_MIHOMO", "mihomo"),
 		MihomoExternal:    envOrDefault("HX_PROXYGROUP_MIHOMO_EXTERNAL", "") == "1",
 		MihomoEgressInterface: envOrDefault(

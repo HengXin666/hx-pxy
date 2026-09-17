@@ -93,6 +93,10 @@ type SystemInfo struct {
 	UpdateCommand      string   `json:"update_command"`
 	AutomaticUpdate    bool     `json:"automatic_update"`
 	SupportedProtocols []string `json:"supported_protocols"`
+	// SourceRoot is the checkout this process runs from, when one exists. The
+	// About page uses it to offer AI docs that match the running version exactly;
+	// production installs omit it and fall back to released URLs.
+	SourceRoot string `json:"source_root,omitempty"`
 }
 
 type UpdaterService interface {
@@ -247,6 +251,17 @@ func WithProxyServices(service ProxyServiceService) Option {
 	}
 }
 
+// WithQuickstart enables the one-call endpoint that reaches a published proxy.
+func WithQuickstart(service QuickstartService) Option {
+	return func(server *Server) error {
+		if service == nil {
+			return errors.New("quick start service is required")
+		}
+		server.quickstart = service
+		return nil
+	}
+}
+
 func WithTraffic(service TrafficService) Option {
 	return func(server *Server) error {
 		if service == nil {
@@ -332,6 +347,7 @@ type Server struct {
 	ready            atomic.Bool
 	overviewInterval time.Duration
 	edgeSlots        chan struct{}
+	quickstart       QuickstartService
 }
 
 type errorResponse struct {
@@ -385,6 +401,20 @@ func WithWebRoot(root string) Option {
 }
 
 func (s *Server) Handler() http.Handler {
+	mux := s.routes()
+	var handler http.Handler = mux
+	if s.auth != nil {
+		s.registerAuthRoutes(mux)
+		handler = s.requireAuth(handler)
+	}
+	return s.requestContext(s.securityHeaders(gzipMiddleware(handler)))
+}
+
+// routes registers every route this server serves. It is split out of Handler
+// so a test can ask the real mux which pattern a documented path resolves to;
+// the catalog's route table is checked against this mux rather than against a
+// second hand-maintained list.
+func (s *Server) routes() *http.ServeMux {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health/live", s.handleLive)
 	mux.HandleFunc("/health/ready", s.handleReady)
@@ -433,6 +463,18 @@ func (s *Server) Handler() http.Handler {
 	if s.proxyServices != nil {
 		mux.HandleFunc("/api/v1/proxy-services", s.handleProxyServices)
 		mux.HandleFunc("/api/v1/proxy-services/", s.handleProxyService)
+	}
+	// Machine-readable capability catalog: every management endpoint with its
+	// field names, closed enums and a copy-pasteable example, built from the same
+	// vocabularies the validators use. It saves an integrating agent from reading
+	// Go source to discover a field or an enum value. Admin-only, because it
+	// describes administrative write surfaces.
+	mux.HandleFunc(CapabilityCatalogPath, s.handleCapabilities)
+	if s.quickstart != nil {
+		// One-call shortcut to a published proxy: register and refresh the
+		// source, then create the group and its listener. Admin-only, like the
+		// resource endpoints it replaces.
+		mux.HandleFunc(QuickstartPath, s.handleQuickstart)
 	}
 	if s.fleet != nil {
 		mux.HandleFunc("/api/v1/fleet/status", s.handleFleetStatus)
@@ -508,12 +550,7 @@ func (s *Server) Handler() http.Handler {
 	if s.webRoot != "" {
 		mux.Handle("/", newSPAHandler(s.webRoot))
 	}
-	var handler http.Handler = mux
-	if s.auth != nil {
-		s.registerAuthRoutes(mux)
-		handler = s.requireAuth(handler)
-	}
-	return s.requestContext(s.securityHeaders(gzipMiddleware(handler)))
+	return mux
 }
 
 func (s *Server) handleSystemInfo(writer http.ResponseWriter, request *http.Request) {

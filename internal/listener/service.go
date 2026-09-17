@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"slices"
 	"strings"
 	"time"
 
@@ -199,7 +200,16 @@ func (s *Service) Create(ctx context.Context, request CreateRequest) (Listener, 
 		return Listener{}, mapStoreError(err)
 	}
 	if err := s.reconciler.Apply(ctx); err != nil {
-		return fromRecord(created), fmt.Errorf("%w: %v", ErrApplyFailed, err)
+		// The row is already persisted, so an apply failure would otherwise
+		// leave a listener that no group is using and that no caller knows the
+		// id of. Callers that create a listener as part of a larger unit (the
+		// proxy service, quick start) cannot clean up a record they cannot
+		// name, so the create must undo itself. This mirrors Update, which
+		// restores the previous record for the same reason.
+		if rollbackErr := s.repository.DeleteListener(ctx, created.ID, created.Version); rollbackErr != nil {
+			return fromRecord(created), fmt.Errorf("%w: %v; removing the created listener record also failed: %v", ErrApplyFailed, err, rollbackErr)
+		}
+		return Listener{}, fmt.Errorf("%w: %v (the created listener was removed again)", ErrApplyFailed, err)
 	}
 	return fromRecord(created), nil
 }
@@ -441,13 +451,23 @@ func fromRecord(record store.ListenerRecord) Listener {
 	}
 }
 
+// SupportedKinds lists the listener kinds the control plane can publish. It is
+// the single source of truth for both the validator and the machine-readable
+// capability catalog, so the list an operator reads can never drift from the
+// list the validator accepts.
+func SupportedKinds() []string {
+	return []string{"http", "socks", "mixed", "vless", "vmess", "trojan"}
+}
+
+// SupportedTransports lists the transports a listener may use. "tcp" is a
+// directly dialable port; "ws" is a proxy protocol carried over WebSocket
+// behind the reverse proxy and is only valid for the advanced kinds.
+func SupportedTransports() []string {
+	return []string{"tcp", "ws"}
+}
+
 func supportedKind(kind string) bool {
-	switch kind {
-	case "http", "socks", "mixed", "vless", "vmess", "trojan":
-		return true
-	default:
-		return false
-	}
+	return slices.Contains(SupportedKinds(), kind)
 }
 
 // IsAdvancedKind reports whether a listener kind speaks a proxy protocol over

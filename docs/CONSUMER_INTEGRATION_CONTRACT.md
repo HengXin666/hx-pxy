@@ -1,6 +1,6 @@
 # 程序内接入契约（Nodes API / 配置中心）
 
-> 2026-09-14 用户决策（见 [Agent Note](../../.agents/notes/proposed/feature/2026-09-14-consumer-nodes-api.md)）：
+> 2026-09-14 用户决策（见 [Agent Note](../../.agents/notes/implemented/feature/2026-09-14-consumer-nodes-api.md)）：
 > HX-ProxyGroup 是**配置中心**，不是转发中继，也不是消费者的探测调度器。
 > 它只回答"我有哪些节点、怎么从这里拿到它们的连接方式"；探测、选点、轮询节奏**全部由消费者自己负责**。
 
@@ -94,6 +94,7 @@ GET /nodes/<share-token>
       "auth": { "username": "svc-3f9c", "password": "…" },
       "transport": "tcp",
       "tls": true,
+      "browser_compatible": true,
       "uri": "http://svc-3f9c:…@proxy.example.com:7890#香港专线-01"
     },
     {
@@ -106,7 +107,7 @@ GET /nodes/<share-token>
       "ws_path": "/__hx-proxy__/shared",
       "tls": true,
       "server_name": "proxy.example.com",
-      "browser_compatible": true,
+      "browser_compatible": false,
       "uri": "vless://…@proxy.example.com:443?security=tls&type=ws&…"
     }
   ]
