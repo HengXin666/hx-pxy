@@ -37,6 +37,25 @@ func TestDecryptNodeResolvesResidentialDialerProxyGroup(t *testing.T) {
 	}
 }
 
+func TestConvertNodeConfigStripsWsPxySessionID(t *testing.T) {
+	t.Parallel()
+	config, err := convertNodeConfig(map[string]any{
+		"type":                             "http",
+		"server":                           "127.0.0.1",
+		"port":                             24800,
+		store.ResidentialWsPxySessionIDKey: "sess-1",
+	})
+	if err != nil {
+		t.Fatalf("convertNodeConfig() error = %v", err)
+	}
+	if _, exists := config[store.ResidentialWsPxySessionIDKey]; exists {
+		t.Fatal("hx-cf-wspxy session id leaked into Mihomo node config")
+	}
+	if config["server"] != "127.0.0.1" || config["type"] != "http" {
+		t.Fatalf("config = %#v", config)
+	}
+}
+
 func TestDecryptNodeRejectsMissingOrDisabledResidentialDialerGroup(t *testing.T) {
 	t.Parallel()
 

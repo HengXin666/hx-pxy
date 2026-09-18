@@ -534,7 +534,7 @@ export interface ApiErrorPayload {
 }
 
 export type ResidentialProtocol = "http" | "https" | "socks5" | "vless" | "trojan"
-export type ResidentialRotationMode = "session-template" | "per-request" | "api-list" | "cf-worker"
+export type ResidentialRotationMode = "session-template" | "per-request" | "api-list" | "cf-worker" | "hx-cf-wspxy"
 export type ResidentialChannelMode = "passthrough" | "sticky"
 export type ResidentialSessionExpiryPolicy = "expire" | "rotate"
 export type ResidentialRegionMode = "fixed" | "application-random"

@@ -17,6 +17,11 @@ const ResidentialOrigin = "residential"
 // display name before emitting dialer-proxy.
 const ResidentialDialerProxyGroupIDKey = "hx_dialer_proxy_group_id"
 
+// ResidentialWsPxySessionIDKey is stored inside an encrypted residential node
+// config so the control plane can DELETE the matching HX-CF-WsPxy session.
+// The Mihomo compiler strips it before emitting YAML.
+const ResidentialWsPxySessionIDKey = "hx_wspxy_session_id"
+
 // ResidentialSessionNode is one pooled gateway session rendered as a node.
 type ResidentialSessionNode struct {
 	ID                       string

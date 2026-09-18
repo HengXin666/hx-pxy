@@ -181,6 +181,9 @@ func canonicalNodeConfig(provider Provider, session Session, password, displayNa
 		config["username"] = session.Username
 		config["password"] = sessionPassword
 	}
+	if provider.RotationMode == RotationHXCFWsPxy && session.ID != "" {
+		config[store.ResidentialWsPxySessionIDKey] = session.ID
+	}
 	if protocol == "https" {
 		config["type"] = "http"
 		config["tls"] = true
@@ -235,6 +238,12 @@ func sessionFingerprint(channelID string, provider Provider, session Session) (s
 		"server":   server,
 		"port":     port,
 		"username": session.Username,
+	}
+	if provider.RotationMode == RotationHXCFWsPxy && session.ID != "" {
+		// Pin the fingerprint to the WsPxy session id, not the CONNECT port.
+		// rotate keeps the same port, so hashing host:port would leave the
+		// data-plane node looking unchanged after a colo switch.
+		payload["wspxy_session"] = session.ID
 	}
 	encoded, err := json.Marshal(payload)
 	if err != nil {

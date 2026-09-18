@@ -175,11 +175,13 @@ func (s *Service) EnsureClientSessionByTokenWithOptions(
 		UpdatedAt:             now,
 	})
 	if err != nil {
+		s.destroyWsPxyFingerprint(ctx, providerRecord, record.ID, fingerprint)
 		_ = s.repository.DeleteResidentialSessionNode(ctx, record.ID, fingerprint)
 		return ClientSession{}, mapStoreError(err)
 	}
 	if err := s.republishClientSessionGroup(ctx, record); err != nil {
 		_ = s.repository.DeleteResidentialClientSession(ctx, record.ID, sessionID)
+		s.destroyWsPxyFingerprint(ctx, providerRecord, record.ID, fingerprint)
 		_ = s.repository.DeleteResidentialSessionNode(ctx, record.ID, fingerprint)
 		_ = s.republishClientSessionGroup(ctx, record)
 		return ClientSession{}, fmt.Errorf("publish residential client session: %w", err)
@@ -360,6 +362,9 @@ func (s *Service) switchClientSessionRouteByToken(
 		return ClientSession{}, err
 	}
 	if routeMode != ClientRouteResidential && current.NodeFingerprint != "" {
+		if provider, providerErr := s.repository.GetResidentialProvider(ctx, channel.ProviderID); providerErr == nil {
+			s.destroyWsPxyFingerprint(ctx, provider, channel.ID, current.NodeFingerprint)
+		}
 		_ = s.repository.DeleteResidentialSessionNode(ctx, channel.ID, current.NodeFingerprint)
 		if err := s.republishClientSessionGroup(ctx, channel); err != nil {
 			return ClientSession{}, fmt.Errorf("release residential client allocation: %w", err)

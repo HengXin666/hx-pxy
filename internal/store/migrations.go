@@ -901,6 +901,54 @@ ALTER TABLE proxy_groups
     ADD COLUMN dialer_proxy_group_id TEXT REFERENCES proxy_groups(id) ON DELETE RESTRICT;
 `,
 	},
+	{
+		version:            35,
+		name:               "residential_hx_cf_wspxy_rotation",
+		disableForeignKeys: true,
+		sql: `
+CREATE TABLE residential_providers_v35 (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL UNIQUE,
+    vendor TEXT NOT NULL,
+    protocol TEXT NOT NULL CHECK (protocol IN ('http', 'https', 'socks5', 'vless', 'trojan')),
+    gateway_host TEXT NOT NULL,
+    gateway_port INTEGER NOT NULL CHECK (gateway_port BETWEEN 1 AND 65535),
+    credentials_encrypted BLOB NOT NULL,
+    username_template TEXT NOT NULL,
+    rotation_mode TEXT NOT NULL CHECK (rotation_mode IN ('session-template', 'per-request', 'api-list', 'cf-worker', 'hx-cf-wspxy')),
+    session_ttl_seconds INTEGER NOT NULL DEFAULT 600 CHECK (session_ttl_seconds >= 0),
+    pool_size INTEGER NOT NULL DEFAULT 8 CHECK (pool_size BETWEEN 1 AND 64),
+    default_region TEXT NOT NULL DEFAULT '',
+    enabled INTEGER NOT NULL DEFAULT 1 CHECK (enabled IN (0, 1)),
+    version INTEGER NOT NULL DEFAULT 1 CHECK (version >= 1),
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    api_url TEXT NOT NULL DEFAULT '',
+    upstream_proxy_group_id TEXT REFERENCES proxy_groups(id) ON DELETE RESTRICT,
+    session_expiry_policy TEXT NOT NULL DEFAULT 'rotate'
+        CHECK (session_expiry_policy IN ('expire', 'rotate')),
+    default_region_mode TEXT NOT NULL DEFAULT 'fixed'
+        CHECK (default_region_mode IN ('fixed', 'application-random')),
+    default_random_regions TEXT NOT NULL DEFAULT '[]'
+) STRICT;
+
+INSERT INTO residential_providers_v35 (
+    id, name, vendor, protocol, gateway_host, gateway_port, credentials_encrypted,
+    username_template, rotation_mode, session_ttl_seconds, pool_size, default_region,
+    enabled, version, created_at, updated_at, api_url, upstream_proxy_group_id,
+    session_expiry_policy, default_region_mode, default_random_regions
+)
+SELECT
+    id, name, vendor, protocol, gateway_host, gateway_port, credentials_encrypted,
+    username_template, rotation_mode, session_ttl_seconds, pool_size, default_region,
+    enabled, version, created_at, updated_at, api_url, upstream_proxy_group_id,
+    session_expiry_policy, default_region_mode, default_random_regions
+FROM residential_providers;
+
+DROP TABLE residential_providers;
+ALTER TABLE residential_providers_v35 RENAME TO residential_providers;
+`,
+	},
 }
 
 func (s *Store) migrate(ctx context.Context) error {

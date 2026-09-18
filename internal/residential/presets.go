@@ -19,6 +19,11 @@ const (
 	// link resolves fresh Cloudflare edge addresses, so the exit only changes
 	// when the consumer explicitly asks for a new node.
 	RotationCloudflareWorker = "cf-worker"
+	// RotationHXCFWsPxy means exit endpoints are local HTTP CONNECT listeners
+	// minted by HX-CF-WsPxy. The control plane POSTs /session on a loopback
+	// SessionPlane; Mihomo dials the returned 127.0.0.1 port. next maps to
+	// POST /session/:id/rotate so the colo pin actually changes.
+	RotationHXCFWsPxy = "hx-cf-wspxy"
 )
 
 // Preset is a vendor-specific starting point for a provider configuration.
@@ -168,6 +173,23 @@ var presets = []Preset{
 			"控制面经配置的出口代理（api_proxy_url）请求该链接，解析返回的 VLESS/Trojan 节点。" +
 			"每次用户主动 next 才重新请求并轮换出口地址；TTL 为 0 时不自动刷新。",
 	},
+	{
+		Vendor:            "hx-cf-wspxy",
+		Label:             "HX-CF-WsPxy · Cloudflare colo 出口",
+		Protocol:          "http",
+		GatewayHost:       "",
+		GatewayPort:       0,
+		UsernameTemplate:  "",
+		RotationMode:      RotationHXCFWsPxy,
+		SessionTTLSeconds: 0,
+		PoolSize:          8,
+		Verified:          true,
+		DocURL:            "https://github.com/HengXin666/HX-CF-WsPxy",
+		Notes: "把本机 HX-CF-WsPxy 控制面 origin 填到 api_url，例如 http://127.0.0.1:2470。" +
+			"控制面 POST /session 开会话，Mihomo 拨返回的 127.0.0.1 CONNECT 端口；" +
+			"客户端 next 调用 POST /session/:id/rotate 换 pin（换 colo），释放时 DELETE。" +
+			"WSP1 只跑在 WsPxy 与 Worker 之间，住宅客户端仍走渠道 Listener。TTL 为 0，不自动刷新。",
+	},
 }
 
 // Presets returns a copy of the registered vendor presets.
@@ -202,5 +224,5 @@ func SupportedWorkerProtocols() []string {
 
 // SupportedRotationModes lists the accepted rotation modes.
 func SupportedRotationModes() []string {
-	return []string{RotationSessionTemplate, RotationPerRequest, RotationAPIList, RotationCloudflareWorker}
+	return []string{RotationSessionTemplate, RotationPerRequest, RotationAPIList, RotationCloudflareWorker, RotationHXCFWsPxy}
 }

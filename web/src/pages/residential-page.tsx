@@ -404,6 +404,12 @@ export function ResidentialPage({
                               </code>
                               {provider.api_proxy_configured && <div className="text-[11px] text-muted-foreground">API 上游代理已配置</div>}
                             </div>
+                          ) : provider.rotation_mode === "hx-cf-wspxy" ? (
+                            <div className="space-y-1">
+                              <code className="rounded bg-muted px-1.5 py-0.5">
+                                {provider.api_url_configured ? "WsPxy 控制面已配置（不会回显）" : "WsPxy 控制面未配置"}
+                              </code>
+                            </div>
                           ) : provider.rotation_mode === "api-list" ? (
                             <div className="space-y-1">
                               <code className="rounded bg-muted px-1.5 py-0.5">
@@ -557,6 +563,8 @@ function rotationModeLabel(mode: string) {
       return "API 提取（刷新节点）"
     case "cf-worker":
       return "CF Worker 面板（主动刷新）"
+    case "hx-cf-wspxy":
+      return "HX-CF-WsPxy（colo 出口）"
     default:
       return mode
   }
@@ -656,8 +664,8 @@ function ProviderDialog({
       // cf-worker presets carry no gateway login: the panel subscription
       // link is the only secret. Other presets fall back to the BestProxy
       // gateway defaults as before.
-      gatewayHost: preset.rotation_mode === "cf-worker" ? preset.gateway_host : (preset.gateway_host || "proxy.bestproxy.com"),
-      gatewayPort: String(preset.gateway_port || (preset.rotation_mode === "cf-worker" ? 1 : 2312)),
+      gatewayHost: (preset.rotation_mode === "cf-worker" || preset.rotation_mode === "hx-cf-wspxy") ? preset.gateway_host : (preset.gateway_host || "proxy.bestproxy.com"),
+      gatewayPort: String(preset.gateway_port || ((preset.rotation_mode === "cf-worker" || preset.rotation_mode === "hx-cf-wspxy") ? 1 : 2312)),
       upstreamProxyGroupID: "",
       apiProxyURL: "",
       usernameTemplate: preset.username_template,
@@ -680,17 +688,20 @@ function ProviderDialog({
     try {
       // api-list and cf-worker providers are fetched by the control plane:
       // their gateway columns hold placeholders and no gateway login exists.
-      const fetchMode = form.rotationMode === "api-list" || form.rotationMode === "cf-worker"
+      const fetchMode = form.rotationMode === "api-list" || form.rotationMode === "cf-worker" || form.rotationMode === "hx-cf-wspxy"
+      const gatewayPlaceholder = form.rotationMode === "api-list"
+        ? "api-list.invalid"
+        : form.rotationMode === "hx-cf-wspxy"
+          ? "hx-cf-wspxy.invalid"
+          : "cf-worker.invalid"
       const base = {
         name: form.name.trim(),
         vendor: form.vendor.trim() || "custom",
         protocol: form.protocol,
-        gateway_host: fetchMode
-          ? (form.rotationMode === "api-list" ? "api-list.invalid" : "cf-worker.invalid")
-          : form.gatewayHost.trim(),
+        gateway_host: fetchMode ? gatewayPlaceholder : form.gatewayHost.trim(),
         gateway_port: fetchMode ? 1 : Number(form.gatewayPort),
         upstream_proxy_group_id: form.upstreamProxyGroupID === "none" ? undefined : form.upstreamProxyGroupID || undefined,
-        api_url: form.rotationMode === "api-list" ? form.apiURL.trim() : undefined,
+        api_url: (form.rotationMode === "api-list" || form.rotationMode === "hx-cf-wspxy") ? form.apiURL.trim() : undefined,
         worker_url: form.rotationMode === "cf-worker" ? form.workerURL.trim() : undefined,
         api_proxy_url: form.apiProxyURL.trim() || undefined,
         username_template: fetchMode ? "" : form.usernameTemplate.trim(),
@@ -755,13 +766,21 @@ function ProviderDialog({
             </label>
             <label className="grid gap-1 text-xs">
               轮换模式
-              <Select value={form.rotationMode} onValueChange={(value) => update("rotationMode", value as ResidentialRotationMode)}>
+              <Select value={form.rotationMode} onValueChange={(value) => {
+                const mode = value as ResidentialRotationMode
+                setForm((current) => ({
+                  ...current,
+                  rotationMode: mode,
+                  protocol: mode === "hx-cf-wspxy" ? "http" : current.protocol,
+                }))
+              }}>
                 <SelectTrigger><SelectValue /></SelectTrigger>
                 <SelectContent>
                   <SelectItem value="session-template">粘滞会话（会话 ID 轮换）</SelectItem>
                   <SelectItem value="per-request">每请求轮换</SelectItem>
                   <SelectItem value="api-list">API 提取（获取/刷新节点）</SelectItem>
                   <SelectItem value="cf-worker">CF Worker 面板（BPB）</SelectItem>
+                  <SelectItem value="hx-cf-wspxy">HX-CF-WsPxy（CF colo 出口）</SelectItem>
                 </SelectContent>
               </Select>
             </label>
@@ -774,6 +793,8 @@ function ProviderDialog({
                     workerProtocols.map((protocol) => (
                       <SelectItem key={protocol} value={protocol}>{protocol.toUpperCase()}</SelectItem>
                     ))
+                  ) : form.rotationMode === "hx-cf-wspxy" ? (
+                    <SelectItem value="http">HTTP</SelectItem>
                   ) : (
                     <>
                       <SelectItem value="http">HTTP</SelectItem>
@@ -788,7 +809,22 @@ function ProviderDialog({
               )}
             </label>
 
-            {form.rotationMode === "api-list" ? (
+            {form.rotationMode === "hx-cf-wspxy" ? (
+              <label className="grid gap-1 text-xs sm:col-span-2">
+                HX-CF-WsPxy 控制面（只写入，不回显）
+                <Input
+                  value={form.apiURL}
+                  onChange={(event) => update("apiURL", event.target.value)}
+                  placeholder={initial?.api_url_configured
+                    ? "已配置，留空保持当前地址；粘贴新 origin 可替换"
+                    : "http://127.0.0.1:2470"}
+                  required={!initial?.api_url_configured}
+                />
+                <span className="text-[11px] text-muted-foreground">
+                  填本机 SessionPlane origin，例如 http://127.0.0.1:2470。控制面 POST /session 开会话，Mihomo 拨返回的 127.0.0.1 CONNECT 端口；next 调用 /rotate 换 colo pin。WSP1 只跑在 WsPxy 与 Worker 之间。
+                </span>
+              </label>
+            ) : form.rotationMode === "api-list" ? (
               <label className="grid gap-1 text-xs sm:col-span-2">
                 API 提取链接（只写入，不回显）
                 <Input

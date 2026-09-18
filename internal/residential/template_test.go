@@ -121,7 +121,8 @@ func TestValidateTemplateAcceptsRegisteredPresets(t *testing.T) {
 		// api-list and cf-worker presets have no username template: their
 		// endpoints come from an extraction API or a Cloudflare Worker panel
 		// subscription link instead of a gateway login.
-		if preset.RotationMode != RotationAPIList && preset.RotationMode != RotationCloudflareWorker {
+		if preset.RotationMode != RotationAPIList && preset.RotationMode != RotationCloudflareWorker &&
+			preset.RotationMode != RotationHXCFWsPxy {
 			if err := ValidateTemplate(preset.UsernameTemplate); err != nil {
 				t.Errorf("preset %q template %q is invalid: %v", preset.Vendor, preset.UsernameTemplate, err)
 			}

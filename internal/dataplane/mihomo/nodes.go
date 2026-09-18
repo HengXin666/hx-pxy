@@ -80,6 +80,7 @@ func convertNodeConfig(canonical map[string]any) (map[string]any, error) {
 	delete(config, "ps")
 	delete(config, "query")
 	delete(config, store.ResidentialDialerProxyGroupIDKey)
+	delete(config, store.ResidentialWsPxySessionIDKey)
 	return config, nil
 }
 

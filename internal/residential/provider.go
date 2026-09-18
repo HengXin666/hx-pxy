@@ -392,6 +392,14 @@ func (s *Service) normalizeProvider(
 				RotationCloudflareWorker,
 			)
 		}
+	} else if rotationMode == RotationHXCFWsPxy {
+		if protocol != "http" {
+			return normalizedProvider{}, fmt.Errorf(
+				"%w: protocol must be http for %q rotation",
+				ErrInvalid,
+				RotationHXCFWsPxy,
+			)
+		}
 	} else if !containsString(SupportedProtocols(), protocol) {
 		return normalizedProvider{}, fmt.Errorf(
 			"%w: protocol must be one of %s",
@@ -407,7 +415,7 @@ func (s *Service) normalizeProvider(
 		if err != nil {
 			// A new credential pair or API URL replaces the old secret, so a
 			// corrupt legacy value should not prevent recovery through edit.
-			if input.Credentials == nil && strings.TrimSpace(input.APIURL) == "" && strings.TrimSpace(input.APIProxyURL) == "" {
+			if input.Credentials == nil && strings.TrimSpace(input.APIURL) == "" && strings.TrimSpace(input.APIProxyURL) == "" && strings.TrimSpace(input.WorkerURL) == "" {
 				return normalizedProvider{}, err
 			}
 		} else {
@@ -464,6 +472,23 @@ func (s *Service) normalizeProvider(
 			return normalizedProvider{}, err
 		}
 		input.APIURL = apiURL
+	} else if rotationMode == RotationHXCFWsPxy {
+		host = wsPxyGatewayPlaceholder
+		input.GatewayPort = 1
+		template = ""
+		input.WorkerURL = ""
+		apiURL := strings.TrimSpace(input.APIURL)
+		if apiURL == "" {
+			apiURL = strings.TrimSpace(existingSecrets.APIURL)
+		}
+		if apiURL == "" {
+			apiURL = strings.TrimSpace(input.ExistingAPIURL)
+		}
+		apiURL, err := validateWsPxyControlURL(apiURL)
+		if err != nil {
+			return normalizedProvider{}, err
+		}
+		input.APIURL = apiURL
 	} else {
 		input.APIURL = ""
 		if err := validateGatewayHost(host); err != nil {
@@ -496,10 +521,10 @@ func (s *Service) normalizeProvider(
 	if ttl < 0 || ttl > 86400 {
 		return normalizedProvider{}, fmt.Errorf("%w: session_ttl_seconds must be between 0 and 86400", ErrInvalid)
 	}
-	if rotationMode == RotationCloudflareWorker {
-		// A Cloudflare Worker panel only rotates when the consumer explicitly
-		// asks for a new node. Forcing TTL 0 means the pool never expires on
-		// its own: if the user does not refresh, the exit address stays put.
+	if rotationMode == RotationCloudflareWorker || rotationMode == RotationHXCFWsPxy {
+		// A Cloudflare Worker panel and HX-CF-WsPxy only rotate when the
+		// consumer explicitly asks. Forcing TTL 0 means the pool never expires
+		// on its own: if the user does not refresh, the colo pin stays put.
 		ttl = 0
 	}
 	if vendor == "bestproxy" && strings.Contains(template, "_life-") && (ttl < 1 || ttl > 120) {
@@ -545,7 +570,7 @@ func (s *Service) normalizeProvider(
 	secrets := existingSecrets
 	if rotationMode == RotationCloudflareWorker {
 		secrets = providerSecrets{WorkerURL: input.WorkerURL, APIProxyURL: apiProxyURL}
-	} else if rotationMode == RotationAPIList {
+	} else if rotationMode == RotationAPIList || rotationMode == RotationHXCFWsPxy {
 		secrets = providerSecrets{APIURL: input.APIURL, APIProxyURL: apiProxyURL}
 	} else if input.Credentials != nil {
 		username := strings.TrimSpace(input.Credentials.Username)
@@ -572,11 +597,12 @@ func (s *Service) normalizeProvider(
 			return normalizedProvider{}, fmt.Errorf("%w: %v", ErrInvalid, err)
 		}
 		secrets = providerSecrets{Username: username, Password: password, APIProxyURL: apiProxyURL}
-	} else if rotationMode != RotationAPIList {
+	} else if rotationMode != RotationAPIList && rotationMode != RotationHXCFWsPxy {
 		secrets.APIURL = ""
 		secrets.APIProxyURL = apiProxyURL
 	}
 	if rotationMode != RotationAPIList && rotationMode != RotationCloudflareWorker &&
+		rotationMode != RotationHXCFWsPxy &&
 		(secrets.Username == "" || secrets.Password == "") {
 		return normalizedProvider{}, fmt.Errorf("%w: gateway credentials are required", ErrInvalid)
 	}
@@ -844,7 +870,7 @@ func (s *Service) providerFromRecord(record store.ResidentialProviderRecord) Pro
 		GatewayPort:           record.GatewayPort,
 		UpstreamProxyGroupID:  record.UpstreamProxyGroupID,
 		APIURL:                apiURL,
-		APIURLConfigured:      record.RotationMode == RotationAPIList && apiURL != "",
+		APIURLConfigured:      (record.RotationMode == RotationAPIList || record.RotationMode == RotationHXCFWsPxy) && apiURL != "",
 		WorkerURL:             secrets.WorkerURL,
 		WorkerURLConfigured:   record.RotationMode == RotationCloudflareWorker && secrets.WorkerURL != "",
 		APIProxyURL:           secrets.APIProxyURL,
@@ -859,17 +885,20 @@ func (s *Service) providerFromRecord(record store.ResidentialProviderRecord) Pro
 		DefaultRegionMode:     defaultRegionMode,
 		DefaultRandomRegions:  parseRegionList(record.DefaultRandomRegions),
 		CredentialsConfigured: record.RotationMode != RotationAPIList &&
-			record.RotationMode != RotationCloudflareWorker && secretsErr == nil &&
+			record.RotationMode != RotationCloudflareWorker &&
+			record.RotationMode != RotationHXCFWsPxy && secretsErr == nil &&
 			secrets.Username != "" && secrets.Password != "",
 		SupportsSticky: (record.RotationMode == RotationSessionTemplate && TemplateUsesSession(record.UsernameTemplate)) ||
-			record.RotationMode == RotationAPIList || record.RotationMode == RotationCloudflareWorker,
+			record.RotationMode == RotationAPIList || record.RotationMode == RotationCloudflareWorker ||
+			record.RotationMode == RotationHXCFWsPxy,
 		Enabled:   record.Enabled,
 		Version:   record.Version,
 		CreatedAt: record.CreatedAt,
 		UpdatedAt: record.UpdatedAt,
 	}
 	// The account login is safe to display; the password never leaves the box.
-	if record.RotationMode != RotationAPIList && record.RotationMode != RotationCloudflareWorker && secretsErr == nil {
+	if record.RotationMode != RotationAPIList && record.RotationMode != RotationCloudflareWorker &&
+		record.RotationMode != RotationHXCFWsPxy && secretsErr == nil {
 		provider.GatewayUsername = secrets.Username
 	}
 	return provider
@@ -933,7 +962,8 @@ func (s *Service) openCredentials(record store.ResidentialProviderRecord) (Crede
 // panel identity inside the fetched share URI, so both always yield an empty
 // credential pair.
 func (s *Service) providerCredentials(record store.ResidentialProviderRecord) (Credentials, error) {
-	if record.RotationMode == RotationAPIList || record.RotationMode == RotationCloudflareWorker {
+	if record.RotationMode == RotationAPIList || record.RotationMode == RotationCloudflareWorker ||
+		record.RotationMode == RotationHXCFWsPxy {
 		return Credentials{}, nil
 	}
 	return s.openCredentials(record)

@@ -502,6 +502,12 @@ func (s *Service) DeleteChannel(ctx context.Context, id string, version int) err
 	if err != nil {
 		return mapStoreError(err)
 	}
+	if provider, providerErr := s.repository.GetResidentialProvider(ctx, record.ProviderID); providerErr == nil &&
+		provider.RotationMode == RotationHXCFWsPxy {
+		if pool, poolErr := s.repository.ListResidentialSessionNodes(ctx, record.ID); poolErr == nil {
+			s.destroyWsPxyNodes(ctx, s.providerFromRecord(provider).APIURL, pool)
+		}
+	}
 	if err := s.repository.DeleteResidentialChannel(ctx, id, version); err != nil {
 		return mapStoreError(err)
 	}

@@ -118,6 +118,7 @@ type Service struct {
 	fetchNodes          NodeFetcher
 	fetchNodesWithProxy func(context.Context, string, string) ([]FetchedNode, error)
 	fetchWorker         WorkerConfigFetcher
+	wspxy               WsPxyControl
 	now                 func() time.Time
 
 	// rotateLimiter bounds how often each channel may rotate. Rotation is
@@ -209,6 +210,16 @@ func WithWorkerFetcher(fetcher WorkerConfigFetcher) Option {
 	}
 }
 
+// WithWsPxyControl overrides how hx-cf-wspxy providers talk to the local
+// HX-CF-WsPxy SessionPlane. The default implementation POSTs loopback HTTP.
+func WithWsPxyControl(control WsPxyControl) Option {
+	return func(service *Service) {
+		if control != nil {
+			service.wspxy = control
+		}
+	}
+}
+
 func NewService(
 	repository Repository,
 	cipher Cipher,
@@ -233,6 +244,7 @@ func NewService(
 		fetchNodes:          fetchNodesFromAPI,
 		fetchNodesWithProxy: fetchNodesFromAPIWithProxy,
 		fetchWorker:         fetchWorkerConfig,
+		wspxy:               httpWsPxyControl{},
 		now:                 time.Now,
 		rotateLimiter:       newRotateLimiter(defaultRotateInterval),
 	}
@@ -279,6 +291,16 @@ func (s *Service) providerSessions(
 		}
 		return sessions, nil
 	}
+	if provider.RotationMode == RotationHXCFWsPxy {
+		if strings.TrimSpace(provider.APIURL) == "" {
+			return nil, fmt.Errorf("%w: hx-cf-wspxy provider has no api_url", ErrInvalid)
+		}
+		sessions, err := s.createWsPxySessions(ctx, provider.APIURL, size)
+		if err != nil {
+			return nil, fmt.Errorf("%w: create hx-cf-wspxy sessions: %v", ErrProviderUnreachable, err)
+		}
+		return sessions, nil
+	}
 	if provider.RotationMode == RotationAPIList {
 		if strings.TrimSpace(provider.APIURL) == "" {
 			return nil, fmt.Errorf("%w: api-list provider has no api_url", ErrInvalid)
@@ -316,7 +338,7 @@ func (s *Service) materializePool(
 	credentials Credentials,
 	regionSelection RegionSelection,
 	size int,
-) ([]string, error) {
+) (ids []string, err error) {
 	region, err := chooseRegion(regionSelection)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrInvalid, err)
@@ -326,19 +348,35 @@ func (s *Service) materializePool(
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrInvalid, err)
 	}
+	if provider.RotationMode == RotationHXCFWsPxy {
+		defer func() {
+			if err != nil {
+				sessionIDs := make([]string, 0, len(sessions))
+				for _, session := range sessions {
+					if session.ID != "" {
+						sessionIDs = append(sessionIDs, session.ID)
+					}
+				}
+				s.destroyWsPxyIDs(ctx, provider.APIURL, sessionIDs)
+			}
+		}()
+	}
 	records := make([]store.ResidentialSessionNode, 0, len(sessions))
 	for _, session := range sessions {
-		fingerprint, err := sessionFingerprint(channelID, provider, session)
+		var fingerprint string
+		fingerprint, err = sessionFingerprint(channelID, provider, session)
 		if err != nil {
 			return nil, err
 		}
 		displayName := sessionDisplayName(channelName, region, session)
 		canonical := canonicalNodeConfig(provider, session, credentials.Password, displayName)
-		encrypted, err := s.sealNodeConfig(canonical, fingerprint)
+		var encrypted []byte
+		encrypted, err = s.sealNodeConfig(canonical, fingerprint)
 		if err != nil {
 			return nil, err
 		}
-		nodeID, err := newID("node-residential")
+		var nodeID string
+		nodeID, err = newID("node-residential")
 		if err != nil {
 			return nil, err
 		}
@@ -354,7 +392,11 @@ func (s *Service) materializePool(
 			CanonicalConfigEncrypted: encrypted,
 		})
 	}
-	return s.repository.ReplaceResidentialSessionPool(ctx, channelID, records, s.now().UTC())
+	ids, err = s.repository.ReplaceResidentialSessionPool(ctx, channelID, records, s.now().UTC())
+	if err != nil {
+		return nil, err
+	}
+	return ids, nil
 }
 
 // sealNodeConfig encrypts a canonical node config with the same associated data
@@ -422,6 +464,10 @@ func (s *Service) RefreshChannelPool(ctx context.Context, channelID string) erro
 	if err != nil {
 		return err
 	}
+	newPool, err := s.repository.ListResidentialSessionNodes(ctx, record.ID)
+	if err != nil {
+		return err
+	}
 	// Republishing the group is what actually pushes the new sessions into the
 	// data plane; it validates and applies the candidate configuration.
 	if _, err := s.groups.Update(ctx, groupRecord.ID, proxygroup.UpdateRequest{
@@ -432,6 +478,9 @@ func (s *Service) RefreshChannelPool(ctx context.Context, channelID string) erro
 		Enabled:       groupRecord.Enabled,
 		EmptyBehavior: groupRecord.EmptyBehavior,
 	}); err != nil {
+		if provider.RotationMode == RotationHXCFWsPxy {
+			s.destroyWsPxyNodes(ctx, provider.APIURL, newPool)
+		}
 		restoreErr := s.restoreResidentialPoolAndGroup(ctx, record, existingPool)
 		if restoreErr != nil {
 			return fmt.Errorf("republish residential proxy group: %w; restore previous pool: %v", err, restoreErr)
@@ -440,6 +489,9 @@ func (s *Service) RefreshChannelPool(ctx context.Context, channelID string) erro
 	}
 	if record.Mode == ModeSticky {
 		if err := s.selectActiveSession(ctx, record, 0); err != nil {
+			if provider.RotationMode == RotationHXCFWsPxy {
+				s.destroyWsPxyNodes(ctx, provider.APIURL, newPool)
+			}
 			restoreErr := s.restoreResidentialPoolAndGroup(ctx, record, existingPool)
 			if restoreErr != nil {
 				return fmt.Errorf("select refreshed residential session: %w; restore previous pool: %v", err, restoreErr)
@@ -447,10 +499,11 @@ func (s *Service) RefreshChannelPool(ctx context.Context, channelID string) erro
 			return err
 		}
 	}
-	if err := s.repository.SetResidentialChannelPoolCreatedAt(ctx, record.ID, poolCreatedAt); err != nil {
-		return err
+	stampErr := s.repository.SetResidentialChannelPoolCreatedAt(ctx, record.ID, poolCreatedAt)
+	if provider.RotationMode == RotationHXCFWsPxy {
+		s.destroyWsPxyNodes(ctx, provider.APIURL, existingPool)
 	}
-	return nil
+	return stampErr
 }
 
 // restoreResidentialPoolAndGroup puts the previous node rows back after a

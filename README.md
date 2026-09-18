@@ -196,7 +196,7 @@ Proxy Group。实际数据面链路为：
 住宅节点配置中的上游组使用稳定 ID 保存，Mihomo 编译时解析为当前组名并输出
 `dialer-proxy`。上游组缺失、禁用或与住宅渠道形成循环时，配置会拒绝应用。
 
-- **供应商**：三种接入方式。
+- **供应商**：四种接入方式。
   - 账密网关（粘滞会话）：填网关地址、子用户账号密码，用户名模板自动拼
     `账号_area-国家_life-分钟_session-会话ID`（BestProxy）或
     `账号-residential-国家-session-会话ID-stime-分钟`（RapidProxy）；同一会话 ID
@@ -208,6 +208,11 @@ Proxy Group。实际数据面链路为：
     `worker_url`。控制面经可选出口代理（`api_proxy_url`）请求该链接，解析返回的
     VLESS/Trojan WebSocket 节点作为住宅出口；每次用户主动 `next` 才重新请求该链接并
     轮换 Cloudflare 出口地址，TTL 强制为 0，不自动刷新。
+  - HX-CF-WsPxy（Cloudflare colo 出口）：把本机 SessionPlane origin 填到 `api_url`，
+    例如 `http://127.0.0.1:2470`。控制面 `POST /session` 开会话，Mihomo 拨返回的
+    环回 HTTP CONNECT 端口；`next` 调用 `POST /session/:id/rotate` 换 pin（换 colo），
+    释放时 `DELETE`。WSP1 只跑在 WsPxy 与 Worker 之间，住宅客户端仍走渠道 Listener。
+    控制面地址必须是 loopback，TTL 强制为 0。
   - 地区策略：地区选项支持固定地区和“应用层随机地区”。随机模式要求手动填写候选地区，
     控制面每次实际获取住宅 IP 前使用 `crypto/rand` 选择一个候选值，并覆盖提取链接中的
     `cc`、`country`、`region` 或 `area` 参数；不会依赖供应商自称的随机地区。

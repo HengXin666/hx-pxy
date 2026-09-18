@@ -103,7 +103,8 @@ Content-Type: application/json
 的节点在 `GET nodes` 中省略该字段，`POST .../next` 成功分配后返回。它不会出现在 `/sub/`、
 管理员渠道/供应商列表或请求日志中。账密网关模式不会下发供应商主账号派生凭据。CF Worker 面板
 （BPB）供应商同样不返回该字段：其住宅节点是 VLESS/Trojan WebSocket URI，客户端应使用
-`endpoints[]` 经本机 Mihomo 落地。
+`endpoints[]` 经本机 Mihomo 落地。HX-CF-WsPxy 供应商也不返回该字段：CONNECT 端口绑在
+本机 127.0.0.1，只给 Mihomo 数据面拨，不经 control API 下发给远程客户端。
 
 代理流量始终由 Mihomo 转发。Go 控制面只维护映射、编译 `IN-USER` 规则、应用候选配置并调用
 Mihomo Controller，不实现 HTTP CONNECT、SOCKS5、VLESS、VMess 或 Trojan 协议。

@@ -108,7 +108,8 @@ func (s *Service) syncDeclaredSessionsLocked(ctx context.Context, channelID stri
 	// 校验只拉一次订阅确认端点可用，不为 session 分配出口 IP。
 	// 其他模式（session-template / api-list）保持完全懒：创建零 fetch。
 	if !channel.Preallocate &&
-		strings.EqualFold(providerRecord.RotationMode, RotationCloudflareWorker) {
+		(strings.EqualFold(providerRecord.RotationMode, RotationCloudflareWorker) ||
+			strings.EqualFold(providerRecord.RotationMode, RotationHXCFWsPxy)) {
 		if err := s.verifyProviderReachableLocked(ctx, channel, providerRecord); err != nil {
 			return err
 		}
@@ -183,6 +184,12 @@ func (s *Service) verifyProviderReachableLocked(
 	if err != nil {
 		return err
 	}
+	if provider.RotationMode == RotationHXCFWsPxy {
+		if err := s.wsPxyControl().Health(ctx, provider.APIURL); err != nil {
+			return fmt.Errorf("%w: hx-cf-wspxy control: %v", ErrProviderUnreachable, err)
+		}
+		return nil
+	}
 	sessions, err := s.providerSessions(ctx, provider, credentials, regionSelection, 1)
 	if err != nil {
 		return err
@@ -244,6 +251,7 @@ func (s *Service) createDeclaredSession(
 	created, err := s.repository.CreateResidentialClientSession(ctx, record)
 	if err != nil {
 		if record.NodeFingerprint != "" {
+			s.destroyWsPxyFingerprint(ctx, providerRecord, channel.ID, record.NodeFingerprint)
 			_ = s.repository.DeleteResidentialSessionNode(ctx, channel.ID, record.NodeFingerprint)
 		}
 		return mapStoreError(err)
@@ -251,6 +259,7 @@ func (s *Service) createDeclaredSession(
 	if err := s.republishClientSessionGroup(ctx, channel); err != nil {
 		_ = s.repository.DeleteResidentialClientSession(ctx, channel.ID, created.SessionID)
 		if record.NodeFingerprint != "" {
+			s.destroyWsPxyFingerprint(ctx, providerRecord, channel.ID, record.NodeFingerprint)
 			_ = s.repository.DeleteResidentialSessionNode(ctx, channel.ID, record.NodeFingerprint)
 		}
 		_ = s.republishClientSessionGroup(ctx, channel)
@@ -396,6 +405,9 @@ func (s *Service) releaseDeclaredAllocation(
 	)
 	if err != nil {
 		return mapStoreError(err)
+	}
+	if provider, providerErr := s.repository.GetResidentialProvider(ctx, channel.ProviderID); providerErr == nil {
+		s.destroyWsPxyFingerprint(ctx, provider, channel.ID, session.NodeFingerprint)
 	}
 	if err := s.repository.DeleteResidentialSessionNode(ctx, channel.ID, session.NodeFingerprint); err != nil {
 		return err

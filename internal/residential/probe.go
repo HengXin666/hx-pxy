@@ -73,6 +73,9 @@ func (s *Service) TestProvider(ctx context.Context, providerID, echoURL string) 
 	if provider.RotationMode == RotationCloudflareWorker {
 		return s.testCloudflareWorkerProvider(ctx, provider, session)
 	}
+	if provider.RotationMode == RotationHXCFWsPxy {
+		return s.testHXCFWsPxyProvider(ctx, provider, session)
+	}
 
 	endpoint, err := normalizeEchoURL(echoURL)
 	if err != nil {
@@ -151,6 +154,48 @@ func (s *Service) testCloudflareWorkerProvider(
 		Success:   true,
 		LatencyMS: latency,
 		Detail:    "已从 CF Worker 面板解析到节点并通过 TCP 可达性检查；真实出口 IP 由渠道数据面验证",
+	}, nil
+}
+
+// testHXCFWsPxyProvider verifies the local SessionPlane and the minted CONNECT
+// port. The session created for this probe is destroyed afterwards so a test
+// click does not occupy a colo pin.
+func (s *Service) testHXCFWsPxyProvider(
+	ctx context.Context,
+	provider Provider,
+	session Session,
+) (TestResult, error) {
+	if session.ID != "" {
+		defer s.destroyWsPxyIDs(ctx, provider.APIURL, []string{session.ID})
+	}
+	started := time.Now()
+	if err := s.wsPxyControl().Health(ctx, provider.APIURL); err != nil {
+		return TestResult{
+			Success:   false,
+			LatencyMS: int(time.Since(started).Milliseconds()),
+			Error:     err.Error(),
+		}, nil
+	}
+	if session.Server == "" || session.Port < 1 || session.Port > 65535 {
+		return TestResult{
+			Success: false,
+			Error:   "hx-cf-wspxy session has no usable CONNECT port",
+		}, nil
+	}
+	connection, err := net.DialTimeout("tcp", net.JoinHostPort(session.Server, strconv.Itoa(session.Port)), probeTimeout)
+	latency := int(time.Since(started).Milliseconds())
+	if err != nil {
+		return TestResult{
+			Success:   false,
+			LatencyMS: latency,
+			Error:     err.Error(),
+		}, nil
+	}
+	_ = connection.Close()
+	return TestResult{
+		Success:   true,
+		LatencyMS: latency,
+		Detail:    "HX-CF-WsPxy 控制面可达，本机 CONNECT 端口已监听；真实 colo 出口 IP 由渠道数据面验证",
 	}, nil
 }
 
