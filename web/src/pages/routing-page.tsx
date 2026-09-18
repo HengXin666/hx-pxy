@@ -63,7 +63,11 @@ export function RoutingPage({ onNotice }: RoutingPageProps) {
       // and group live there) and are listed as services like any other. The
       // aggregate carrier row is filtered out: it holds no credential and no
       // group of its own, so it must never be editable or deletable.
-      setListeners(listenerResult.items.filter((item) => !item.shared_inbound_aggregate))
+      const visibleListeners = listenerResult.items.filter((item) => !item.shared_inbound_aggregate)
+      setListeners(visibleListeners)
+      // 首次进入默认展开, 否则「节点成员」要再点一次, 看起来像没节点。
+      // 见 .agents/notes/implemented/bug-fix/2026-09-18-routing-members-collapsed.md
+      setExpanded((current) => current.size ? current : new Set(visibleListeners.map((item) => item.id)))
       setResidentialChannels(residentialResult.items)
       setStatus(statusResult)
       setRoutingRules(ruleResult)
