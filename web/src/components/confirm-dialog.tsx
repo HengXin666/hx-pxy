@@ -1,4 +1,5 @@
 import { AlertTriangle, X } from "lucide-react"
+import { createPortal } from "react-dom"
 
 import { Button } from "@/components/ui/button"
 
@@ -23,7 +24,11 @@ export function ConfirmDialog({
 }: ConfirmDialogProps) {
   if (!open) return null
 
-  return (
+  // Portal 而非就地渲染。调用方可能在 `.page-enter` 内部, 那个类带
+  // `animation-fill-mode: both`, 会把 `transform: translateY(0)` 永久留在元素上;
+  // transform 不是 none 就成为 position:fixed 的包含块, 于是一个"全屏"遮罩会
+  // 退化成那一小块, 弹窗被裁在里面。
+  return createPortal(
     <div className="fixed inset-0 z-[80] flex items-center justify-center bg-foreground/35 p-4">
       <div className="w-full max-w-md rounded-lg border bg-card shadow-[0_12px_36px_rgba(31,35,40,0.18)]">
         <div className="flex items-start justify-between border-b px-4 py-3">
@@ -45,6 +50,7 @@ export function ConfirmDialog({
           </Button>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body,
   )
 }

@@ -949,6 +949,53 @@ DROP TABLE residential_providers;
 ALTER TABLE residential_providers_v35 RENAME TO residential_providers;
 `,
 	},
+	{
+		version: 36,
+		name:    "consumer_board",
+		// 消费方看板（20260918 上线）已被用户明确否定并整套删除，见
+		// .agents/notes/implemented/simplification/2026-09-26-drop-consumer-board.md。
+		//
+		// 建表 SQL 刻意原样保留，不做反向迁移：migrate() 在
+		// currentVersion > latestVersion 时直接报错退出（本文件下方），而
+		// 线上库的 schema_migrations 已经记到 36 且 consumer_boards 里有真实
+		// 数据。删掉这条迁移会让这些库在启动时被判为「schema 比程序新」而
+		// 起不来。保留 = 表继续存在但全库零读写方，功能层面的删除已经在
+		// 代码里彻底完成。
+		sql: `
+CREATE TABLE consumer_boards (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    token TEXT NOT NULL UNIQUE,
+    enabled INTEGER NOT NULL DEFAULT 1 CHECK (enabled IN (0, 1)),
+    -- "all" publishes every enabled proxy group; "selected" uses the
+    -- consumer_board_groups junction. Stored explicitly so an empty junction
+    -- can never be read as "everything".
+    scope_mode TEXT NOT NULL DEFAULT 'all' CHECK (scope_mode IN ('all', 'selected')),
+    allow_switch INTEGER NOT NULL DEFAULT 0 CHECK (allow_switch IN (0, 1)),
+    rotation_interval_seconds INTEGER NOT NULL DEFAULT 0
+        CHECK (rotation_interval_seconds BETWEEN 0 AND 86400),
+    rotation_strategy TEXT NOT NULL DEFAULT 'off'
+        CHECK (rotation_strategy IN ('off', 'round-robin', 'random', 'fastest')),
+    version INTEGER NOT NULL DEFAULT 1 CHECK (version >= 1),
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+) STRICT;
+
+CREATE TABLE consumer_board_groups (
+    board_id TEXT NOT NULL REFERENCES consumer_boards(id) ON DELETE CASCADE,
+    proxy_group_id TEXT NOT NULL REFERENCES proxy_groups(id) ON DELETE CASCADE,
+    PRIMARY KEY (board_id, proxy_group_id)
+) STRICT;
+
+CREATE TABLE consumer_board_rotation_state (
+    board_id TEXT PRIMARY KEY REFERENCES consumer_boards(id) ON DELETE CASCADE,
+    last_rotated_at TEXT NOT NULL DEFAULT '',
+    last_group_name TEXT NOT NULL DEFAULT '',
+    last_member_name TEXT NOT NULL DEFAULT '',
+    rotate_count INTEGER NOT NULL DEFAULT 0
+) STRICT;
+`,
+	},
 }
 
 func (s *Store) migrate(ctx context.Context) error {

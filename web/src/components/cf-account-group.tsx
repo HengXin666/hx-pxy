@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react"
+import { createPortal } from "react-dom"
 import {
   Activity,
   ChevronDown,
@@ -234,9 +235,12 @@ export function CFAccountGroup({ onNotice }: CFAccountGroupProps) {
         </div>
       )}
 
-      {/* 接入账号弹窗 */}
-      {showAdd && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" onClick={() => setShowAdd(false)}>
+      {/* 接入账号弹窗。走 Portal: 页面容器可能带 transform(例如页入场动画的
+          `animation-fill-mode: both` 会永久保留 translateY(0)), 那会让 fixed 退化成
+          相对该容器定位, 弹窗被裁在一小块里。 */}
+      {showAdd && createPortal(
+        <div className="fixed inset-0 z-50 overflow-y-auto bg-black/50 p-4" onClick={() => setShowAdd(false)}>
+        <div className="grid min-h-full place-items-center">
           <div className="w-full max-w-md rounded-lg border border-gh-border bg-gh-bg p-5" onClick={(e) => e.stopPropagation()}>
             <h3 className="mb-3 text-sm font-semibold text-gh-text">接入 CF 账号</h3>
             <div className="flex flex-col gap-3">
@@ -259,6 +263,7 @@ export function CFAccountGroup({ onNotice }: CFAccountGroupProps) {
             </div>
           </div>
         </div>
+        </div>, document.body,
       )}
     </div>
   )

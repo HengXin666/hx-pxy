@@ -93,10 +93,6 @@ type SystemInfo struct {
 	UpdateCommand      string   `json:"update_command"`
 	AutomaticUpdate    bool     `json:"automatic_update"`
 	SupportedProtocols []string `json:"supported_protocols"`
-	// SourceRoot is the checkout this process runs from, when one exists. The
-	// About page uses it to offer AI docs that match the running version exactly;
-	// production installs omit it and fall back to released URLs.
-	SourceRoot string `json:"source_root,omitempty"`
 }
 
 type UpdaterService interface {

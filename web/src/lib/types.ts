@@ -459,8 +459,6 @@ export interface SystemInfo {
   update_command: string
   automatic_update: boolean
   supported_protocols: string[]
-  /** Present only when the control plane runs from a source checkout that still has .agents/skills and docs/. */
-  source_root?: string
 }
 
 export interface OverviewSample {

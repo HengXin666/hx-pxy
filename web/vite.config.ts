@@ -77,8 +77,8 @@ export default defineConfig(({ mode }) => {
         },
         // Programmatic node listing (GET /nodes/<share-token>) is the same
         // class of public, token-addressed contract as /sub. Without this
-        // proxy Vite returns the SPA HTML and a copied live URL is useless.
-        // See .agents/notes/implemented/feature/2026-09-17-ai-entry-live-source.md.
+        // proxy Vite returns the SPA HTML instead of the JSON listing, so a
+        // program testing the contract against the dev origin reads garbage.
         "/nodes": {
           target: backendTarget,
           changeOrigin: false,
