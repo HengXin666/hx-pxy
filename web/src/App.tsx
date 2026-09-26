@@ -2,7 +2,6 @@ import { lazy, Suspense, useCallback, useEffect, useState } from "react"
 import {
   Archive,
   BellRing,
-  Bot,
   CheckCircle2,
   CircleX,
   Globe,
@@ -29,7 +28,7 @@ import { AuthPage } from "@/pages/auth-page"
 import { api, setCsrfToken, setUnauthenticatedHandler } from "@/lib/api"
 import { cn } from "@/lib/utils"
 
-type Page = "overview" | "subscriptions" | "routing" | "residential" | "rules" | "settings" | "alerts" | "artifacts" | "terminal" | "ai-entry" | "about"
+type Page = "overview" | "subscriptions" | "routing" | "residential" | "rules" | "settings" | "alerts" | "artifacts" | "terminal" | "about"
 type Notice = { id: number; message: string; tone: "success" | "error" }
 const sidebarStorageKey = "hx-proxygroup.sidebar-collapsed"
 
@@ -47,7 +46,6 @@ const pageLoaders = {
   alerts: () => import("@/pages/alerts-page"),
   artifacts: () => import("@/pages/artifacts-page"),
   terminal: () => import("@/pages/terminal-page"),
-  "ai-entry": () => import("@/pages/ai-entry-page"),
   about: () => import("@/pages/about-page"),
 }
 
@@ -62,7 +60,6 @@ const RulesPage = lazy(() => pageLoaders.rules().then((module) => ({ default: mo
 const SettingsPage = lazy(() => pageLoaders.settings().then((module) => ({ default: module.SettingsPage })))
 const AlertsPage = lazy(() => pageLoaders.alerts().then((module) => ({ default: module.AlertsPage })))
 const ArtifactsPage = lazy(() => pageLoaders.artifacts().then((module) => ({ default: module.ArtifactsPage })))
-const AiEntryPage = lazy(() => pageLoaders["ai-entry"]().then((module) => ({ default: module.AiEntryPage })))
 const AboutPage = lazy(() => pageLoaders.about().then((module) => ({ default: module.AboutPage })))
 
 const preloadedPages = new Set<Page>()
@@ -93,8 +90,11 @@ const pages: Array<{
   { id: "alerts", label: "告警", description: "状态与邮件通知", icon: BellRing },
   { id: "artifacts", label: "备份", description: "Backup 与 Export", icon: Archive },
   { id: "terminal", label: "终端", description: "服务器 Shell", icon: TerminalSquare },
-  { id: "ai-entry", label: "接入 AI", description: "复制实时节点给 AI", icon: Bot },
-  { id: "about", label: "关于", description: "版本、GitHub 与更新", icon: Info },
+  // 「接入 AI」页已整体删除: 它复制一段提示词给外部 AI, 而那份提示词是
+  // .agents/skills/hx-consumer-api/SKILL.md 的劣化副本。接入说明只有 skill
+  // 这一个正规形态, 不再有前端入口, 也不再注册路由。
+  // 见 .agents/notes/implemented/simplification/2026-09-26-drop-ai-entry-prompt-ui.md。
+  { id: "about", label: "关于", description: "版本与更新", icon: Info },
 ]
 
 function pageFromHash(): Page {
@@ -324,7 +324,19 @@ export default function App() {
           </nav>
         </header>
 
-        <main className={cn("mx-auto w-full max-w-[1440px] px-4 py-5 sm:px-6 lg:px-8 lg:py-7", page === "terminal" && "lg:h-full lg:max-w-none lg:overflow-hidden", page === "routing" && "xl:h-full xl:max-w-none xl:overflow-hidden")}>
+        {/*
+          终端页单独一套容器类: 它有 lg:h-full + lg:overflow-hidden, 如果同时带
+          px/py padding, 子页的 h-full 就会超出可用高度, 溢出部分被 overflow-hidden
+          直接裁掉 —— 而且没有任何元素成为滚动容器, 结果是"看不到也滚不动"。
+          所以终端页把 padding 交给 TerminalPage 自己承担, 由它内部的 flex 列分配高度。
+        */}
+        <main className={cn(
+          "mx-auto w-full",
+          page === "terminal"
+            ? "lg:h-full lg:max-w-none lg:overflow-hidden"
+            : "max-w-[1440px] px-4 py-5 sm:px-6 lg:px-8 lg:py-7",
+          page === "routing" && "xl:h-full xl:max-w-none xl:overflow-hidden",
+        )}>
           {healthy === false && (
             <div className="mb-4 flex items-start gap-2.5 rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2.5 text-sm text-destructive">
               <CircleX className="mt-0.5 size-4 shrink-0" />
@@ -348,7 +360,6 @@ export default function App() {
                 {page === "settings" && <SettingsPage onNotice={showNotice} username={authGate.username} onSignedOut={requireLogin} />}
                 {page === "alerts" && <AlertsPage onNotice={showNotice} />}
                 {page === "artifacts" && <ArtifactsPage onNotice={showNotice} />}
-                {page === "ai-entry" && <AiEntryPage onNotice={showNotice} />}
                 {page === "about" && <AboutPage onNotice={showNotice} />}
               </Suspense>
             </div>

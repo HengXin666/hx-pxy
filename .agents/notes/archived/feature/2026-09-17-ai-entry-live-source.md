@@ -2,6 +2,8 @@
 
 Status: implemented
 
+Archived: 2026-09-26
+
 ## Problem
 
 上一轮的「交给 AI」文案只给文档地址。AI 读到的是接口**形状**, 不是这台机器**现在有哪些节点**。

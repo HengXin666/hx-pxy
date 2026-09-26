@@ -2,6 +2,8 @@
 
 Status: implemented
 
+Archived: 2026-09-26
+
 ## Problem
 
 接入这套控制面需要读文档, 而文档是**给别人看的**: `docs/RESIDENTIAL_AI_QUICKSTART.md`

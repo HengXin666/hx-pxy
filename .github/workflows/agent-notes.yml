@@ -55,11 +55,3 @@ jobs:
       # agent-facing seam.
       - name: Admin capability catalog gate
         run: npx --yes tsx@4 scripts/verify-admin-catalog.ts
-
-      # The About page hands the administrator one paragraph to paste into an
-      # external AI. That paragraph names documents by URL, so a stale path
-      # becomes a dead link inside someone else's session — a failure the
-      # administrator never sees. This gate resolves every referenced path
-      # against the working tree, git, and the newest release tag.
-      - name: AI entry prompt gate
-        run: npx --yes tsx@4 scripts/verify-ai-entry.ts

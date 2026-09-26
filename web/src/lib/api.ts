@@ -72,6 +72,11 @@ export function setCsrfToken(token: string) {
   csrfToken = token
 }
 
+/** 供其它客户端模块复用同一份会话状态。 */
+export function getCsrfToken(): string {
+  return csrfToken
+}
+
 export function setUnauthenticatedHandler(handler: (() => void) | null) {
   onUnauthenticated = handler
 }
