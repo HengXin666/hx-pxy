@@ -996,6 +996,79 @@ CREATE TABLE consumer_board_rotation_state (
 ) STRICT;
 `,
 	},
+	{
+		version: 37,
+		name:    "shared_inbound_membership_is_the_only_model",
+		// 20260926 用户决策：永远只应占用一个端口（hx-proxy 前端入口那个端口）。
+		// 其他端口对外不可知、不可用 —— 被外部使用即等于共享入口被绕过。
+		//
+		// 此前「不传 shared_inbound」等于「独占一个端口」，于是每个不知道共享入口的
+		// 调用方都在产出旧模型：本机一次实测 61 个 mihomo 监听端口，其中 59 个是没有任何
+		// 标记的 mixed Listener。用户明确要求不做过渡、不做兼容，因此这里直接改写存量行，
+		// 把 HTTP / SOCKS / Mixed 服务一次性并入 standard 家族，由唯一的 Mixed 入口按
+		// 用户名（IN-USER）分流。
+		//
+		// 只标记协议上可被 standard 家族承载的行（kind IN http/socks/mixed）。高级协议
+		// （vless/vmess/trojan）不在本迁移之内：当前唯一一类高级协议 Listener 是住宅渠道
+		// 入口，它自带 per-session 的 IN-USER 路由与专属 ws-path，并入聚合入口会静默丢掉
+		// 会话路由。
+		//
+		// 行内凭据不在这里生成：加密需要 master key，而 store 只持有数据库。缺凭据的成员
+		// 由 listener 服务在收敛时补齐（见 BackfillMemberCredentials），否则编译器会因为
+		// 「成员没有凭据」直接拒绝整份配置，把整个数据面一起带下去。
+		//
+		// 改写以「该安装是否在用共享入口」为条件（见下方 SQL）：per_service 是管理员的
+		// 显式选择，按共享改写会让那些行两边都不编译，等于把数据面清空。
+		sql: `
+-- 只在该安装确实在用共享入口时改写。判据必须与 Go 侧的加载语义逐字对齐
+-- （internal/systemsettings/settings.go 的 Load + migrateLegacySharedInbound）：
+--   * 设置行缺失              -> Default()，mode=shared，即共享入口；
+--   * 设置行存在但 mode 缺失/空 -> migrateLegacySharedInbound 判为 per_service。
+-- 两者不可混为一谈：漏判第一种会漏迁（用户要的正是迁），漏判第二种会误迁。
+-- 误迁的后果是数据面**一个 Listener 都没有**：直接监听路径按「owner 非空」跳过成员，
+-- 聚合路径又因 shared 未启用而不编译。per_service 是管理员的显式选择，必须放手。
+UPDATE listeners
+SET shared_inbound = 'standard',
+    updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+WHERE shared_inbound = ''
+  AND kind IN ('http', 'socks', 'mixed')
+  AND (
+        (SELECT COUNT(*) FROM system_metadata WHERE key = 'global_settings') = 0
+     OR COALESCE(
+          (SELECT json_extract(value, '$.shared_inbound.mode')
+             FROM system_metadata
+            WHERE key = 'global_settings'),
+          '') = 'shared'
+      );
+
+-- 成员行收敛到家族的入口端点。成员不拥有 socket（载体绑端口、成员靠用户名选中），
+-- 行上留着调用者当年写的端口，会让控制面显示/导出一个没人监听的地址 —— 正是本次
+-- 要消灭的缺陷。聚合行本身（hx-shared-inbound-*）是端点的持有者，不动。
+UPDATE listeners
+SET bind_address = COALESCE(
+        NULLIF(json_extract(
+            (SELECT value FROM system_metadata WHERE key = 'global_settings'),
+            '$.shared_inbound.mixed_bind_address'), ''),
+        '0.0.0.0'),
+    port = COALESCE(
+        NULLIF(json_extract(
+            (SELECT value FROM system_metadata WHERE key = 'global_settings'),
+            '$.shared_inbound.mixed_port'), 0),
+        7890),
+    updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+WHERE shared_inbound = 'standard'
+  AND name NOT LIKE 'hx-shared-inbound-%'
+  AND kind IN ('http', 'socks', 'mixed')
+  -- 住宅渠道托管的入口不属于本家族（它自带 per-session 路由）。
+  -- 上面那条 UPDATE 只按 kind 过滤，理论上碰不到 vless，但住宅渠道以后可能托管
+  -- mixed 入口，届时不加这条就会把渠道入口搬到聚合端口上，静默破坏会话路由。
+  AND id NOT IN (SELECT listener_id FROM residential_channels)
+  AND id NOT IN (
+        SELECT direct_listener_id FROM residential_channels
+         WHERE direct_listener_id IS NOT NULL AND direct_listener_id <> ''
+      );
+`,
+	},
 }
 
 func (s *Store) migrate(ctx context.Context) error {

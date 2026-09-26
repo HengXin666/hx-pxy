@@ -314,3 +314,166 @@ func TestCreateRejectsUnknownSharedInboundOwner(t *testing.T) {
 		t.Fatalf("Create() error = %v, want ErrInvalid", err)
 	}
 }
+
+// TestCreateJoinsTheStandardFamilyByDefault pins the behaviour change: a standard
+// listener created without shared_inbound becomes a member of the single Mixed
+// entry point instead of reserving a port of its own.
+//
+// The reported failure was exactly the opposite: 59 unmarked Mixed listeners, one
+// bound port each, produced by every caller that did not know about shared
+// inbounds. See .agents/notes/implemented/architecture/2026-09-26-shared-inbound-by-default.md.
+func TestCreateJoinsTheStandardFamilyByDefault(t *testing.T) {
+	service, database, _ := newSharedInboundService(t)
+	service.SetSharedEndpointProvider(func() (SharedInboundSpec, bool) { return sharedSpec(), true })
+
+	created, err := service.Create(context.Background(), CreateRequest{
+		Name:         "default-mixed",
+		Kind:         "mixed",
+		BindAddress:  "127.0.0.1",
+		Port:         17890,
+		ProxyGroupID: "group-a",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if created.SharedInbound != SharedInboundStandardOwner {
+		t.Fatalf("shared_inbound = %q, want %q", created.SharedInbound, SharedInboundStandardOwner)
+	}
+	// A member must not keep a port of its own: the family's carrier owns the
+	// endpoint, and the member is selected by username.
+	if created.Port != sharedSpec().MixedPort {
+		t.Fatalf("member port = %d, want the family port %d", created.Port, sharedSpec().MixedPort)
+	}
+	if !created.AuthConfigured {
+		t.Fatal("a member joined the username-routed family without a credential, so it cannot be compiled")
+	}
+	record, err := database.GetListener(context.Background(), created.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if record.AuthMode != "userpass" || len(record.AuthConfigEncrypted) == 0 {
+		t.Fatalf("stored row = auth_mode %q / %d credential bytes, want a minted credential", record.AuthMode, len(record.AuthConfigEncrypted))
+	}
+}
+
+// TestCreateKeepsADedicatedPortWhenTheSharedInboundIsOff guards the other side of
+// the default: with the shared inbound switched off the family is not compiled,
+// so membership would publish the listener nowhere at all.
+func TestCreateKeepsADedicatedPortWhenTheSharedInboundIsOff(t *testing.T) {
+	service, _, _ := newSharedInboundService(t)
+	disabled := sharedSpec()
+	disabled.Enabled = false
+	disabled.IncludeWebSocket = false
+	service.SetSharedEndpointProvider(func() (SharedInboundSpec, bool) { return disabled, false })
+
+	created, err := service.Create(context.Background(), CreateRequest{
+		Name:         "per-service-mixed",
+		Kind:         "mixed",
+		BindAddress:  "127.0.0.1",
+		Port:         17891,
+		ProxyGroupID: "group-a",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if created.SharedInbound != "" {
+		t.Fatalf("shared_inbound = %q, want a dedicated listener while the shared inbound is off", created.SharedInbound)
+	}
+	if created.Port != 17891 {
+		t.Fatalf("port = %d, want the requested 17891", created.Port)
+	}
+}
+
+// TestCreateKeepsAdvancedKindsOnTheirOwnPort pins why WebSocket protocols are not
+// folded into the family by default: the only advanced-kind listener this build
+// creates is a residential channel entry point, which carries per-session IN-USER
+// routes the aggregate listener cannot express.
+func TestCreateKeepsAdvancedKindsOnTheirOwnPort(t *testing.T) {
+	service, _, _ := newSharedInboundService(t)
+	service.SetSharedEndpointProvider(func() (SharedInboundSpec, bool) { return sharedSpec(), true })
+
+	created, err := service.Create(context.Background(), CreateRequest{
+		Name:         "residential-entry",
+		Kind:         "vless",
+		BindAddress:  "127.0.0.1",
+		Port:         32000,
+		ProxyGroupID: "group-a",
+		Auth:         &Auth{Username: "hx-bootstrap", Password: "11111111-1111-1111-1111-111111111111"},
+		Transport:    Transport{Type: "ws", WSPath: "/__hx-proxy__/residential/channel-a"},
+		PublicEndpoint: PublicEndpoint{
+			Host: "proxy.example.com", Port: 443, TLS: true,
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if created.SharedInbound != "" {
+		t.Fatalf("shared_inbound = %q, want a dedicated entry point", created.SharedInbound)
+	}
+	if created.Port != 32000 {
+		t.Fatalf("port = %d, want 32000", created.Port)
+	}
+}
+
+// TestBackfillMemberCredentialsRepairsARowWrittenDirectly covers the migration
+// path: the store cannot mint credentials (encryption needs the master key), so
+// rows folded into the family there are repaired before the data plane compiles.
+//
+// Without the repair the compiler refuses the whole configuration - measured as
+// 'listener "x" has no credentials but the shared inbound routes members by
+// username' - which takes every proxy down rather than only the one member.
+func TestBackfillMemberCredentialsRepairsARowWrittenDirectly(t *testing.T) {
+	service, database, _ := newSharedInboundService(t)
+	ctx := context.Background()
+	service.SetSharedEndpointProvider(func() (SharedInboundSpec, bool) { return sharedSpec(), true })
+
+	// Mimic the migration: a marked member with no credential at all.
+	now := time.Now().UTC()
+	if _, err := database.CreateListener(ctx, store.ListenerRecord{
+		ID: "listener-migrated", Name: "migrated-member", Kind: "mixed",
+		BindAddress: "127.0.0.1", Port: 17899, ProxyGroupID: "group-a",
+		AuthMode: "none", TransportJSON: "{}", PublicEndpointJSON: "{}",
+		ShareToken: "0123456789abcdef0123456789abcdef", SharedInbound: SharedInboundStandardOwner,
+		Enabled: true, Version: 1, CreatedAt: now, UpdatedAt: now,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	minted, err := service.BackfillMemberCredentials(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if minted != 1 {
+		t.Fatalf("minted = %d, want 1", minted)
+	}
+	record, err := database.GetListener(ctx, "listener-migrated")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if record.AuthMode != "userpass" || len(record.AuthConfigEncrypted) == 0 {
+		t.Fatalf("row was not repaired: auth_mode=%q bytes=%d", record.AuthMode, len(record.AuthConfigEncrypted))
+	}
+	// Idempotent: a repaired row is left alone, so convergence does not rotate a
+	// credential that a published subscription already handed out.
+	again, err := service.BackfillMemberCredentials(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if again != 0 {
+		t.Fatalf("second backfill minted %d credentials, want 0 (idempotent)", again)
+	}
+}
+
+// TestUnknownSharedInboundOwnerIsStillRejected keeps the validation contract:
+// only the two families (or empty) may reach the database CHECK constraint, even
+// though an omitted marker now resolves to a family by default.
+func TestUnknownSharedInboundOwnerIsStillRejected(t *testing.T) {
+	service, _, _ := newSharedInboundService(t)
+	service.SetSharedEndpointProvider(func() (SharedInboundSpec, bool) { return sharedSpec(), true })
+	if _, err := service.Create(context.Background(), CreateRequest{
+		Name: "bogus-owner", Kind: "mixed", BindAddress: "127.0.0.1", Port: 17898,
+		ProxyGroupID: "group-a", SharedInbound: "aggregate",
+	}); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("error = %v, want ErrInvalid", err)
+	}
+}

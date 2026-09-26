@@ -288,6 +288,18 @@ func run(logger *slog.Logger) error {
 	if err := authService.EnsureSetupToken(startupContext); err != nil {
 		return err
 	}
+	// Repair the shared-inbound membership before the first compile, not only on
+	// the settings hook: the versioned migration folds dedicated listeners into
+	// the family at the store level, where credentials cannot be minted (that
+	// needs the master key). The compiler refuses the whole configuration when a
+	// member has none, so without this the daemon starts with the management API
+	// up and *no* data plane at all. Measured on the real upgrade: 58 of the 59
+	// folded members had no credential.
+	if minted, err := listenerService.BackfillMemberCredentials(startupContext); err != nil {
+		logger.Error("repair shared-inbound member credentials failed; the shared entry point may not compile", "error", err)
+	} else if minted > 0 {
+		logger.Info("minted credentials for shared-inbound members", "component", "listener", "count", minted)
+	}
 	if err := mihomoManager.Apply(startupContext); err != nil {
 		logger.Error("initial Mihomo apply failed; management API remains available", "error", err)
 	}

@@ -42,6 +42,35 @@ func SharedInboundOwnerOf(record store.ListenerRecord) string {
 	return strings.TrimSpace(record.SharedInbound)
 }
 
+// DefaultSharedInboundOwnerForKind reports the aggregate family a listener of
+// this protocol joins when its caller does not name one.
+//
+// Omitting the marker used to mean "reserve a dedicated port", and that default
+// was the root cause of "one managed service, one open port": every caller that
+// did not know about shared inbounds — the raw management API, a script, a new
+// feature — quietly produced another bound port. The control plane promises a
+// single entry point, so the default is now membership, and the HTTP / SOCKS /
+// Mixed family is the one every service can be carried by.
+//
+// WebSocket protocols are deliberately excluded, and that exclusion is a
+// measurement rather than a preference. The only advanced-kind listener this
+// build creates is a residential channel entry point, which is addressed by its
+// own channel-scoped WebSocket path and carries per-session IN-USER routes that
+// the aggregate listener cannot express. A listener creation request carries
+// nothing that reliably distinguishes that entry point from an ordinary VLESS
+// service (same kind, same loopback bind, same username/password auth), so
+// defaulting advanced kinds into the family would silently strip session
+// routing from the next residential channel. They keep their own port unless a
+// caller marks them explicitly, which the management API still allows.
+func DefaultSharedInboundOwnerForKind(kind string) string {
+	switch strings.ToLower(strings.TrimSpace(kind)) {
+	case "http", "socks", "mixed":
+		return SharedInboundStandardOwner
+	default:
+		return ""
+	}
+}
+
 // SharedInboundCarrierKind is the Mihomo listener type that carries a member of
 // a shared-inbound family.
 //
@@ -223,6 +252,16 @@ func (s *Service) EnsureSharedInbounds(
 	_ []store.ProxyGroupRecord,
 	_ []SharedInboundMember,
 ) ([]Listener, error) {
+	// A member without credentials cannot be carried by a username-routed entry
+	// point, and the compiler rejects the whole configuration when it meets one,
+	// so repair the family before converging it. Rows written through the
+	// listener service already carry credentials; this covers rows rewritten
+	// directly (the versioned migration that folds dedicated ports into the
+	// family), where the store cannot mint them because encryption needs the
+	// master key.
+	if _, err := s.BackfillMemberCredentials(ctx); err != nil {
+		return nil, err
+	}
 	records, err := s.repository.ListListeners(ctx)
 	if err != nil {
 		return nil, err
@@ -343,6 +382,76 @@ func (s *Service) EnsureSharedInbounds(
 		}
 	}
 	return s.aggregateListeners(ctx)
+}
+
+// BackfillMemberCredentials mints a credential for every standard-family member
+// that has none, so a family written by an older build (or by the migration
+// that folds dedicated rows into the family) can actually be compiled.
+//
+// Without it the compiler refuses the entire configuration with
+//
+//	listener %q has no credentials but the shared inbound routes members by username
+//
+// which does not merely leave those services unreachable: Manager.Apply records
+// a failure instead of publishing, so one credential-less member takes the
+// whole data plane down. Measured migrating this installation, 58 of the 60
+// rows folded into the family had no credential at all.
+//
+// It is exported because the migration is not the only writer of family
+// membership: anything that rewrites rows directly has to repair them before
+// the data plane is asked to compile.
+func (s *Service) BackfillMemberCredentials(ctx context.Context) (int, error) {
+	records, err := s.repository.ListListeners(ctx)
+	if err != nil {
+		return 0, err
+	}
+	minted := 0
+	for _, record := range records {
+		owner := SharedInboundOwnerOf(record)
+		if owner != SharedInboundStandardOwner || IsSharedInboundAggregate(record) {
+			continue
+		}
+		if record.AuthMode == "userpass" && len(record.AuthConfigEncrypted) > 0 {
+			continue
+		}
+		auth, err := newMemberAuth()
+		if err != nil {
+			return minted, err
+		}
+		encoded, err := json.Marshal(auth)
+		if err != nil {
+			return minted, fmt.Errorf("encode generated member credential: %w", err)
+		}
+		sealed, err := s.cipher.Seal(encoded, associatedData(record.ID))
+		if err != nil {
+			return minted, fmt.Errorf("encrypt generated member credential: %w", err)
+		}
+		record.AuthMode = "userpass"
+		record.AuthConfigEncrypted = sealed
+		record.UpdatedAt = s.now().UTC()
+		if _, err := s.repository.UpdateListener(ctx, record, record.Version); err != nil {
+			return minted, mapStoreError(err)
+		}
+		minted++
+	}
+	return minted, nil
+}
+
+// newMemberAuth mints the credential a migrated member needs. The username is
+// service-scoped and unique, because the whole membership model rests on the
+// username selecting exactly one proxy group.
+func newMemberAuth() (Auth, error) {
+	id, err := newID()
+	if err != nil {
+		return Auth{}, err
+	}
+	token, err := newShareToken()
+	if err != nil {
+		return Auth{}, err
+	}
+	// newID returns "listener-<hex>"; only the random part is kept so the
+	// published username stays short and does not advertise a row id.
+	return Auth{Username: "svc-" + strings.TrimPrefix(id, "listener-"), Password: token}, nil
 }
 
 // SharedInboundAggregates returns the aggregate listeners currently published.

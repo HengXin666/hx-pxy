@@ -168,8 +168,20 @@ func (s *Service) Create(ctx context.Context, request CreateRequest) (Listener, 
 	if err != nil {
 		return Listener{}, err
 	}
-	sharedInbound, err := normalizeSharedInboundOwner(request.SharedInbound)
+	sharedInbound, err := s.sharedInboundOwnerFor(request.SharedInbound, normalized.Kind)
 	if err != nil {
+		return Listener{}, err
+	}
+	// A standard member is selected by username, so it cannot be published
+	// without one. Minting the missing credential here — instead of rejecting
+	// the call — is what keeps "joined the shared entry point" and "has a usable
+	// credential" the same condition for every caller, including the raw
+	// management API which never had to think about credentials before.
+	// A member does not own the socket, so it must not keep the port the caller
+	// happened to name: the row has to describe the endpoint that is actually
+	// served. This mirrors what the proxy-service path already does.
+	s.convergeMemberEndpoint(&normalized, sharedInbound)
+	if err := s.assureMemberCredentials(&normalized, sharedInbound); err != nil {
 		return Listener{}, err
 	}
 	shareToken, err := newShareToken()
@@ -250,8 +262,12 @@ func (s *Service) Update(ctx context.Context, id string, request UpdateRequest) 
 	if err != nil {
 		return Listener{}, err
 	}
-	sharedInbound, err := normalizeSharedInboundOwner(request.SharedInbound)
+	sharedInbound, err := s.sharedInboundOwnerFor(request.SharedInbound, normalized.Kind)
 	if err != nil {
+		return Listener{}, err
+	}
+	s.convergeMemberEndpoint(&normalized, sharedInbound)
+	if err := s.assureMemberCredentials(&normalized, sharedInbound); err != nil {
 		return Listener{}, err
 	}
 	// Capture the pre-update record (with a defensive copy of the auth
@@ -304,6 +320,11 @@ func (s *Service) Delete(ctx context.Context, id string, version int) error {
 }
 
 type normalizedListener struct {
+	// selfID is the row id this normalisation produces. It is the associated
+	// data of the credential envelope, so a credential minted during
+	// normalisation must be sealed against the same id the record is written
+	// with.
+	selfID              string
 	Name                string
 	Kind                string
 	BindAddress         string
@@ -404,6 +425,7 @@ func (s *Service) normalize(
 		return normalizedListener{}, err
 	}
 	return normalizedListener{
+		selfID:              id,
 		Name:                name,
 		Kind:                kind,
 		BindAddress:         ip.String(),
@@ -643,6 +665,54 @@ func associatedData(id string) []byte {
 
 // normalizeSharedInboundOwner validates the aggregate family marker so an
 // unknown value can never reach the database CHECK constraint.
+// assureMemberCredentials mints a credential for a listener that just joined a
+// username-routed family without one.
+//
+// The shared inbound identifies a member by its IN-USER rule, and the compiler
+// refuses the entire configuration when a member holds no credential: measured
+// on this build, marking an unauthenticated service as a member produces
+//
+//	listener "ioa-vm-mixed" has no credentials but the shared inbound routes
+//	members by username
+//
+// and Manager.Apply then records a failure instead of publishing, so one
+// credential-less service takes the *whole* data plane down rather than only
+// itself. Minting here keeps the members it is always safe to mint: the
+// credential is returned to the caller in the listener's own subscription.
+func (s *Service) assureMemberCredentials(normalized *normalizedListener, owner string) error {
+	if owner != SharedInboundStandardOwner {
+		// Only the standard family is minted automatically. An explicitly
+		// marked WebSocket member still has to bring its own UUID, because the
+		// addressable credential of a VLESS/VMess service is its UUID.
+		return nil
+	}
+	if normalized.AuthMode == "userpass" && len(normalized.AuthConfigEncrypted) > 0 {
+		return nil
+	}
+	id, err := newID()
+	if err != nil {
+		return err
+	}
+	token, err := newShareToken()
+	if err != nil {
+		return err
+	}
+	// The username is service-scoped and unique: membership rests on the
+	// username selecting exactly one proxy group.
+	auth := Auth{Username: "svc-" + strings.TrimPrefix(id, "listener-"), Password: token}
+	encoded, err := json.Marshal(auth)
+	if err != nil {
+		return fmt.Errorf("encode generated member credential: %w", err)
+	}
+	sealed, err := s.cipher.Seal(encoded, associatedData(normalized.selfID))
+	if err != nil {
+		return fmt.Errorf("encrypt generated member credential: %w", err)
+	}
+	normalized.AuthMode = "userpass"
+	normalized.AuthConfigEncrypted = sealed
+	return nil
+}
+
 func normalizeSharedInboundOwner(owner string) (string, error) {
 	trimmed := strings.ToLower(strings.TrimSpace(owner))
 	if trimmed == "" {
@@ -652,6 +722,92 @@ func normalizeSharedInboundOwner(owner string) (string, error) {
 		return "", fmt.Errorf("%w: shared_inbound must be %q, %q, or empty", ErrInvalid, SharedInboundStandardOwner, SharedInboundWebSocketOwner)
 	}
 	return trimmed, nil
+}
+
+// sharedInboundOwnerFor resolves the family a listener ends up in when the
+// request is applied, treating an omitted marker as the membership default for
+// the protocol rather than as "reserve a dedicated port".
+//
+// The reason the default had to move is recorded in
+// .agents/notes/implemented/architecture/2026-09-26-shared-inbound-by-default.md:
+// leaving it as "empty means dedicated" made every caller that did not know
+// about shared inbounds produce another bound port, which is exactly the model
+// the control plane promises not to use.
+//
+// The default is resolved from the *live* shared-inbound configuration, not
+// from the protocol alone. Joining a family is only meaningful while the family
+// is compiled: with the shared inbound switched off, a row marked as a member
+// is skipped by the direct-listener path (see the compiler's owner != "" guard)
+// and published nowhere, so a protocol-only default would turn "no port of its
+// own" into "not published at all". A caller that passes the marker explicitly
+// still gets it, because then the setting is the caller's decision to make.
+func (s *Service) sharedInboundOwnerFor(requested, kind string) (string, error) {
+	normalized, err := normalizeSharedInboundOwner(requested)
+	if err != nil {
+		return "", err
+	}
+	if normalized != "" {
+		return normalized, nil
+	}
+	owner := DefaultSharedInboundOwnerForKind(kind)
+	if owner == "" {
+		return "", nil
+	}
+	if _, ok := s.sharedFamilySpec(owner); !ok {
+		return "", nil
+	}
+	return owner, nil
+}
+
+// sharedFamilySpec reports the compiled shared-inbound configuration when the
+// family carrying this protocol is currently published.
+func (s *Service) sharedFamilySpec(owner string) (SharedInboundSpec, bool) {
+	if s.sharedEndpoints == nil {
+		// Without a resolver the service cannot know the deployment's shared
+		// configuration, so it must not invent a membership the data plane may
+		// not compile.
+		return SharedInboundSpec{}, false
+	}
+	spec, ok := s.sharedEndpoints()
+	if !ok {
+		return SharedInboundSpec{}, false
+	}
+	switch owner {
+	case SharedInboundStandardOwner:
+		return spec, spec.Enabled
+	case SharedInboundWebSocketOwner:
+		return spec, spec.IncludeWebSocket
+	default:
+		return SharedInboundSpec{}, false
+	}
+}
+
+// convergeMemberEndpoint moves a listener that became an aggregate member onto
+// its family's entry point.
+//
+// A member does not own the socket: the family's carrier binds the port and the
+// member is selected by username. Storing the caller's own port on a member row
+// would leave the row describing an endpoint nothing listens on, which is the
+// same "the control plane advertises a port that is not the entry point" defect
+// this change exists to remove.
+//
+// The caller's port is therefore only meaningful for a listener that keeps a
+// dedicated endpoint, which is why this runs after the family is resolved.
+func (s *Service) convergeMemberEndpoint(normalized *normalizedListener, owner string) {
+	if owner == "" {
+		return
+	}
+	spec, ok := s.sharedFamilySpec(owner)
+	if !ok {
+		return
+	}
+	carrierKind := SharedInboundCarrierKind(owner, normalized.Kind)
+	bindAddress, port := aggregateEndpoint(spec, owner, carrierKind)
+	if bindAddress == "" || port == 0 {
+		return
+	}
+	normalized.BindAddress = bindAddress
+	normalized.Port = port
 }
 
 func mapStoreError(err error) error {
