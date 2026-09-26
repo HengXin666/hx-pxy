@@ -38,6 +38,33 @@ func SupportedSourceTypes() []string {
 	return []string{string(SourceRemote), string(SourceInline), string(SourceFile)}
 }
 
+// SupportedSourceClasses republishes the store's closed source-class
+// vocabulary. It is the list the capability catalog publishes and the
+// validator accepts, read from the same function the probe policy uses, so the
+// documented values cannot drift from the enforced ones.
+func SupportedSourceClasses() []string {
+	return store.SupportedSourceClasses()
+}
+
+// validateSourceClass rejects an unknown class. An empty value is allowed and
+// returned as empty, which each caller interprets: create substitutes the
+// documented default, update keeps the stored one.
+func validateSourceClass(value string, required bool) (string, error) {
+	if value == "" && !required {
+		return "", nil
+	}
+	if value == "" {
+		return "", fmt.Errorf("%w: source_class is required and must be one of %s",
+			ErrInvalid, strings.Join(store.SupportedSourceClasses(), ", "))
+	}
+	parsed, err := store.ParseSourceClass(value)
+	if err != nil {
+		return "", fmt.Errorf("%w: source_class must be one of %s",
+			ErrInvalid, strings.Join(store.SupportedSourceClasses(), ", "))
+	}
+	return string(parsed), nil
+}
+
 const (
 	defaultRefreshInterval = 3600
 	minimumRefreshInterval = 60
@@ -61,9 +88,13 @@ type SourceConfig struct {
 }
 
 type Subscription struct {
-	ID                     string     `json:"id"`
-	Name                   string     `json:"name"`
-	SourceType             SourceType `json:"source_type"`
+	ID         string     `json:"id"`
+	Name       string     `json:"name"`
+	SourceType SourceType `json:"source_type"`
+	// SourceClass is the stored classification that selects this source's node
+	// probe policy. It is echoed so a reader can tell why two sources with the
+	// same source_type are treated differently after failures.
+	SourceClass            string     `json:"source_class"`
 	SourceConfigured       bool       `json:"source_configured"`
 	Enabled                bool       `json:"enabled"`
 	RefreshIntervalSeconds int        `json:"refresh_interval_seconds"`
@@ -79,8 +110,13 @@ type Subscription struct {
 }
 
 type CreateRequest struct {
-	Name                   string       `json:"name"`
-	SourceType             SourceType   `json:"source_type"`
+	Name       string     `json:"name"`
+	SourceType SourceType `json:"source_type"`
+	// SourceClass selects the probe policy for this source's nodes. It is
+	// required: the three classes have incompatible failure rules, and
+	// guessing would silently apply the wrong one to a source an operator
+	// cannot replace. See store.SupportedSourceClasses for the vocabulary.
+	SourceClass            string       `json:"source_class"`
 	SourceConfig           SourceConfig `json:"source_config"`
 	Enabled                *bool        `json:"enabled,omitempty"`
 	RefreshIntervalSeconds int          `json:"refresh_interval_seconds,omitempty"`
@@ -88,9 +124,15 @@ type CreateRequest struct {
 }
 
 type UpdateRequest struct {
-	Version                int           `json:"version"`
-	Name                   string        `json:"name"`
-	SourceType             SourceType    `json:"source_type"`
+	Version    int        `json:"version"`
+	Name       string     `json:"name"`
+	SourceType SourceType `json:"source_type"`
+	// SourceClass may be changed on its own, without replacing the source
+	// config: reclassifying an existing source (e.g. learning that a
+	// "subscription" is really the only exit you have) is exactly the repair
+	// path an operator needs. It must still be a member of the closed
+	// vocabulary.
+	SourceClass            string        `json:"source_class"`
 	SourceConfig           *SourceConfig `json:"source_config,omitempty"`
 	Enabled                bool          `json:"enabled"`
 	RefreshIntervalSeconds int           `json:"refresh_interval_seconds"`
@@ -200,6 +242,19 @@ func (s *Service) Create(ctx context.Context, request CreateRequest) (Subscripti
 	if err := validateRequest(request.Name, request.SourceType, request.SourceConfig, request.RefreshIntervalSeconds, request.RefreshCron); err != nil {
 		return Subscription{}, err
 	}
+	sourceClass, err := validateSourceClass(request.SourceClass, false)
+	if err != nil {
+		return Subscription{}, err
+	}
+	// An omitted class on create takes the documented default rather than
+	// failing: the management UI creates subscriptions without sending this
+	// field, and a hard requirement would break every existing caller at once.
+	// The default is the promotion-safe class (see DefaultSourceClassPolicy) —
+	// never the cheap one — because misclassifying an irreplaceable exit is the
+	// only irreversible outcome here. The catalog advertises this default, and
+	// quickstart.create (which has no such legacy caller) requires the field
+	// explicitly instead.
+	sourceClass = store.NormalizeSourceClass(sourceClass)
 	id, err := newID()
 	if err != nil {
 		return Subscription{}, err
@@ -217,6 +272,7 @@ func (s *Service) Create(ctx context.Context, request CreateRequest) (Subscripti
 		ID:                     id,
 		Name:                   request.Name,
 		SourceType:             string(request.SourceType),
+		SourceClass:            sourceClass,
 		SourceConfigEncrypted:  encrypted,
 		Enabled:                enabled,
 		RefreshIntervalSeconds: request.RefreshIntervalSeconds,
@@ -263,9 +319,19 @@ func (s *Service) Update(ctx context.Context, id string, request UpdateRequest) 
 	if err := validateMetadata(request.Name, request.RefreshIntervalSeconds, request.RefreshCron); err != nil {
 		return Subscription{}, err
 	}
+	sourceClass, err := validateSourceClass(request.SourceClass, false)
+	if err != nil {
+		return Subscription{}, err
+	}
 	existing, err := s.repository.GetSubscription(ctx, id)
 	if err != nil {
 		return Subscription{}, mapRepositoryError(err)
+	}
+	// An omitted source_class keeps the stored one, so a caller that only
+	// wants to rename a source does not have to restate its policy — and
+	// cannot accidentally downgrade a residential source to the default.
+	if sourceClass == "" {
+		sourceClass = store.NormalizeSourceClass(existing.SourceClass)
 	}
 	sourceType := SourceType(existing.SourceType)
 	encrypted := existing.SourceConfigEncrypted
@@ -286,6 +352,7 @@ func (s *Service) Update(ctx context.Context, id string, request UpdateRequest) 
 		ID:                     id,
 		Name:                   request.Name,
 		SourceType:             string(sourceType),
+		SourceClass:            sourceClass,
 		SourceConfigEncrypted:  encrypted,
 		Enabled:                request.Enabled,
 		RefreshIntervalSeconds: request.RefreshIntervalSeconds,
@@ -422,6 +489,7 @@ func fromRecord(record store.SubscriptionRecord) Subscription {
 		ID:                     record.ID,
 		Name:                   record.Name,
 		SourceType:             SourceType(record.SourceType),
+		SourceClass:            store.NormalizeSourceClass(record.SourceClass),
 		SourceConfigured:       len(record.SourceConfigEncrypted) > 0,
 		Enabled:                record.Enabled,
 		RefreshIntervalSeconds: record.RefreshIntervalSeconds,

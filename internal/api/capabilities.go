@@ -177,6 +177,11 @@ func (s *Server) CapabilityCatalog() CapabilityCatalog {
 			Values:      subscription.SupportedSourceTypes(),
 		},
 		{
+			Name:        "source_class",
+			Description: "What a failure costs on this source, and therefore how its nodes are retired. \"pool\": mass disposable members (a failed one is gone for good) — quarantined after 3 consecutive failures, retired after 5, and no longer probed once quarantined. \"subscription\": a long-lived paid or curated source — quarantined after 5, keeps being probed with exponential backoff, retired only after 60. \"residential\": one to a handful of irreplaceable exits — never quarantined or retired automatically, always probed so a recovery is noticed. Required on subscription.create; may be changed on its own with subscription.update.",
+			Values:      subscription.SupportedSourceClasses(),
+		},
+		{
 			Name:        "residential_provider_protocol",
 			Description: "Upstream gateway protocol the data plane dials for a residential provider.",
 			Values:      residential.SupportedProtocols(),

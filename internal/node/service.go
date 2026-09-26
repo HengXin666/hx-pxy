@@ -54,23 +54,30 @@ func WithProber(prober Prober) Option {
 }
 
 type Node struct {
-	ID                       string        `json:"id"`
-	Fingerprint              string        `json:"fingerprint"`
-	DisplayName              string        `json:"display_name"`
-	Protocol                 string        `json:"protocol"`
-	LifecycleState           string        `json:"lifecycle_state"`
-	FirstSeenAt              time.Time     `json:"first_seen_at"`
-	LastSeenAt               time.Time     `json:"last_seen_at"`
-	RetiredAt                *time.Time    `json:"retired_at,omitempty"`
-	LastCheckedAt            *time.Time    `json:"last_checked_at,omitempty"`
-	LastLatencyMS            *int          `json:"last_latency_ms,omitempty"`
-	LastErrorCode            string        `json:"last_error_code,omitempty"`
-	LastErrorMessage         string        `json:"last_error_message,omitempty"`
-	ConsecutiveProbeFailures int           `json:"consecutive_probe_failures"`
-	Version                  int           `json:"version"`
-	SourceCount              int           `json:"source_count"`
-	Sources                  []Source      `json:"sources"`
-	HealthChecks             []HealthCheck `json:"health_checks"`
+	ID                       string     `json:"id"`
+	Fingerprint              string     `json:"fingerprint"`
+	DisplayName              string     `json:"display_name"`
+	Protocol                 string     `json:"protocol"`
+	LifecycleState           string     `json:"lifecycle_state"`
+	FirstSeenAt              time.Time  `json:"first_seen_at"`
+	LastSeenAt               time.Time  `json:"last_seen_at"`
+	RetiredAt                *time.Time `json:"retired_at,omitempty"`
+	LastCheckedAt            *time.Time `json:"last_checked_at,omitempty"`
+	LastLatencyMS            *int       `json:"last_latency_ms,omitempty"`
+	LastErrorCode            string     `json:"last_error_code,omitempty"`
+	LastErrorMessage         string     `json:"last_error_message,omitempty"`
+	ConsecutiveProbeFailures int        `json:"consecutive_probe_failures"`
+	// NextProbeAt is when the class-specific backoff lets this node be probed
+	// again. Nil means no backoff is in force.
+	NextProbeAt *time.Time `json:"next_probe_at,omitempty"`
+	// ProbePaused means the probe policy has stopped probing this node (a spent
+	// pool member, or a retired one). It is what distinguishes "we are waiting
+	// longer between probes" from "we no longer intend to probe it".
+	ProbePaused  bool          `json:"probe_paused"`
+	Version      int           `json:"version"`
+	SourceCount  int           `json:"source_count"`
+	Sources      []Source      `json:"sources"`
+	HealthChecks []HealthCheck `json:"health_checks"`
 }
 
 type Source struct {
@@ -575,6 +582,8 @@ func fromRecord(record store.NodeRecord) Node {
 		LastErrorCode:            record.LastErrorCode,
 		LastErrorMessage:         record.LastErrorMessage,
 		ConsecutiveProbeFailures: record.ConsecutiveProbeFailures,
+		NextProbeAt:              record.NextProbeAt,
+		ProbePaused:              record.ProbePaused,
 		Version:                  record.Version,
 		SourceCount:              record.SourceCount,
 	}

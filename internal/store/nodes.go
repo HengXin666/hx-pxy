@@ -32,8 +32,15 @@ type NodeRecord struct {
 	LastErrorCode            string
 	LastErrorMessage         string
 	ConsecutiveProbeFailures int
-	Version                  int
-	SourceCount              int
+	// NextProbeAt is when the exponential backoff allows the next probe. Nil
+	// means "no backoff in force", i.e. the steady-state interval applies.
+	NextProbeAt *time.Time
+	// ProbePaused marks a node the policy has stopped probing (a spent pool
+	// member, or a retired node). It is the visible half of the decision that
+	// used to be implicit in "we keep probing everything forever".
+	ProbePaused bool
+	Version     int
+	SourceCount int
 }
 
 type NodeSourceRecord struct {
@@ -192,6 +199,23 @@ ON CONFLICT(fingerprint) DO UPDATE SET
         WHEN nodes.lifecycle_state = 'disabled' THEN 'disabled'
         WHEN nodes.lifecycle_state = 'retired' THEN 'candidate'
         ELSE nodes.lifecycle_state
+    END,
+    -- Reviving from 'retired' means the endpoint came back in a fresh
+    -- observation, so the old failure schedule must not survive: otherwise a
+    -- pool member retired at 5 failures would reappear already paused and
+    -- never be probed again. A node that is merely still present keeps its
+    -- counter, so a flapping endpoint cannot dodge quarantine by reappearing.
+    consecutive_probe_failures = CASE
+        WHEN nodes.lifecycle_state = 'retired' THEN 0
+        ELSE nodes.consecutive_probe_failures
+    END,
+    next_probe_at = CASE
+        WHEN nodes.lifecycle_state = 'retired' THEN NULL
+        ELSE nodes.next_probe_at
+    END,
+    probe_paused = CASE
+        WHEN nodes.lifecycle_state = 'retired' THEN 0
+        ELSE nodes.probe_paused
     END,
     last_seen_at = excluded.last_seen_at,
     retired_at = NULL,
@@ -368,6 +392,8 @@ SELECT
     n.last_checked_at,
     n.last_latency_ms,
     n.consecutive_probe_failures,
+    n.next_probe_at,
+    n.probe_paused,
     n.version,
     (SELECT qc.error_code FROM node_quality_checks qc
      WHERE qc.node_id = n.id ORDER BY qc.checked_at DESC LIMIT 1) AS last_error_code,
@@ -424,6 +450,8 @@ SELECT
     n.last_checked_at,
     n.last_latency_ms,
     n.consecutive_probe_failures,
+    n.next_probe_at,
+    n.probe_paused,
     n.version,
     (SELECT qc.error_code FROM node_quality_checks qc
      WHERE qc.node_id = n.id ORDER BY qc.checked_at DESC LIMIT 1) AS last_error_code,
@@ -453,6 +481,8 @@ func scanNode(source scanner) (NodeRecord, error) {
 	var retired sql.NullString
 	var lastChecked sql.NullString
 	var lastLatency sql.NullInt64
+	var nextProbeAt sql.NullString
+	var probePaused int
 	var lastErrorCode sql.NullString
 	var lastErrorMessage sql.NullString
 	if err := source.Scan(
@@ -467,12 +497,22 @@ func scanNode(source scanner) (NodeRecord, error) {
 		&lastChecked,
 		&lastLatency,
 		&record.ConsecutiveProbeFailures,
+		&nextProbeAt,
+		&probePaused,
 		&record.Version,
 		&lastErrorCode,
 		&lastErrorMessage,
 		&record.SourceCount,
 	); err != nil {
 		return NodeRecord{}, err
+	}
+	record.ProbePaused = probePaused != 0
+	if nextProbeAt.Valid && nextProbeAt.String != "" {
+		parsedNextProbeAt, err := time.Parse(time.RFC3339Nano, nextProbeAt.String)
+		if err != nil {
+			return NodeRecord{}, fmt.Errorf("parse node next_probe_at: %w", err)
+		}
+		record.NextProbeAt = &parsedNextProbeAt
 	}
 	record.LastErrorCode = lastErrorCode.String
 	record.LastErrorMessage = lastErrorMessage.String
@@ -516,15 +556,26 @@ func escapeLike(value string) string {
 // SetNodeLifecycleState performs an administrator lifecycle transition.
 // Only 'disabled' (admin off) and 'candidate' (re-enable, waiting for a new
 // probe) are valid targets, and retired nodes cannot be changed.
+//
+// Re-enabling is an explicit operator override of the probe policy, so it also
+// clears the failure schedule: a manual 'candidate' means "probe this now and
+// judge it fresh", which is not true if the old backoff or pause survived.
+// This is the same override path a mis-quarantined residential exit needs after
+// the operator reclassifies its source.
 func (s *Store) SetNodeLifecycleState(ctx context.Context, id, state string) error {
 	if state != "disabled" && state != "candidate" {
 		return fmt.Errorf("unsupported lifecycle transition to %q", state)
 	}
 	result, err := s.db.ExecContext(ctx, `
 UPDATE nodes
-SET lifecycle_state = ?, version = version + 1
+SET lifecycle_state = ?,
+    version = version + 1,
+    consecutive_probe_failures = CASE WHEN ? = 'candidate' THEN 0 ELSE consecutive_probe_failures END,
+    next_probe_at = CASE WHEN ? = 'candidate' THEN NULL ELSE next_probe_at END,
+    probe_paused = CASE WHEN ? = 'candidate' THEN 0 ELSE probe_paused END,
+    retired_at = CASE WHEN ? = 'candidate' THEN NULL ELSE retired_at END
 WHERE id = ? AND lifecycle_state <> 'retired'
-`, state, id)
+`, state, state, state, state, state, id)
 	if err != nil {
 		return fmt.Errorf("set node lifecycle state: %w", err)
 	}

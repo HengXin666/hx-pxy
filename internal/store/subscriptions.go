@@ -12,9 +12,14 @@ import (
 var ErrConflict = errors.New("store version conflict")
 
 type SubscriptionRecord struct {
-	ID                     string
-	Name                   string
-	SourceType             string
+	ID         string
+	Name       string
+	SourceType string
+	// SourceClass is the operator-declared taxonomy that selects the probe
+	// policy (see source_policy.go). It is a property of the source, not of a
+	// node, because the replacement cost of a member is decided by where the
+	// member came from.
+	SourceClass            string
 	SourceConfigEncrypted  []byte
 	Enabled                bool
 	RefreshIntervalSeconds int
@@ -30,11 +35,16 @@ type SubscriptionRecord struct {
 }
 
 func (s *Store) CreateSubscription(ctx context.Context, record SubscriptionRecord) (SubscriptionRecord, error) {
+	// A row written without an explicit class gets the default rather than a
+	// CHECK failure: the column is NOT NULL with a closed vocabulary, and an
+	// internal caller that predates the column must keep working.
+	record.SourceClass = NormalizeSourceClass(record.SourceClass)
 	_, err := s.db.ExecContext(ctx, `
 INSERT INTO subscriptions(
     id,
     name,
     source_type,
+    source_class,
     source_config_encrypted,
     enabled,
     refresh_interval_seconds,
@@ -46,11 +56,12 @@ INSERT INTO subscriptions(
     version,
     created_at,
     updated_at
-) VALUES (?, ?, ?, ?, ?, ?, ?, NULLIF(?, ''), ?, NULLIF(?, ''), NULLIF(?, ''), ?, ?, ?)
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULLIF(?, ''), ?, NULLIF(?, ''), NULLIF(?, ''), ?, ?, ?)
 `,
 		record.ID,
 		record.Name,
 		record.SourceType,
+		record.SourceClass,
 		record.SourceConfigEncrypted,
 		boolToInteger(record.Enabled),
 		record.RefreshIntervalSeconds,
@@ -116,11 +127,13 @@ func (s *Store) UpdateSubscription(
 	record SubscriptionRecord,
 	expectedVersion int,
 ) (SubscriptionRecord, error) {
+	record.SourceClass = NormalizeSourceClass(record.SourceClass)
 	result, err := s.db.ExecContext(ctx, `
 UPDATE subscriptions
 SET
     name = ?,
     source_type = ?,
+    source_class = ?,
     source_config_encrypted = ?,
     enabled = ?,
     refresh_interval_seconds = ?,
@@ -132,6 +145,7 @@ WHERE id = ? AND version = ?
 `,
 		record.Name,
 		record.SourceType,
+		record.SourceClass,
 		record.SourceConfigEncrypted,
 		boolToInteger(record.Enabled),
 		record.RefreshIntervalSeconds,
@@ -218,6 +232,7 @@ SELECT
     id,
     name,
     source_type,
+    source_class,
     source_config_encrypted,
     enabled,
     refresh_interval_seconds,
@@ -247,6 +262,7 @@ func scanSubscription(source scanner) (SubscriptionRecord, error) {
 		&record.ID,
 		&record.Name,
 		&record.SourceType,
+		&record.SourceClass,
 		&record.SourceConfigEncrypted,
 		&enabled,
 		&record.RefreshIntervalSeconds,

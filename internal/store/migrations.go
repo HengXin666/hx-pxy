@@ -1089,6 +1089,69 @@ ALTER TABLE listeners
     ADD COLUMN node_id TEXT REFERENCES nodes(id) ON DELETE SET NULL;
 `,
 	},
+	{
+		version: 39,
+		name:    "source_class_drives_probe_policy",
+		// 20260926 用户决策：给订阅源加显式分类 source_class，因为「失败多少次算死」根本
+		// 取决于这个源能不能补货 —— 5000 条免费池里挂一个和唯一一条住宅出口挂掉，代价差
+		// 着几个数量级。此前三种源共用一条判据 consecutive_probe_failures + 1 >= 3，
+		// 生产库实测后果是 ioa-vm / outlook-ip / outlook-resi 三个「唯一的」出口各自被
+		// 重复探测 248~249 次后仍留在隔离态。
+		//
+		// 回填不是「一律给个默认值」——那等于没分类。用 active 快照的 node_count 作判据，
+		// 因为它正好就是分类定义的物理含义（可替代性）：成员越少越不可替代。
+		//   1..4   条 -> residential   唯一/极少，弃了整源就废
+		//   >= 100 条 -> pool          海量、一次性、额度会耗尽
+		//   其余      -> subscription  中等规模、长期资产
+		// 生产库 5 个源按此规则实际落点（每个都与其真实特征一致）：
+		//   良心云 41 条 -> subscription（长期订阅，掉了多半是临时抖动）
+		//   ioa-vm 1 条 / outlook-ip 1 条 / outlook-resi 1 条 -> residential
+		//   resi-pool-5k 5000 条 -> pool
+		// 没有 active 快照的源拿到 -1，两个条件都不命中，落到 else 的 subscription。
+		// 这是刻意选的「保守」方向：把池成员误当订阅成员只多花几次探测，把唯一出口误当
+		// 池成员则会删掉运维唯一的路。
+		//
+		// next_probe_at 是退避落点：DueNodeIDs 用它做「该不该现在探」，而不是靠探测循环
+		// sleep，这样一个慢节点不会拖住整批。NULL 表示「没有退避，可立即探测」，正好是
+		// 存量行的正确语义。
+		//
+		// probe_paused 表示「这个节点已判定为耗尽，别再探了」。它是节点级布尔而不是在
+		// SQL 里重算分类策略：策略阈值在 Go 里（store.ClassPolicies），若在 DueNodeIDs
+		// 里复写一份「哪些分类隔离后还探」的清单，两处必然不同步 —— 本仓库已经栽过
+		// 判据散落两处不同步的亏。写入时机在记录失败的那一刻，由 Go 算出并落盘。
+		// 清除时机：探测成功、管理员启用、或刷新把节点复活为 candidate。
+		sql: `
+ALTER TABLE subscriptions
+    ADD COLUMN source_class TEXT NOT NULL DEFAULT 'subscription'
+    CHECK (source_class IN ('pool', 'subscription', 'residential'));
+
+UPDATE subscriptions
+SET source_class = CASE
+    WHEN COALESCE((
+        SELECT ss.node_count
+        FROM subscription_snapshots ss
+        WHERE ss.subscription_id = subscriptions.id AND ss.status = 'active'
+        ORDER BY ss.fetched_at DESC
+        LIMIT 1
+    ), -1) BETWEEN 1 AND 4 THEN 'residential'
+    WHEN COALESCE((
+        SELECT ss.node_count
+        FROM subscription_snapshots ss
+        WHERE ss.subscription_id = subscriptions.id AND ss.status = 'active'
+        ORDER BY ss.fetched_at DESC
+        LIMIT 1
+    ), -1) >= 100 THEN 'pool'
+    ELSE 'subscription'
+END;
+
+ALTER TABLE nodes ADD COLUMN next_probe_at TEXT;
+ALTER TABLE nodes ADD COLUMN probe_paused INTEGER NOT NULL DEFAULT 0
+    CHECK (probe_paused IN (0, 1));
+
+CREATE INDEX nodes_due_probe ON nodes(next_probe_at)
+    WHERE lifecycle_state NOT IN ('disabled', 'retired');
+`,
+	},
 }
 
 func (s *Store) migrate(ctx context.Context) error {

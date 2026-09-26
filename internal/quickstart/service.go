@@ -19,6 +19,7 @@ import (
 	"github.com/HengXin666/HX-ProxyGroup/internal/listener"
 	"github.com/HengXin666/HX-ProxyGroup/internal/proxygroup"
 	"github.com/HengXin666/HX-ProxyGroup/internal/proxyservice"
+	"github.com/HengXin666/HX-ProxyGroup/internal/store"
 	"github.com/HengXin666/HX-ProxyGroup/internal/subscription"
 )
 
@@ -67,6 +68,13 @@ type Request struct {
 	// SubscriptionIDs reuses subscriptions that already exist and are already
 	// refreshed. Use these when the nodes are known to be present.
 	SubscriptionIDs []string `json:"subscription_ids,omitempty"`
+	// SourceClass classifies the subscription this call creates, and therefore
+	// selects the failure policy its nodes obey. Required when a subscription
+	// is created from SubscriptionURL or SubscriptionInline, and ignored when
+	// the nodes come from SubscriptionIDs or NodeIDs (those sources already
+	// carry their own classification). See the source_class enum in
+	// GET /api/v1/capabilities.
+	SourceClass string `json:"source_class,omitempty"`
 	// NodeIDs selects explicit nodes instead of a subscription.
 	NodeIDs []string `json:"node_ids,omitempty"`
 
@@ -157,6 +165,24 @@ func (s *Service) Create(ctx context.Context, request Request) (result Result, r
 	if (request.SubscriptionURL != "" || request.SubscriptionInline != "") && len(request.SubscriptionIDs) > 0 {
 		return Result{}, fmt.Errorf("%w: a new subscription and subscription_ids are mutually exclusive", ErrInvalid)
 	}
+	// A creation path must state the class: it decides whether this source's
+	// nodes can ever be retired, and quietly defaulting it is how an
+	// irreplaceable exit ends up on a disposable-pool policy. Reusing existing
+	// sources (subscription_ids / node_ids) needs no class here — those
+	// subscriptions already carry one.
+	if request.SubscriptionURL != "" || request.SubscriptionInline != "" {
+		if strings.TrimSpace(request.SourceClass) == "" {
+			return Result{}, fmt.Errorf("%w: source_class is required when creating a subscription; use one of %s",
+				ErrInvalid, strings.Join(subscription.SupportedSourceClasses(), ", "))
+		}
+		if _, err := store.ParseSourceClass(strings.TrimSpace(request.SourceClass)); err != nil {
+			return Result{}, fmt.Errorf("%w: source_class must be one of %s",
+				ErrInvalid, strings.Join(subscription.SupportedSourceClasses(), ", "))
+		}
+		request.SourceClass = strings.TrimSpace(request.SourceClass)
+	} else if strings.TrimSpace(request.SourceClass) != "" {
+		return Result{}, fmt.Errorf("%w: source_class applies only when creating a subscription; reclassify via PUT /api/v1/subscriptions/<id>", ErrInvalid)
+	}
 	if strings.TrimSpace(request.Kind) == "" {
 		request.Kind = "mixed"
 	}
@@ -213,6 +239,7 @@ func (s *Service) Create(ctx context.Context, request Request) (result Result, r
 		created, err := s.subscriptions.Create(ctx, subscription.CreateRequest{
 			Name:         name,
 			SourceType:   sourceType,
+			SourceClass:  request.SourceClass,
 			SourceConfig: sourceConfig,
 		})
 		if err != nil {

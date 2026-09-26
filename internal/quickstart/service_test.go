@@ -85,6 +85,7 @@ func TestCreateRefreshesBeforePublishing(t *testing.T) {
 	result, err := service.Create(context.Background(), Request{
 		Name:            "hk-pool",
 		SubscriptionURL: "https://example.com/sub?token=x",
+		SourceClass:     "subscription",
 		Strategy:        "url-test",
 	})
 	if err != nil {
@@ -132,6 +133,7 @@ func TestCreateRollsBackSubscriptionWhenPublishFails(t *testing.T) {
 	_, err := service.Create(context.Background(), Request{
 		Name:            "hk-pool",
 		SubscriptionURL: "https://example.com/sub?token=x",
+		SourceClass:     "subscription",
 	})
 	if !errors.Is(err, ErrCreateFailed) {
 		t.Fatalf("Create() error = %v, want ErrCreateFailed", err)
@@ -152,6 +154,7 @@ func TestCreateRollsBackSubscriptionWhenRefreshFails(t *testing.T) {
 	_, err := service.Create(context.Background(), Request{
 		Name:            "hk-pool",
 		SubscriptionURL: "https://example.com/sub?token=x",
+		SourceClass:     "subscription",
 	})
 	if !errors.Is(err, ErrCreateFailed) {
 		t.Fatalf("Create() error = %v, want ErrCreateFailed", err)
@@ -183,6 +186,7 @@ func TestCreateValidatesSourceExclusivity(t *testing.T) {
 			name: "url and ids together",
 			request: Request{
 				Name: "pool", SubscriptionURL: "https://example.com/sub",
+				SourceClass:     "subscription",
 				SubscriptionIDs: []string{"sub-9"},
 			},
 			want: "mutually exclusive",
@@ -191,6 +195,7 @@ func TestCreateValidatesSourceExclusivity(t *testing.T) {
 			name: "url and inline together",
 			request: Request{
 				Name: "pool", SubscriptionURL: "https://example.com/sub",
+				SourceClass:        "subscription",
 				SubscriptionInline: "1.2.3.4:8080",
 			},
 			want: "mutually exclusive",
@@ -199,6 +204,7 @@ func TestCreateValidatesSourceExclusivity(t *testing.T) {
 			name: "inline and ids together",
 			request: Request{
 				Name: "pool", SubscriptionInline: "1.2.3.4:8080",
+				SourceClass:     "subscription",
 				SubscriptionIDs: []string{"sub-9"},
 			},
 			want: "mutually exclusive",
@@ -256,6 +262,7 @@ func TestCreateRegistersInlineListAsAnInlineSubscription(t *testing.T) {
 	if _, err := service.Create(context.Background(), Request{
 		Name:               "pool",
 		SubscriptionInline: "1.2.3.4:8080\n5.6.7.8:3128\n",
+		SourceClass:        "pool",
 	}); err != nil {
 		t.Fatalf("Create() error = %v", err)
 	}

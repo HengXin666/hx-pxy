@@ -30,6 +30,7 @@ func capabilityEndpoints() []CapabilityEndpoint {
 				{Name: "subscription_name", Type: "string", Description: "Name for the subscription created from subscription_url or subscription_inline. Defaults to name."},
 				{Name: "subscription_ids", Type: "array<string>", Description: "Reuse already-refreshed subscriptions. The caller is responsible for refreshing them first.", SeeAlso: []string{"subscription.refresh"}},
 				{Name: "node_ids", Type: "array<string>", Description: "Select explicit nodes instead of a subscription."},
+				{Name: "source_class", Type: "string", Enum: "source_class", Description: "Required when subscription_url or subscription_inline creates a source: it selects the failure policy its nodes obey. Rejected with subscription_ids or node_ids, whose sources already carry their own classification.", Example: "subscription"},
 				{Name: "strategy", Type: "string", Enum: "proxy_group_strategy", Description: "Selection strategy. Omitted uses the service default."},
 				{Name: "limit", Type: "integer", Description: "Cap how many members the group keeps. 0 keeps every match."},
 				{Name: "kind", Type: "string", Enum: "listener_kind", Default: "mixed", Description: "Protocol to publish."},
@@ -42,12 +43,13 @@ func capabilityEndpoints() []CapabilityEndpoint {
 			Example: map[string]any{
 				"name":             "hk-pool",
 				"subscription_url": "https://example.com/sub?token=x",
+				"source_class":     "subscription",
 				"strategy":         "url-test",
 				"kind":             "mixed",
 				"port":             7890,
 			},
 			Errors: []CapabilityError{
-				{Status: 422, Code: "invalid_quickstart", Meaning: "The request is missing a source or mixes mutually exclusive fields.", Remediation: "Provide exactly one of subscription_url, subscription_inline, subscription_ids, or node_ids."},
+				{Status: 422, Code: "invalid_quickstart", Meaning: "The request is missing a source or mixes mutually exclusive fields, or a source-creating call omitted source_class.", Remediation: "Provide exactly one of subscription_url, subscription_inline, subscription_ids, or node_ids; add source_class when creating a subscription."},
 				{Status: 422, Code: "quickstart_failed", Meaning: "A step failed after the request was accepted. Everything this call created is removed first, so an error never leaves a half-built service.", Remediation: "Read the message: it names the failing step."},
 			},
 			ResponseRef: "The created group and listener, plus share_path and consumer_nodes_path.",
@@ -140,6 +142,7 @@ func capabilityEndpoints() []CapabilityEndpoint {
 			Fields: []CapabilityField{
 				{Name: "name", Type: "string", Required: true, Description: "Display name.", Example: "vendor-hk"},
 				{Name: "source_type", Type: "string", Required: true, Enum: "subscription_source_type", Description: "Where the node list comes from.", Example: "remote"},
+				{Name: "source_class", Type: "string", Enum: "source_class", Default: "subscription", Description: "What a failure costs on this source; it decides the failure policy its nodes obey. Omit only when the default is genuinely right: the default is 'subscription' specifically because it is the safest mistake — a pool member treated as a subscription wastes a few probes, whereas an irreplaceable residential exit treated as a pool member gets retired and cannot be recovered automatically. State it explicitly for a pool and especially for a residential source.", Example: "subscription", SeeAlso: []string{"subscription.update"}},
 				{Name: "source_config", Type: "object", Required: true, Description: "Source-specific settings."},
 				{Name: "source_config.url", Type: "string", Description: "Required when source_type is remote. Must be http or https.", Example: "https://example.com/sub?token=x"},
 				{Name: "source_config.headers", Type: "object", Description: "Extra request headers for a remote fetch."},
@@ -153,7 +156,7 @@ func capabilityEndpoints() []CapabilityEndpoint {
 				{Name: "refresh_cron", Type: "string", Description: "Cron expression for refresh, as an alternative to an interval."},
 			},
 			Example: map[string]any{
-				"name": "vendor-hk", "source_type": "remote",
+				"name": "vendor-hk", "source_type": "remote", "source_class": "subscription",
 				"source_config": map[string]any{"url": "https://example.com/sub?token=x"},
 			},
 			Errors: []CapabilityError{
@@ -178,6 +181,32 @@ func capabilityEndpoints() []CapabilityEndpoint {
 			ResponseRef: "Returns the snapshot id, detected format, and estimated node count.",
 		},
 		{
+			ID:      "subscription.update",
+			Method:  http.MethodPut,
+			Path:    "/api/v1/subscriptions/<subscription-id>",
+			Summary: "Change a source's metadata, and reclassify it. source_class may be changed on its own without replacing source_config, which is the repair path for a source that turns out to be less replaceable than assumed: reclassify it to residential and its nodes stop being auto-retired. Re-enable a mis-quarantined node with POST /api/v1/nodes/<node-id>/enable afterwards; reclassification changes future policy, not past state.",
+			Auth:    "api-key",
+			PathParams: []string{
+				"subscription-id: id returned by subscription.create",
+			},
+			Fields: []CapabilityField{
+				{Name: "version", Type: "integer", Required: true, Description: "Optimistic-concurrency token from the last read. A stale version is refused rather than silently overwriting.", Example: 1},
+				{Name: "name", Type: "string", Required: true, Description: "Display name."},
+				{Name: "source_type", Type: "string", Enum: "subscription_source_type", Description: "Only changes when source_config is replaced."},
+				{Name: "source_class", Type: "string", Enum: "source_class", Description: "Omit to keep the stored classification. Supply it to change the failure policy."},
+				{Name: "source_config", Type: "object", Description: "Omit to keep the current source configuration."},
+				{Name: "enabled", Type: "boolean", Required: true},
+				{Name: "refresh_interval_seconds", Type: "integer"},
+				{Name: "refresh_cron", Type: "string"},
+			},
+			Errors: []CapabilityError{
+				{Status: 404, Code: "not_found", Meaning: "No such subscription."},
+				{Status: 409, Code: "subscription_conflict", Meaning: "The version is stale; the row changed since it was read."},
+				{Status: 422, Code: "invalid_subscription", Meaning: "A field failed validation, for example an unknown source_class."},
+			},
+			SeeAlso: []string{"subscription.create", "node.list"},
+		},
+		{
 			ID:          "node.list",
 			Method:      http.MethodGet,
 			Path:        "/api/v1/nodes",
@@ -189,7 +218,7 @@ func capabilityEndpoints() []CapabilityEndpoint {
 			ID:          "node_settings.read",
 			Method:      http.MethodGet,
 			Path:        "/api/v1/node-settings",
-			Summary:     "Read the global probe thresholds: how many consecutive failures quarantine a node, and the latency bounds that separate healthy from degraded.",
+			Summary:     "Read the global probe cadence: the interval, timeout, batch size and concurrency of node checks. The failure thresholds themselves are NOT here — they are per source_class (see the source_class enum), because how many failures a node may accumulate before it is retired depends on how replaceable the source's members are.",
 			Auth:        "api-key",
 			ResponseRef: "The probe quality settings.",
 			SeeAlso:     []string{"node.list"},

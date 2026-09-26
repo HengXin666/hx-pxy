@@ -60,8 +60,14 @@ func TestCheckUpdatesNodeLifecycle(t *testing.T) {
 		t.Fatalf("high-latency state = %q, want degraded", result.Node.LifecycleState)
 	}
 
+	// The fixture's subscription carries no explicit source_class, so it takes
+	// the documented default ('subscription'), which quarantines at 5
+	// consecutive failures — NOT the old global constant of 3. Pinning every
+	// intermediate state is the point: this is the threshold that used to be
+	// hardcoded for every source, and the regression it caused was retiring a
+	// single-member source's only exit.
 	prober.err = errors.New("connection refused")
-	for attempt := 1; attempt <= 3; attempt++ {
+	for attempt := 1; attempt <= 5; attempt++ {
 		result, err = service.Check(ctx, nodeID)
 		if err != nil {
 			t.Fatal(err)
@@ -69,9 +75,24 @@ func TestCheckUpdatesNodeLifecycle(t *testing.T) {
 		if result.Success {
 			t.Fatalf("attempt %d unexpectedly succeeded", attempt)
 		}
+		wantState := "degraded"
+		if attempt == 5 {
+			wantState = "quarantined"
+		}
+		if result.Node.LifecycleState != wantState {
+			t.Fatalf("attempt %d state = %q, want %q", attempt, result.Node.LifecycleState, wantState)
+		}
+		if result.Node.ConsecutiveProbeFailures != attempt {
+			t.Fatalf("attempt %d failures = %d, want %d", attempt, result.Node.ConsecutiveProbeFailures, attempt)
+		}
 	}
-	if result.Node.LifecycleState != "quarantined" || result.Node.ConsecutiveProbeFailures != 3 {
-		t.Fatalf("unexpected quarantined node: %+v", result.Node)
+	// A subscription-class node keeps being probed after quarantine: a paid
+	// source's node may recover, so it must not be written off.
+	if result.Node.ProbePaused {
+		t.Fatalf("subscription node must keep being probed after quarantine: %+v", result.Node)
+	}
+	if result.Node.NextProbeAt == nil {
+		t.Fatalf("failed node has no backoff schedule: %+v", result.Node)
 	}
 
 	prober.err = nil
@@ -83,8 +104,13 @@ func TestCheckUpdatesNodeLifecycle(t *testing.T) {
 	if result.Node.LifecycleState != "healthy" || result.Node.ConsecutiveProbeFailures != 0 {
 		t.Fatalf("successful recovery did not reset node: %+v", result.Node)
 	}
-	if prober.applies != 6 {
-		t.Fatalf("Apply() calls = %d, want 6", prober.applies)
+	// Recovery must also drop the backoff and the pause, otherwise a node that
+	// came back would still be held out by the failure schedule.
+	if result.Node.NextProbeAt != nil || result.Node.ProbePaused {
+		t.Fatalf("recovery left failure schedule behind: %+v", result.Node)
+	}
+	if prober.applies != 8 {
+		t.Fatalf("Apply() calls = %d, want 8", prober.applies)
 	}
 }
 
