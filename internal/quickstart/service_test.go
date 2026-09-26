@@ -177,7 +177,7 @@ func TestCreateValidatesSourceExclusivity(t *testing.T) {
 		{
 			name:    "no source",
 			request: Request{Name: "pool"},
-			want:    "provide subscription_url, subscription_ids, or node_ids",
+			want:    "provide subscription_url, subscription_inline, subscription_ids, or node_ids",
 		},
 		{
 			name: "url and ids together",
@@ -186,6 +186,27 @@ func TestCreateValidatesSourceExclusivity(t *testing.T) {
 				SubscriptionIDs: []string{"sub-9"},
 			},
 			want: "mutually exclusive",
+		},
+		{
+			name: "url and inline together",
+			request: Request{
+				Name: "pool", SubscriptionURL: "https://example.com/sub",
+				SubscriptionInline: "1.2.3.4:8080",
+			},
+			want: "mutually exclusive",
+		},
+		{
+			name: "inline and ids together",
+			request: Request{
+				Name: "pool", SubscriptionInline: "1.2.3.4:8080",
+				SubscriptionIDs: []string{"sub-9"},
+			},
+			want: "mutually exclusive",
+		},
+		{
+			name:    "whitespace-only inline is not a source",
+			request: Request{Name: "pool", SubscriptionInline: "   \n  \n"},
+			want:    "provide subscription_url",
 		},
 		{
 			name:    "missing name",
@@ -222,6 +243,42 @@ func TestCreateReusesExistingSubscriptionsWithoutRefreshing(t *testing.T) {
 	}
 	if got := services.received.SourceSpec.SubscriptionIDs; len(got) != 1 || got[0] != "sub-existing" {
 		t.Fatalf("group source subscription ids = %v", got)
+	}
+}
+
+// The inline path is the one a flat proxy list takes, so it must be a first-class
+// source: stored as an Inline subscription (encrypted like any other), refreshed
+// before the group is built, and handed to the group by subscription id.
+func TestCreateRegistersInlineListAsAnInlineSubscription(t *testing.T) {
+	t.Parallel()
+
+	service, subscriptions, services := newTestService(t)
+	if _, err := service.Create(context.Background(), Request{
+		Name:               "pool",
+		SubscriptionInline: "1.2.3.4:8080\n5.6.7.8:3128\n",
+	}); err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	if len(subscriptions.created) != 1 {
+		t.Fatalf("created %d subscriptions, want 1", len(subscriptions.created))
+	}
+	created := subscriptions.created[0]
+	if created.SourceType != subscription.SourceInline {
+		t.Fatalf("source type = %q, want inline", created.SourceType)
+	}
+	if created.SourceConfig.Inline != "1.2.3.4:8080\n5.6.7.8:3128\n" {
+		t.Fatalf("inline document = %q", created.SourceConfig.Inline)
+	}
+	if created.SourceConfig.URL != "" {
+		t.Fatalf("inline source also carried a URL: %q", created.SourceConfig.URL)
+	}
+	// Same ordering guarantee as the remote path: a group built from an
+	// unrefreshed subscription would publish a service that routes nothing.
+	if subscriptions.refreshID != "sub-1" {
+		t.Fatalf("refresh id = %q, want sub-1", subscriptions.refreshID)
+	}
+	if got := services.received.SourceSpec.SubscriptionIDs; len(got) != 1 || got[0] != "sub-1" {
+		t.Fatalf("group source subscription ids = %v, want [sub-1]", got)
 	}
 }
 

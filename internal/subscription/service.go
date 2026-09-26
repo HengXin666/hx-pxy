@@ -26,6 +26,18 @@ const (
 	SourceFile   SourceType = "file"
 )
 
+// SupportedSourceTypes is the closed vocabulary of source types, in the order
+// the capability catalog publishes them. It is the list the validator accepts,
+// not a copy, so a new source type cannot ship undocumented.
+//
+// SourceInline deliberately covers two documents: a subscription document pasted
+// in place of a URL, and a flat proxy list ("host:port" per line, or share URIs).
+// Both are one document that is stored encrypted and parsed by the same reader;
+// they are not two source types, so the enum does not grow for a list.
+func SupportedSourceTypes() []string {
+	return []string{string(SourceRemote), string(SourceInline), string(SourceFile)}
+}
+
 const (
 	defaultRefreshInterval = 3600
 	minimumRefreshInterval = 60

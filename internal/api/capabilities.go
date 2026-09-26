@@ -8,6 +8,7 @@ import (
 	"github.com/HengXin666/HX-ProxyGroup/internal/nodeparse"
 	"github.com/HengXin666/HX-ProxyGroup/internal/proxygroup"
 	"github.com/HengXin666/HX-ProxyGroup/internal/residential"
+	"github.com/HengXin666/HX-ProxyGroup/internal/subscription"
 )
 
 // CapabilityCatalogPath is the machine-readable capability catalog. It lives in
@@ -172,8 +173,8 @@ func (s *Server) CapabilityCatalog() CapabilityCatalog {
 		},
 		{
 			Name:        "subscription_source_type",
-			Description: "Where the node list comes from.",
-			Values:      []string{"remote", "inline", "file"},
+			Description: "Where the node list comes from. \"inline\" covers a pasted flat proxy list as well as a pasted subscription document: both are one document, stored encrypted and parsed by the same reader.",
+			Values:      subscription.SupportedSourceTypes(),
 		},
 		{
 			Name:        "residential_provider_protocol",

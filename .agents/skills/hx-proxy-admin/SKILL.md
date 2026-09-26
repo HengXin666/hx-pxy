@@ -64,6 +64,30 @@ python3 scripts/hx-catalog.py quickstart --body '{
 }'
 ```
 
+### 手上是代理列表而不是订阅 URL：用 `subscription_inline`
+
+「几百上千条 HTTP/SOCKS 代理」的清单通常**没有 URL**（供应商导出、检测器结果、爬来的资源）。
+这时不要先去搭一个服务器托管它 —— 把清单本身放进请求：
+
+```bash
+python3 scripts/hx-catalog.py quickstart --body "$(python3 - <<'PY'
+import json
+lines = [l.strip() for l in open('proxies.txt') if l.strip()]
+print(json.dumps({'name': 'proxy-pool', 'subscription_inline': '\n'.join(lines) + '\n', 'strategy': 'url-test'}))
+PY
+)"
+```
+
+`subscription_inline` 与 `subscription_url`、`subscription_ids` **互斥**，三选一。它建出来的是
+一条**普通 Inline 订阅**（同样的加密存储、同样的解析/去重/刷新/导出路径），所以后续任何订阅
+操作都能用。清单的行格式（裸 `host:port`、`host:port:user:pass`、带 scheme 的 URI、带导出标注
+的 URI）见 `docs/SUBSCRIPTIONS.md` §2 Inline。
+
+请求体上限与该端点能接受的清单规模一致（5 MiB），不是默认的 64 KiB。
+
+> 想清楚了只是要一个**统一入口**（一个地址走完整个池子），而不是自己控制出口？
+> 那属于消费侧视角，看 `hx-consumer-api` 的「代理池」一节 —— 那里说的是拿到 URL 之后怎么用。
+
 输出里你会拿到下一步真正需要的东西：
 
 ```text
@@ -91,6 +115,7 @@ auth:     svc-... / ...           ← 已生成的凭据
 | 场景 | 用什么 |
 | --- | --- |
 | 从零到可用代理 | `quickstart` —— 一步到位 |
+| 手上有代理清单但没有 URL | `quickstart` 的 `subscription_inline`（清单直接进请求体） |
 | 订阅已经存在且已刷新 | `POST /api/v1/proxy-services`（组 + Listener） |
 | 要复用多个订阅 / 组合多个组 | 分步：`subscriptions` → `refresh` → `proxy-groups` → `listeners` |
 | 链式（把上游组当出口），按组 | `proxy-groups` 的 `dialer_proxy_group_id` —— 任意组，任意深度 |

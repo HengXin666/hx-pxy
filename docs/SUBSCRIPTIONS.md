@@ -51,6 +51,32 @@
 
 用于手工粘贴 URI 列表、Base64 文本或 Clash / Mihomo YAML。当前单条内联内容限制为 4 MiB。
 
+**它同时是「HTTP/SOCKS 代理列表池」的入口**：一行一个端点，不需要任何容器头，因此粘贴的是
+代理本身而不是订阅文档。两种行形态都接受：
+
+```text
+1.2.3.4:8080                     # 裸端点，无协议，按 HTTP 导入
+1.2.3.4:8080:user:pass           # 带鉴权的裸端点（主机须为 IP 字面量）
+http://user:pass@1.2.3.4:8080    # 带 scheme，按 scheme 决定协议
+socks5://1.2.3.4:1080
+socks5://1.2.3.4:4145#住宅-风险81% | AS22773   # 导出标注追加在 # 片段里
+OK|http|http://user:pass@1.2.3.4:3129|1.2.3.4  # 检测器的多列输出
+```
+
+两条规则值得记住：
+
+- **裸端点默认 HTTP**。「host:port」在 curl / HttpClient 语境里就是 HTTP 代理；按端口号猜
+  SOCKS 会错得离谱，所以协议只能由 scheme 指定。要让整池走 SOCKS，每行都带 `socks5://`。
+- **裸端点行占比不足一半的文档不被当作代理列表**，仍按「subscription format is not supported」
+  报错 —— 免得一段散文被逐行报成失败。
+
+兼容细节：同一份文档里带 scheme 的行与裸端点行各按自己的协议导入；带 scheme 的文档仍走原有的
+`uri-list` 路径，只有**整份文档都是裸端点**时才报 `proxy-list` 格式。
+
+代理列表池**没有独立实体**：它就是一条 Inline 订阅，因此去重、检测、Proxy Group、Listener、
+`/sub/`、`/nodes/` 全部沿用，不存在第二套节点模型。决策与否定项见
+[.agents/notes/implemented/feature/2026-09-26-proxy-list-pool-subscription-source.md](../.agents/notes/implemented/feature/2026-09-26-proxy-list-pool-subscription-source.md)。
+
 ### File
 
 读取服务器上的绝对路径文件。文件必须是普通文件，不能是符号链接，最大 16 MiB。

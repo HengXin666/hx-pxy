@@ -81,7 +81,11 @@ func parse(content []byte, depth int) (Result, error) {
 	if result, ok := parseSingBoxJSON(trimmed); ok {
 		return result, nil
 	}
-	if result := parseURILines(string(trimmed)); len(result.Nodes) > 0 || len(result.Failures) > 0 {
+	// A document that also carries schemeless lines is not a pure share URI list:
+	// the URI line parser skips those lines rather than failing on them, so
+	// claiming the document here would drop endpoints silently. It falls through
+	// to the proxy-list reader, which handles both shapes in one pass.
+	if result := parseURILines(string(trimmed)); (len(result.Nodes) > 0 || len(result.Failures) > 0) && !hasBareEndpointLines(string(trimmed)) {
 		result.DetectedFormat = "uri-list"
 		return result, nil
 	}
@@ -91,6 +95,13 @@ func parse(content []byte, depth int) (Result, error) {
 			return Result{}, err
 		}
 		result.DetectedFormat = "base64-" + result.DetectedFormat
+		return result, nil
+	}
+	// A flat proxy list has no container header and no scheme, so it can only be
+	// recognized last, and only when enough of its lines really are endpoints.
+	// See proxylist.go for why a decorated share URI list does NOT come through
+	// here: it carries schemes and is repaired inside parseURILines instead.
+	if result := parseProxyList(string(trimmed)); looksLikeProxyList(string(trimmed)) {
 		return result, nil
 	}
 	return Result{}, errors.New("subscription format is not supported")
@@ -295,7 +306,10 @@ func parseURILines(text string) Result {
 		if !strings.Contains(line, "://") {
 			continue
 		}
-		node, err := parseURI(line)
+		// parseProxyListShareURI is parseURI plus one repair: a share URI that
+		// arrived with an export annotation appended to its "#" fragment. A URI
+		// that parses on its own is returned untouched, so node names survive.
+		node, err := parseProxyListShareURI(line)
 		if err != nil {
 			protocol := ""
 			if separator := strings.Index(line, "://"); separator > 0 {

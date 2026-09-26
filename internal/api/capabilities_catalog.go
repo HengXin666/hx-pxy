@@ -25,8 +25,9 @@ func capabilityEndpoints() []CapabilityEndpoint {
 			Auth:    "api-key",
 			Fields: []CapabilityField{
 				{Name: "name", Type: "string", Required: true, Description: "Name for the resulting group and listener.", Example: "hk-pool"},
-				{Name: "subscription_url", Type: "string", Description: "Remote subscription to register and refresh inline. Mutually exclusive with subscription_ids.", Example: "https://example.com/sub?token=x", SeeAlso: []string{"subscription.create", "subscription.refresh"}},
-				{Name: "subscription_name", Type: "string", Description: "Name for the subscription created from subscription_url. Defaults to name."},
+				{Name: "subscription_url", Type: "string", Description: "Remote subscription to register and refresh inline. Mutually exclusive with subscription_inline and subscription_ids.", Example: "https://example.com/sub?token=x", SeeAlso: []string{"subscription.create", "subscription.refresh"}},
+				{Name: "subscription_inline", Type: "string", Description: "Proxy list document itself instead of a URL: one endpoint per line, either \"host:port\", \"host:port:user:password\", or a share URI (http/socks5/vless/...). Vendor export annotations are tolerated. Use this when the caller already holds the list and cannot host it. Mutually exclusive with subscription_url and subscription_ids.", Example: "1.2.3.4:8080\n5.6.7.8:3128\nsocks5://9.9.9.9:1080", SeeAlso: []string{"subscription.create"}},
+				{Name: "subscription_name", Type: "string", Description: "Name for the subscription created from subscription_url or subscription_inline. Defaults to name."},
 				{Name: "subscription_ids", Type: "array<string>", Description: "Reuse already-refreshed subscriptions. The caller is responsible for refreshing them first.", SeeAlso: []string{"subscription.refresh"}},
 				{Name: "node_ids", Type: "array<string>", Description: "Select explicit nodes instead of a subscription."},
 				{Name: "strategy", Type: "string", Enum: "proxy_group_strategy", Description: "Selection strategy. Omitted uses the service default."},
@@ -46,7 +47,7 @@ func capabilityEndpoints() []CapabilityEndpoint {
 				"port":             7890,
 			},
 			Errors: []CapabilityError{
-				{Status: 422, Code: "invalid_quickstart", Meaning: "The request is missing a source or mixes mutually exclusive fields.", Remediation: "Provide exactly one of subscription_url, subscription_ids, or node_ids."},
+				{Status: 422, Code: "invalid_quickstart", Meaning: "The request is missing a source or mixes mutually exclusive fields.", Remediation: "Provide exactly one of subscription_url, subscription_inline, subscription_ids, or node_ids."},
 				{Status: 422, Code: "quickstart_failed", Meaning: "A step failed after the request was accepted. Everything this call created is removed first, so an error never leaves a half-built service.", Remediation: "Read the message: it names the failing step."},
 			},
 			ResponseRef: "The created group and listener, plus share_path and consumer_nodes_path.",

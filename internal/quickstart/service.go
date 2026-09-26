@@ -54,7 +54,15 @@ type Request struct {
 	Name string `json:"name"`
 	// SubscriptionURL registers and refreshes a remote subscription inline.
 	SubscriptionURL string `json:"subscription_url,omitempty"`
-	// SubscriptionName names the subscription created from SubscriptionURL.
+	// SubscriptionInline registers and refreshes a subscription from the list
+	// document itself instead of a URL. This is the path for a flat proxy list
+	// ("host:port" per line, or share URIs with vendor annotations) that a caller
+	// already holds and does not want to re-host. The document is stored
+	// encrypted exactly like every other source, and flows through the same
+	// parse / dedup / refresh / export pipeline.
+	SubscriptionInline string `json:"subscription_inline,omitempty"`
+	// SubscriptionName names the subscription created from SubscriptionURL or
+	// SubscriptionInline.
 	SubscriptionName string `json:"subscription_name,omitempty"`
 	// SubscriptionIDs reuses subscriptions that already exist and are already
 	// refreshed. Use these when the nodes are known to be present.
@@ -122,12 +130,32 @@ func (s *Service) Create(ctx context.Context, request Request) (result Result, r
 		return Result{}, fmt.Errorf("%w: name is required", ErrInvalid)
 	}
 	request.SubscriptionURL = strings.TrimSpace(request.SubscriptionURL)
-	hasSource := request.SubscriptionURL != "" || len(request.SubscriptionIDs) > 0 || len(request.NodeIDs) > 0
-	if !hasSource {
-		return Result{}, fmt.Errorf("%w: provide subscription_url, subscription_ids, or node_ids", ErrInvalid)
+	// The list document is NOT trimmed to empty here: leading/trailing newlines
+	// are meaningless to the parser, but trimming the whole document would hide a
+	// whitespace-only payload behind a "no source" message instead of naming the
+	// real problem.
+	if strings.TrimSpace(request.SubscriptionInline) == "" {
+		request.SubscriptionInline = ""
 	}
-	if request.SubscriptionURL != "" && len(request.SubscriptionIDs) > 0 {
-		return Result{}, fmt.Errorf("%w: subscription_url and subscription_ids are mutually exclusive", ErrInvalid)
+	sources := 0
+	for _, supplied := range []bool{
+		request.SubscriptionURL != "",
+		request.SubscriptionInline != "",
+		len(request.SubscriptionIDs) > 0,
+		len(request.NodeIDs) > 0,
+	} {
+		if supplied {
+			sources++
+		}
+	}
+	if sources == 0 {
+		return Result{}, fmt.Errorf("%w: provide subscription_url, subscription_inline, subscription_ids, or node_ids", ErrInvalid)
+	}
+	if request.SubscriptionURL != "" && request.SubscriptionInline != "" {
+		return Result{}, fmt.Errorf("%w: subscription_url and subscription_inline are mutually exclusive", ErrInvalid)
+	}
+	if (request.SubscriptionURL != "" || request.SubscriptionInline != "") && len(request.SubscriptionIDs) > 0 {
+		return Result{}, fmt.Errorf("%w: a new subscription and subscription_ids are mutually exclusive", ErrInvalid)
 	}
 	if strings.TrimSpace(request.Kind) == "" {
 		request.Kind = "mixed"
@@ -156,6 +184,8 @@ func (s *Service) Create(ctx context.Context, request Request) (result Result, r
 	var createdSubscription *subscription.Subscription
 	// Roll back the subscription this call created if any later step fails. The
 	// proxy service already rolls back its own group when its listener fails.
+	// A subscription whose refresh failed needs no rollback: the refresh service
+	// already retires a subscription that never produced a snapshot.
 	defer func() {
 		if resultErr == nil || createdSubscription == nil {
 			return
@@ -168,15 +198,22 @@ func (s *Service) Create(ctx context.Context, request Request) (result Result, r
 		nodeIDs:         request.NodeIDs,
 		limit:           request.Limit,
 	}
-	if request.SubscriptionURL != "" {
+	if request.SubscriptionURL != "" || request.SubscriptionInline != "" {
 		name := strings.TrimSpace(request.SubscriptionName)
 		if name == "" {
 			name = request.Name
 		}
+		sourceType, sourceConfig := subscription.SourceRemote, subscription.SourceConfig{URL: request.SubscriptionURL}
+		if request.SubscriptionInline != "" {
+			// The list document rides in the request, so it is stored exactly like
+			// a pasted Inline subscription: encrypted at rest, and served by the
+			// same loader, parser, dedup and export path as a remote source.
+			sourceType, sourceConfig = subscription.SourceInline, subscription.SourceConfig{Inline: request.SubscriptionInline}
+		}
 		created, err := s.subscriptions.Create(ctx, subscription.CreateRequest{
 			Name:         name,
-			SourceType:   subscription.SourceRemote,
-			SourceConfig: subscription.SourceConfig{URL: request.SubscriptionURL},
+			SourceType:   sourceType,
+			SourceConfig: sourceConfig,
 		})
 		if err != nil {
 			return Result{}, fmt.Errorf("%w: create subscription: %v", ErrCreateFailed, err)

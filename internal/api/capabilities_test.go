@@ -134,6 +134,7 @@ func TestCapabilityCatalogEnumsAreLiveVocabulary(t *testing.T) {
 		{"residential_rotation_mode", residential.SupportedRotationModes()},
 		{"residential_region_mode", residential.SupportedRegionModes()},
 		{"node_protocol", nodeparse.SupportedProtocols()},
+		{"subscription_source_type", subscription.SupportedSourceTypes()},
 	}
 	for _, testCase := range cases {
 		got := catalogEnum(t, catalog, testCase.name).Values
