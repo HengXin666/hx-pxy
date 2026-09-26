@@ -52,8 +52,11 @@ export function DockerPage({ onNotice }: { onNotice: (message: string, tone?: "s
   const running = containers.filter((container) => container.state === "running").length
 
   return (
-    <div className="space-y-3">
-      <div className="flex items-center justify-between">
+    // 终端页的 main 在 lg 断点是 lg:h-full lg:overflow-hidden, 所以这一页必须
+    // 自己是滚动容器 —— 否则表头以下的容器行(以及端口映射)会被裁掉且无法滚动。
+    // min-h-0 让 flex 子项在溢出时收缩而不是撑开父级。
+    <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto">
+      <div className="flex shrink-0 items-center justify-between">
         <div className="flex items-center gap-1.5 text-sm font-semibold">
           <Container className="size-4 text-muted-foreground" />Docker 容器
           <span className="rounded-full border bg-muted/60 px-2 py-0.5 text-[11px] text-muted-foreground">
@@ -81,14 +84,14 @@ export function DockerPage({ onNotice }: { onNotice: (message: string, tone?: "s
       {containers.length === 0 ? (
         <div className="rounded-md border bg-card px-4 py-8 text-center text-xs text-muted-foreground">没有可显示的容器</div>
       ) : (
-        <div className="overflow-x-auto rounded-md border bg-card">
-          <table className="w-full min-w-[720px] text-left text-xs">
+        <div className="shrink-0 overflow-x-auto rounded-md border bg-card">
+          <table className="w-full min-w-[860px] text-left text-xs">
             <thead>
               <tr className="border-b bg-muted/60 text-muted-foreground">
                 <th className="px-3 py-2 font-medium">名称</th>
                 <th className="px-3 py-2 font-medium">镜像</th>
                 <th className="px-3 py-2 font-medium">状态</th>
-                <th className="px-3 py-2 font-medium">端口</th>
+                <th className="px-3 py-2 font-medium">端口映射</th>
                 <th className="px-3 py-2 font-medium">CPU</th>
                 <th className="px-3 py-2 font-medium">内存</th>
               </tr>
@@ -110,7 +113,20 @@ export function DockerPage({ onNotice }: { onNotice: (message: string, tone?: "s
                       {container.state}
                     </span>
                   </td>
-                  <td className="max-w-[200px] truncate px-3 py-2 font-mono text-[11px] text-muted-foreground" title={container.ports}>{container.ports || "—"}</td>
+                  {/*
+                    端口映射是这一页最常被查的字段, 所以不截断: docker ps 的端口串
+                    可以有六七个映射, truncate 会把它变成 "0.0.0.0:8080->80/tcp, 0.0…",
+                    用户根本读不到后半截。改成每个映射一行, 允许换行。
+                  */}
+                  <td className="px-3 py-2 align-top">
+                    {container.ports
+                      ? <div className="flex flex-col gap-0.5 font-mono text-[11px] text-muted-foreground">
+                          {container.ports.split(", ").filter(Boolean).map((mapping) => (
+                            <span key={mapping} className="whitespace-nowrap">{mapping}</span>
+                          ))}
+                        </div>
+                      : <span className="text-muted-foreground">—</span>}
+                  </td>
                   <td className="px-3 py-2 font-mono tabular-nums">{container.cpu_perc ?? "—"}</td>
                   <td className="px-3 py-2">
                     {container.mem_usage ? (

@@ -59,8 +59,10 @@ export function OpsPage({ onNotice }: { onNotice: (message: string, tone?: "succ
   const swapPct = sample && sample.swap_total_bytes > 0 ? (sample.swap_used_bytes / sample.swap_total_bytes) * 100 : 0
 
   return (
-    <div className="space-y-4">
-      <div className="flex items-center justify-between">
+    // 与 Docker 子页同因: 终端页的 main 在 lg 断点是 lg:h-full lg:overflow-hidden,
+    // 所以子页必须自己滚动, 否则磁盘表与容器清单被裁在视口外且无法滚动。
+    <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto">
+      <div className="flex shrink-0 items-center justify-between">
         <div className="flex items-center gap-1.5 text-sm font-semibold">
           <Server className="size-4 text-muted-foreground" />主机实时状态
         </div>

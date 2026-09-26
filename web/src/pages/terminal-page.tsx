@@ -447,7 +447,9 @@ export function TerminalPage({
 
   if (status && !status.two_factor_verified) {
     return (
-      <div className="space-y-4">
+      // 与已解锁分支同一套高度约定: 根占满可用高度并自带 padding(因为 App 的 main
+      // 在终端页不再提供 padding), 子页用 flex-1 拿剩余空间并自己滚动。
+      <div className="flex h-full min-h-0 flex-col gap-4 overflow-y-auto px-4 py-5 sm:px-6 lg:px-8 lg:py-7">
         <PageHeader />
         <Tabs value={tab} onValueChange={(value) => setTab(value as TerminalTab)}>
           <TabsList>
@@ -472,8 +474,8 @@ export function TerminalPage({
   }
 
   return (
-    <div className="flex h-full min-h-0 flex-col gap-3">
-      <div className="flex items-start justify-between gap-3">
+    <div className="flex h-full min-h-0 flex-col gap-3 px-4 py-5 sm:px-6 lg:px-8 lg:py-7">
+      <div className="flex shrink-0 items-start justify-between gap-3">
         <PageHeader />
         <button
           type="button"
