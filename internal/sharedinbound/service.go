@@ -120,6 +120,7 @@ func (s *Service) Reconcile(ctx context.Context) (Result, error) {
 			BindAddress:    target.bindAddress,
 			Port:           target.port,
 			ProxyGroupID:   item.ProxyGroupID,
+			NodeID:         item.NodeID,
 			Transport:      target.transport,
 			PublicEndpoint: item.PublicEndpoint,
 			SharedInbound:  target.owner,

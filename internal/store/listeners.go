@@ -9,12 +9,25 @@ import (
 )
 
 type ListenerRecord struct {
-	ID                  string
-	Name                string
-	Kind                string
-	BindAddress         string
-	Port                int
-	ProxyGroupID        string
+	ID           string
+	Name         string
+	Kind         string
+	BindAddress  string
+	Port         int
+	ProxyGroupID string
+	// NodeID pins this listener's egress to one node, addressed by the
+	// control-plane node id a proxy group would also use. It is the direct form
+	// of "send this service out through that node": without it the only way to
+	// name a single node was to build a one-member group for it, which is why
+	// this installation held 57 groups that pinned only 28 distinct nodes.
+	//
+	// See .agents/notes/implemented/feature/2026-09-26-listener-pins-a-node.md
+	// for why this is single-valued and why the column must stay nullable.
+	// It is a nullable reference, not NOT NULL DEFAULT '': SQLite treats NULL in
+	// a foreign-key column as "no parent", while an empty string is compared as
+	// a real value and fails the constraint. Empty means "not pinned" and is
+	// stored as NULL.
+	NodeID              string
 	AuthMode            string
 	AuthConfigEncrypted []byte
 	TransportJSON       string
@@ -36,8 +49,8 @@ INSERT INTO listeners(
     id, name, listener_type, kind, bind_address, port, proxy_group_id,
     auth_policy_encrypted, auth_mode, auth_config_encrypted,
     transport_json, public_endpoint_json, share_token, shared_inbound,
-    enabled, version, created_at, updated_at
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    enabled, version, created_at, updated_at, node_id
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULLIF(?, ''))
 `,
 		record.ID,
 		record.Name,
@@ -57,6 +70,7 @@ INSERT INTO listeners(
 		record.Version,
 		record.CreatedAt.UTC().Format(time.RFC3339Nano),
 		record.UpdatedAt.UTC().Format(time.RFC3339Nano),
+		record.NodeID,
 	)
 	if err != nil {
 		if isUniqueConstraint(err) {
@@ -109,7 +123,7 @@ SET
     name = ?, listener_type = ?, kind = ?, bind_address = ?, port = ?, proxy_group_id = ?,
     auth_policy_encrypted = ?, auth_mode = ?, auth_config_encrypted = ?,
     transport_json = ?, public_endpoint_json = ?, shared_inbound = ?, enabled = ?,
-    version = version + 1, updated_at = ?
+    node_id = NULLIF(?, ''), version = version + 1, updated_at = ?
 WHERE id = ? AND version = ?
 `,
 		record.Name,
@@ -125,6 +139,7 @@ WHERE id = ? AND version = ?
 		record.PublicEndpointJSON,
 		record.SharedInbound,
 		boolToInteger(record.Enabled),
+		record.NodeID,
 		record.UpdatedAt.UTC().Format(time.RFC3339Nano),
 		record.ID,
 		expectedVersion,
@@ -170,7 +185,8 @@ const listenerSelect = `
 SELECT
     id, name, kind, bind_address, port, proxy_group_id, auth_mode,
     auth_config_encrypted, transport_json, public_endpoint_json,
-    share_token, shared_inbound, enabled, version, created_at, updated_at
+    share_token, shared_inbound, enabled, version, created_at, updated_at,
+    COALESCE(node_id, '')
 FROM listeners`
 
 // GetListenerByShareToken resolves the public subscription-export token.
@@ -231,6 +247,7 @@ func scanListener(source scanner) (ListenerRecord, error) {
 		&record.Version,
 		&createdAt,
 		&updatedAt,
+		&record.NodeID,
 	); err != nil {
 		return ListenerRecord{}, err
 	}

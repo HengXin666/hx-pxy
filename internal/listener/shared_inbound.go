@@ -537,23 +537,7 @@ func (s *Service) createSharedAggregate(ctx context.Context, member SharedInboun
 // anchor itself never carries traffic. The first enabled group (by id, for a
 // stable choice) is therefore safe.
 func (s *Service) sharedInboundAnchorGroup(ctx context.Context) (string, error) {
-	groups, err := s.repository.ListProxyGroups(ctx)
-	if err != nil {
-		return "", err
-	}
-	anchor := ""
-	for _, group := range groups {
-		if !group.Enabled {
-			continue
-		}
-		if anchor == "" || group.ID < anchor {
-			anchor = group.ID
-		}
-	}
-	if anchor == "" {
-		return "", fmt.Errorf("%w: create and enable at least one proxy group before using the shared inbound", ErrInvalid)
-	}
-	return anchor, nil
+	return s.egressAnchorGroup(ctx)
 }
 
 func sharedAggregateName(owner, kind string) string {

@@ -31,6 +31,10 @@ type Repository interface {
 	RotateListenerShareToken(context.Context, string, string) (store.ListenerRecord, error)
 	DeleteListener(context.Context, string, int) error
 	GetProxyGroup(context.Context, string) (store.ProxyGroupRecord, error)
+	// GetNodeConfig resolves a listener's pinned node so create/update can
+	// reject an unknown or retired node at the API boundary instead of at
+	// compile time, where one bad row refuses the whole configuration.
+	GetNodeConfig(context.Context, string) (store.NodeConfigRecord, error)
 	// ListProxyGroups anchors a shared-inbound listener to an enabled group.
 	// Every member is routed by an IN-USER rule, so the anchor is only a
 	// schema-valid reference and never carries traffic of its own.
@@ -69,12 +73,17 @@ type PublicEndpoint struct {
 }
 
 type Listener struct {
-	ID             string         `json:"id"`
-	Name           string         `json:"name"`
-	Kind           string         `json:"kind"`
-	BindAddress    string         `json:"bind_address"`
-	Port           int            `json:"port"`
-	ProxyGroupID   string         `json:"proxy_group_id"`
+	ID           string `json:"id"`
+	Name         string `json:"name"`
+	Kind         string `json:"kind"`
+	BindAddress  string `json:"bind_address"`
+	Port         int    `json:"port"`
+	ProxyGroupID string `json:"proxy_group_id"`
+	// NodeID pins this listener's egress to one node. When set, the listener
+	// bypasses ProxyGroupID entirely: its IN-USER rule targets the node's name
+	// instead of a group name. Empty means the listener is still served by the
+	// group in ProxyGroupID.
+	NodeID         string         `json:"node_id,omitempty"`
 	AuthConfigured bool           `json:"auth_configured"`
 	Transport      Transport      `json:"transport"`
 	PublicEndpoint PublicEndpoint `json:"public_endpoint"`
@@ -96,11 +105,18 @@ type Listener struct {
 }
 
 type CreateRequest struct {
-	Name           string         `json:"name"`
-	Kind           string         `json:"kind"`
-	BindAddress    string         `json:"bind_address"`
-	Port           int            `json:"port"`
-	ProxyGroupID   string         `json:"proxy_group_id"`
+	Name         string `json:"name"`
+	Kind         string `json:"kind"`
+	BindAddress  string `json:"bind_address"`
+	Port         int    `json:"port"`
+	ProxyGroupID string `json:"proxy_group_id"`
+	// NodeID is the preferred way to name the egress of a service: it pins the
+	// listener to exactly one node. Leave ProxyGroupID empty when using it.
+	//
+	// When both are set NodeID wins, because "this service goes out through
+	// that node" is strictly more specific than "that group". The group is
+	// kept only because the row still has to satisfy the NOT NULL foreign key.
+	NodeID         string         `json:"node_id,omitempty"`
 	Auth           *Auth          `json:"auth,omitempty"`
 	Transport      Transport      `json:"transport,omitempty"`
 	PublicEndpoint PublicEndpoint `json:"public_endpoint,omitempty"`
@@ -110,12 +126,17 @@ type CreateRequest struct {
 }
 
 type UpdateRequest struct {
-	Version        int            `json:"version"`
-	Name           string         `json:"name"`
-	Kind           string         `json:"kind"`
-	BindAddress    string         `json:"bind_address"`
-	Port           int            `json:"port"`
-	ProxyGroupID   string         `json:"proxy_group_id"`
+	Version      int    `json:"version"`
+	Name         string `json:"name"`
+	Kind         string `json:"kind"`
+	BindAddress  string `json:"bind_address"`
+	Port         int    `json:"port"`
+	ProxyGroupID string `json:"proxy_group_id"`
+	// NodeID pins the listener to one node; see CreateRequest.NodeID. When set
+	// the listener stops using ProxyGroupID for egress, but the two must agree
+	// on nothing else: a pinned listener may keep any group as its fallback
+	// anchor, and one that drops the pin falls back to ProxyGroupID.
+	NodeID         string         `json:"node_id,omitempty"`
 	Auth           *Auth          `json:"auth,omitempty"`
 	Transport      Transport      `json:"transport,omitempty"`
 	PublicEndpoint PublicEndpoint `json:"public_endpoint,omitempty"`
@@ -164,7 +185,7 @@ func (s *Service) Create(ctx context.Context, request CreateRequest) (Listener, 
 	if err != nil {
 		return Listener{}, err
 	}
-	normalized, err := s.normalize(ctx, id, request.Name, request.Kind, request.BindAddress, request.Port, request.ProxyGroupID, request.Auth, nil, request.Transport, request.PublicEndpoint, enabled)
+	normalized, err := s.normalize(ctx, id, request.Name, request.Kind, request.BindAddress, request.Port, request.ProxyGroupID, request.NodeID, request.Auth, nil, request.Transport, request.PublicEndpoint, enabled)
 	if err != nil {
 		return Listener{}, err
 	}
@@ -196,6 +217,7 @@ func (s *Service) Create(ctx context.Context, request CreateRequest) (Listener, 
 		BindAddress:         normalized.BindAddress,
 		Port:                normalized.Port,
 		ProxyGroupID:        normalized.ProxyGroupID,
+		NodeID:              normalized.NodeID,
 		AuthMode:            normalized.AuthMode,
 		AuthConfigEncrypted: normalized.AuthConfigEncrypted,
 		TransportJSON:       normalized.TransportJSON,
@@ -258,7 +280,7 @@ func (s *Service) Update(ctx context.Context, id string, request UpdateRequest) 
 	if request.ClearAuth {
 		currentAuth = nil
 	}
-	normalized, err := s.normalize(ctx, id, request.Name, request.Kind, request.BindAddress, request.Port, request.ProxyGroupID, request.Auth, currentAuth, request.Transport, request.PublicEndpoint, request.Enabled)
+	normalized, err := s.normalize(ctx, id, request.Name, request.Kind, request.BindAddress, request.Port, request.ProxyGroupID, request.NodeID, request.Auth, currentAuth, request.Transport, request.PublicEndpoint, request.Enabled)
 	if err != nil {
 		return Listener{}, err
 	}
@@ -281,6 +303,7 @@ func (s *Service) Update(ctx context.Context, id string, request UpdateRequest) 
 	existing.BindAddress = normalized.BindAddress
 	existing.Port = normalized.Port
 	existing.ProxyGroupID = normalized.ProxyGroupID
+	existing.NodeID = normalized.NodeID
 	existing.AuthMode = normalized.AuthMode
 	existing.AuthConfigEncrypted = normalized.AuthConfigEncrypted
 	existing.TransportJSON = normalized.TransportJSON
@@ -330,6 +353,7 @@ type normalizedListener struct {
 	BindAddress         string
 	Port                int
 	ProxyGroupID        string
+	NodeID              string
 	AuthMode            string
 	AuthConfigEncrypted []byte
 	TransportJSON       string
@@ -345,6 +369,7 @@ func (s *Service) normalize(
 	bindAddress string,
 	port int,
 	groupID string,
+	nodeID string,
 	auth *Auth,
 	existingAuth []byte,
 	transport Transport,
@@ -370,9 +395,38 @@ func (s *Service) normalize(
 	if port < 1 || port > 65535 {
 		return normalizedListener{}, fmt.Errorf("%w: port must be between 1 and 65535", ErrInvalid)
 	}
+	// Egress resolution. A listener is addressed either by the one node it is
+	// pinned to or by the group that selects for it, and the node pin wins: it
+	// is the more specific statement, and it is what lets a caller reach a
+	// single node without first materialising a one-member group for it.
+	//
+	nodeID = strings.TrimSpace(nodeID)
 	groupID = strings.TrimSpace(groupID)
+	if nodeID != "" {
+		node, err := s.repository.GetNodeConfig(ctx, nodeID)
+		if errors.Is(err, store.ErrNotFound) {
+			return normalizedListener{}, fmt.Errorf("%w: node does not exist", ErrInvalid)
+		}
+		if err != nil {
+			return normalizedListener{}, err
+		}
+		if node.LifecycleState == "disabled" || node.LifecycleState == "retired" {
+			return normalizedListener{}, fmt.Errorf("%w: node is %s and cannot carry traffic", ErrInvalid, node.LifecycleState)
+		}
+		// The row still has to name a live group: proxy_group_id is NOT NULL and
+		// the aggregate rows use the group as their fallback anchor. The pin is
+		// what carries traffic, so a pinned listener never requires the caller to
+		// name a group — it inherits the same anchor a shared-inbound row uses.
+		if groupID == "" {
+			anchor, err := s.egressAnchorGroup(ctx)
+			if err != nil {
+				return normalizedListener{}, err
+			}
+			groupID = anchor
+		}
+	}
 	if groupID == "" {
-		return normalizedListener{}, fmt.Errorf("%w: proxy_group_id is required", ErrInvalid)
+		return normalizedListener{}, fmt.Errorf("%w: proxy_group_id or node_id is required", ErrInvalid)
 	}
 	group, err := s.repository.GetProxyGroup(ctx, groupID)
 	if errors.Is(err, store.ErrNotFound) {
@@ -431,6 +485,7 @@ func (s *Service) normalize(
 		BindAddress:         ip.String(),
 		Port:                port,
 		ProxyGroupID:        groupID,
+		NodeID:              nodeID,
 		AuthMode:            authMode,
 		AuthConfigEncrypted: authEncrypted,
 		TransportJSON:       transportJSON,
@@ -460,6 +515,7 @@ func fromRecord(record store.ListenerRecord) Listener {
 		BindAddress:            record.BindAddress,
 		Port:                   record.Port,
 		ProxyGroupID:           record.ProxyGroupID,
+		NodeID:                 record.NodeID,
 		AuthConfigured:         record.AuthMode != "none" && len(record.AuthConfigEncrypted) > 0,
 		Transport:              transport,
 		PublicEndpoint:         publicEndpoint,
@@ -471,6 +527,38 @@ func fromRecord(record store.ListenerRecord) Listener {
 		CreatedAt:              record.CreatedAt,
 		UpdatedAt:              record.UpdatedAt,
 	}
+}
+
+// egressAnchorGroup resolves the proxy group a listener row falls back on when
+// its egress is named directly.
+//
+// Mihomo's listener schema carries a proxy group name and the compiler refuses a
+// configuration whose listener names a missing group, so every row has to
+// reference a live one even when an IN-USER rule is what actually routes its
+// traffic. The first enabled group (by id, for a stable choice) is therefore
+// safe as an anchor: it never carries the pinned listener's traffic, and
+// requiring callers to name a group would defeat the point of pinning a node.
+//
+// Shared-inbound aggregate rows already rely on exactly this rule, so it lives
+// here once and both paths call it.
+func (s *Service) egressAnchorGroup(ctx context.Context) (string, error) {
+	groups, err := s.repository.ListProxyGroups(ctx)
+	if err != nil {
+		return "", err
+	}
+	anchor := ""
+	for _, group := range groups {
+		if !group.Enabled {
+			continue
+		}
+		if anchor == "" || group.ID < anchor {
+			anchor = group.ID
+		}
+	}
+	if anchor == "" {
+		return "", fmt.Errorf("%w: create and enable at least one proxy group before naming a node directly", ErrInvalid)
+	}
+	return anchor, nil
 }
 
 // SupportedKinds lists the listener kinds the control plane can publish. It is

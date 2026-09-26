@@ -1069,6 +1069,26 @@ WHERE shared_inbound = 'standard'
       );
 `,
 	},
+	{
+		version: 38,
+		name:    "listener_pins_a_node_directly",
+		// 20260926 用户决策：一个 Listener 要能直接指定「走哪一个节点」，不再被迫为每个
+		// 节点建一个只有单个成员的代理组。实测本机 57 个组只钉了 28 个不同节点，同一节点
+		// 最多被建了 5 次组 —— 组在这里被当成了「指向一个节点」的句柄。
+		//
+		// 用 ALTER TABLE ADD COLUMN 而不是重建表：本表的唯一索引在线上库里有可证的重复项
+		// （listeners_dedicated_endpoint 与 listeners_share_token 各出现两次），按 33 号迁移
+		// 的 create/copy/drop/rename 写法重放会失败。ADD COLUMN 不触碰既有列与索引，因此
+		// 没有这个风险。
+		//
+		// 该列必须【可空】，不能是 NOT NULL DEFAULT ''：SQLite 的外键列含 NULL 时整个约束
+		// 判定为真，而空串会被当成真实值去比对，找不到就报 FOREIGN KEY constraint failed
+		// （本地 sqlite3 两种行为都实测过）。存量行都不带节点，所以这里必须留 NULL。
+		sql: `
+ALTER TABLE listeners
+    ADD COLUMN node_id TEXT REFERENCES nodes(id) ON DELETE SET NULL;
+`,
+	},
 }
 
 func (s *Store) migrate(ctx context.Context) error {

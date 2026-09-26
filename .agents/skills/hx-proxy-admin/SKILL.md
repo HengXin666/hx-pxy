@@ -118,6 +118,7 @@ auth:     svc-... / ...           ← 已生成的凭据
 | 手上有代理清单但没有 URL | `quickstart` 的 `subscription_inline`（清单直接进请求体） |
 | 订阅已经存在且已刷新 | `POST /api/v1/proxy-services`（组 + Listener） |
 | 要复用多个订阅 / 组合多个组 | 分步：`subscriptions` → `refresh` → `proxy-groups` → `listeners` |
+| 只想让**某一个服务**固定走**某一个节点** | `POST /api/v1/listeners` 带 `node_id`（**不需要建组**） |
 | 链式（把上游组当出口），按组 | `proxy-groups` 的 `dialer_proxy_group_id` —— 任意组，任意深度 |
 | 链式，按住宅渠道 | 住宅供应商端点的 `upstream_proxy_group_id` |
 
@@ -128,6 +129,14 @@ auth:     svc-... / ...           ← 已生成的凭据
 
 目录的 `not_supported` 段落是**产品边界**，不是能力缺失。关键三条：
 
+- **指名单个节点用 `node_id`，不要为它建一个只有单个成员的组**。
+  `POST /api/v1/listeners` 与 `PUT /api/v1/listeners/<id>` 都接受 `node_id`（控制面的节点 ID，取自 `GET /api/v1/nodes`）。
+  这是让「一个服务从一个节点出网」的**直接**写法：服务端的 `IN-USER` 规则会以该节点的 Mihomo 代理名为目标。
+  它与 `proxy_group_id` 的关系是：**二选一，`node_id` 优先**；只给 `node_id` 时行上的组会被自动填成家族的锚组（该锚组不承载这个服务的流量）。
+  两者的区别只在语义：`proxy_group_id` 是「这个服务由那个组来选点」，`node_id` 是「这个服务就走那个节点」。
+  用后者时，被指向的节点消失/停用会让整份配置编译失败并**指名那条 Listener**，不会静默退化成别的出口。
+  反例（别再这么干）：为一个节点建一个 `manual` 组、里面只放它一个 —— 那正是「组当句柄用」，
+  实测本机一度积出 57 个单成员组却只指向 28 个不同节点。
 - 控制面**不承载流量**：它是控制面，数据面是 Mihomo 受管进程。
   它不会进入数据转发路径。
 - 控制面**不替你轮询/选点/排名**：哪些节点可用、延迟多少，取决于你要访问的目标，

@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/HengXin666/HX-ProxyGroup/internal/proxygroup"
 	"github.com/HengXin666/HX-ProxyGroup/internal/store"
 )
 
@@ -33,8 +32,16 @@ func validateResidentialDialerChains(
 			return fmt.Errorf("decode proxy group %q source spec: %w", record.Name, err)
 		}
 		edges[record.ID] = append([]string(nil), spec.GroupIDs...)
-		set := make(map[string]struct{})
-		for _, nodeID := range proxygroup.ResolveNodeIDs(spec, candidates) {
+		// Membership comes from the compiler's own resolution rather than a copy.
+		// A duplicate derivation here would let the graph this validator walks
+		// drift from the graph the document actually emits, and a cycle check
+		// against the wrong graph passes exactly when it must fail.
+		resolved, err := groupNodeIDs(record, candidates)
+		if err != nil {
+			return err
+		}
+		set := make(map[string]struct{}, len(resolved))
+		for _, nodeID := range resolved {
 			set[nodeID] = struct{}{}
 		}
 		members[record.ID] = set

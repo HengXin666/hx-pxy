@@ -29,7 +29,15 @@ type compiledSharedListener struct {
 // port are shared.
 type sharedMember struct {
 	username string
-	group    string
+	// action is the routing rule's target: a Mihomo proxy-group name for a
+	// group-backed member, or a Mihomo proxy name for a listener pinned to one
+	// node. See .agents/notes/implemented/feature/2026-09-26-listener-pins-a-node.md.
+	// Mihomo resolves a rule target against proxies and proxy-groups
+	// alike, so a node name is a legal target; measured on 1.19.30, naming a
+	// proxy that does not exist fails the whole configuration with
+	// "proxy [x] not found" rather than being ignored, which is what makes a
+	// pinned node safe to emit here.
+	action   string
 	kind     string
 	uuid     string
 	password string
@@ -48,6 +56,7 @@ func (c *Compiler) compileSharedInbounds(
 	settings systemsettings.Settings,
 	listeners []store.ListenerRecord,
 	enabledGroups map[string]store.ProxyGroupRecord,
+	nodeNameByID map[string]string,
 ) ([]compiledSharedListener, []string, error) {
 	shared := settings.SharedInbound
 	if !shared.Enabled() && !shared.AppliesToWebSocket() {
@@ -102,7 +111,7 @@ func (c *Compiler) compileSharedInbounds(
 			// listener stays but publishes nothing.
 			continue
 		}
-		member, err := c.sharedMemberFor(record, group)
+		member, err := c.sharedMemberFor(record, group, nodeNameByID)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -186,7 +195,11 @@ func sharedCarrierEndpoint(shared systemsettings.SharedInboundSettings, owner st
 	return shared.MixedBindAddress, shared.MixedPort
 }
 
-func (c *Compiler) sharedMemberFor(record store.ListenerRecord, group store.ProxyGroupRecord) (sharedMember, error) {
+func (c *Compiler) sharedMemberFor(
+	record store.ListenerRecord,
+	group store.ProxyGroupRecord,
+	recordedNodes map[string]string,
+) (sharedMember, error) {
 	if record.AuthMode != "userpass" || len(record.AuthConfigEncrypted) == 0 {
 		return sharedMember{}, fmt.Errorf(
 			"listener %q has no credentials but the shared inbound routes members by username; enable username/password authentication",
@@ -208,9 +221,28 @@ func (c *Compiler) sharedMemberFor(record store.ListenerRecord, group store.Prox
 	// that exact username is what Mihomo must know and what the IN-USER rule
 	// must match. Deriving a synthetic name here would make every published
 	// subscription unusable.
+	// A pinned listener targets the node's compiled proxy name; an unpinned one
+	// keeps the historical group target. Resolving the name here — rather than
+	// emitting the raw id — is what keeps a rule from pointing at a name that
+	// only exists in the control plane. The lookup reads the same records the
+	// proxy list is built from, so the two cannot drift.
+	action := group.Name
+	if nodeID := strings.TrimSpace(record.NodeID); nodeID != "" {
+		name, exists := recordedNodes[nodeID]
+		if !exists {
+			// The compiler refuses the whole configuration when a rule names an
+			// unknown proxy, so this must be an error naming the listener rather
+			// than a rule that takes the data plane down at Mihomo's validation.
+			return sharedMember{}, fmt.Errorf(
+				"listener %q is pinned to node %q, which is missing or disabled",
+				record.Name, nodeID,
+			)
+		}
+		action = name
+	}
 	member := sharedMember{
 		username: strings.TrimSpace(auth.Username),
-		group:    group.Name,
+		action:   action,
 		kind:     record.Kind,
 	}
 	if member.username == "" {
@@ -261,7 +293,7 @@ func (c *Compiler) compileSharedListenerConfig(
 			user["password"] = member.password
 		}
 		users = append(users, user)
-		rules = append(rules, "AND,((IN-NAME,"+name+"),(IN-USER,"+member.username+")),"+member.group)
+		rules = append(rules, "AND,((IN-NAME,"+name+"),(IN-USER,"+member.username+")),"+member.action)
 	}
 	if len(users) == 0 {
 		return nil, nil, nil

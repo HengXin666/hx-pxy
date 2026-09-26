@@ -118,6 +118,7 @@ func (c *Compiler) Compile(ctx context.Context) (Compiled, error) {
 		return Compiled{}, err
 	}
 	nodeByID := make(map[string]compiledNode, len(nodeRecords))
+	nodeNameByID := make(map[string]string, len(nodeRecords))
 	proxies := make([]map[string]any, 0, len(nodeRecords))
 	for _, record := range nodeRecords {
 		proxyName := nodeProxyName(record.Fingerprint)
@@ -126,6 +127,7 @@ func (c *Compiler) Compile(ctx context.Context) (Compiled, error) {
 			return Compiled{}, err
 		}
 		nodeByID[record.ID] = compiledNode{Name: proxyName, Config: config}
+		nodeNameByID[record.ID] = proxyName
 		proxies = append(proxies, config)
 	}
 	if err := validateResidentialDialerChains(groups, nodeRecords, nodeByID, candidates, groupNameByID); err != nil {
@@ -181,9 +183,22 @@ func (c *Compiler) Compile(ctx context.Context) (Compiled, error) {
 		if !record.Enabled || listener.SharedInboundOwnerOf(record) != "" {
 			continue
 		}
+		// A listener that pins a node still names a group on its row (the column is
+		// NOT NULL and the aggregate family uses a group as its anchor), but it must
+		// not dereference that group: the anchor may be empty or disabled, and a
+		// pinned listener's traffic never reaches it. Only an unpinned listener
+		// needs a live group to exist.
 		group, exists := enabledGroups[record.ProxyGroupID]
-		if !exists {
+		if !exists && strings.TrimSpace(record.NodeID) == "" {
 			return Compiled{}, fmt.Errorf("listener %q references a missing or disabled proxy group", record.Name)
+		}
+		egressName := group.Name
+		if nodeID := strings.TrimSpace(record.NodeID); nodeID != "" {
+			name, exists := nodeNameByID[nodeID]
+			if !exists {
+				return Compiled{}, fmt.Errorf("listener %q is pinned to node %q, which is missing or disabled", record.Name, nodeID)
+			}
+			egressName = name
 		}
 		endpointKey := fmt.Sprintf("%s:%d", record.BindAddress, record.Port)
 		if other, exists := usedEndpoints[endpointKey]; exists {
@@ -201,14 +216,14 @@ func (c *Compiler) Compile(ctx context.Context) (Compiled, error) {
 			usedEdgeRoutes[routeKey] = record.Name
 		}
 		clientRoutesForListener := routesByListener[record.ID]
-		config, err := c.compileListener(record, group.Name, clientRoutesForListener)
+		config, err := c.compileListener(record, egressName, clientRoutesForListener)
 		if err != nil {
 			return Compiled{}, err
 		}
 		if len(clientRoutesForListener) > 0 {
 			residentialFallbackRules = append(
 				residentialFallbackRules,
-				"IN-NAME,"+listenerConfigName(record.ID)+","+group.Name,
+				"IN-NAME,"+listenerConfigName(record.ID)+","+egressName,
 			)
 		}
 		listenerConfigs = append(listenerConfigs, config)
@@ -223,7 +238,7 @@ func (c *Compiler) Compile(ctx context.Context) (Compiled, error) {
 	// One client, many services: the aggregate listeners carry every managed
 	// service behind two ports. Members are selected by their service-scoped
 	// username, so each service keeps its own credential, protocol and group.
-	sharedListeners, sharedRules, err := c.compileSharedInbounds(settings, listeners, enabledGroups)
+	sharedListeners, sharedRules, err := c.compileSharedInbounds(settings, listeners, enabledGroups, nodeNameByID)
 	if err != nil {
 		return Compiled{}, err
 	}
@@ -415,6 +430,22 @@ func sortGroupsByDependency(groups []store.ProxyGroupRecord) []store.ProxyGroupR
 		visit(position)
 	}
 	return ordered
+}
+
+// groupNodeIDs is the one resolution of "which nodes does this group carry".
+// Both the emitted member list and the dialer-chain validator call it, because a
+// second copy of this derivation is exactly how a chain check drifts away from
+// the graph it is supposed to be checking (this repository has already been bitten
+// once by a stale predicate surviving in a second location).
+func groupNodeIDs(
+	record store.ProxyGroupRecord,
+	candidates []store.GroupNodeCandidate,
+) ([]string, error) {
+	spec, err := decodeSourceSpec(record.SourceSpecJSON)
+	if err != nil {
+		return nil, fmt.Errorf("decode group %q source spec: %w", record.Name, err)
+	}
+	return proxygroup.ResolveNodeIDs(spec, candidates), nil
 }
 
 func compileGroup(
