@@ -17,42 +17,42 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/HengXin666/HX-ProxyGroup/internal/alert"
-	"github.com/HengXin666/HX-ProxyGroup/internal/api"
-	"github.com/HengXin666/HX-ProxyGroup/internal/artifact"
-	"github.com/HengXin666/HX-ProxyGroup/internal/auth"
-	"github.com/HengXin666/HX-ProxyGroup/internal/bundle"
-	"github.com/HengXin666/HX-ProxyGroup/internal/config"
-	"github.com/HengXin666/HX-ProxyGroup/internal/dataplane/mihomo"
-	"github.com/HengXin666/HX-ProxyGroup/internal/fleet"
-	"github.com/HengXin666/HX-ProxyGroup/internal/instance"
-	"github.com/HengXin666/HX-ProxyGroup/internal/listener"
-	"github.com/HengXin666/HX-ProxyGroup/internal/metrics"
-	"github.com/HengXin666/HX-ProxyGroup/internal/node"
-	"github.com/HengXin666/HX-ProxyGroup/internal/nodeparse"
-	"github.com/HengXin666/HX-ProxyGroup/internal/proxygroup"
-	"github.com/HengXin666/HX-ProxyGroup/internal/proxylog"
-	"github.com/HengXin666/HX-ProxyGroup/internal/proxyservice"
-	"github.com/HengXin666/HX-ProxyGroup/internal/quickstart"
-	"github.com/HengXin666/HX-ProxyGroup/internal/residential"
-	"github.com/HengXin666/HX-ProxyGroup/internal/routingrules"
-	"github.com/HengXin666/HX-ProxyGroup/internal/scheduler"
-	"github.com/HengXin666/HX-ProxyGroup/internal/secret"
-	"github.com/HengXin666/HX-ProxyGroup/internal/store"
-	"github.com/HengXin666/HX-ProxyGroup/internal/subscription"
-	"github.com/HengXin666/HX-ProxyGroup/internal/systemsettings"
-	"github.com/HengXin666/HX-ProxyGroup/internal/terminal"
-	"github.com/HengXin666/HX-ProxyGroup/internal/transfer"
+	"github.com/HengXin666/hx-pxy/internal/alert"
+	"github.com/HengXin666/hx-pxy/internal/api"
+	"github.com/HengXin666/hx-pxy/internal/artifact"
+	"github.com/HengXin666/hx-pxy/internal/auth"
+	"github.com/HengXin666/hx-pxy/internal/bundle"
+	"github.com/HengXin666/hx-pxy/internal/config"
+	"github.com/HengXin666/hx-pxy/internal/dataplane/mihomo"
+	"github.com/HengXin666/hx-pxy/internal/fleet"
+	"github.com/HengXin666/hx-pxy/internal/instance"
+	"github.com/HengXin666/hx-pxy/internal/listener"
+	"github.com/HengXin666/hx-pxy/internal/metrics"
+	"github.com/HengXin666/hx-pxy/internal/node"
+	"github.com/HengXin666/hx-pxy/internal/nodeparse"
+	"github.com/HengXin666/hx-pxy/internal/proxygroup"
+	"github.com/HengXin666/hx-pxy/internal/proxylog"
+	"github.com/HengXin666/hx-pxy/internal/proxyservice"
+	"github.com/HengXin666/hx-pxy/internal/quickstart"
+	"github.com/HengXin666/hx-pxy/internal/residential"
+	"github.com/HengXin666/hx-pxy/internal/routingrules"
+	"github.com/HengXin666/hx-pxy/internal/scheduler"
+	"github.com/HengXin666/hx-pxy/internal/secret"
+	"github.com/HengXin666/hx-pxy/internal/store"
+	"github.com/HengXin666/hx-pxy/internal/subscription"
+	"github.com/HengXin666/hx-pxy/internal/systemsettings"
+	"github.com/HengXin666/hx-pxy/internal/terminal"
+	"github.com/HengXin666/hx-pxy/internal/transfer"
 )
 
 var version = "dev"
 
 func main() {
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
-	logger.Info("process starting", "component", "hx-proxygroupd", "version", version, "pid", os.Getpid())
+	logger.Info("process starting", "component", "hx-pxyd", "version", version, "pid", os.Getpid())
 	defer func() {
 		if recovered := recover(); recovered != nil {
-			logger.Error("process panicked", "component", "hx-proxygroupd", "panic_type", fmt.Sprintf("%T", recovered), "stack", string(debug.Stack()))
+			logger.Error("process panicked", "component", "hx-pxyd", "panic_type", fmt.Sprintf("%T", recovered), "stack", string(debug.Stack()))
 			os.Exit(2)
 		}
 	}()
@@ -66,15 +66,15 @@ func main() {
 		return
 	}
 	if err := run(logger); err != nil {
-		logger.Error("process exited with error", "component", "hx-proxygroupd", "error", err)
+		logger.Error("process exited with error", "component", "hx-pxyd", "error", err)
 		os.Exit(1)
 	}
-	logger.Info("process exited", "component", "hx-proxygroupd", "status", "ok")
+	logger.Info("process exited", "component", "hx-pxyd", "status", "ok")
 }
 
 func run(logger *slog.Logger) error {
 	cfg := config.Default()
-	flags := flag.NewFlagSet("hx-proxygroupd", flag.ContinueOnError)
+	flags := flag.NewFlagSet("hx-pxyd", flag.ContinueOnError)
 	flags.SetOutput(os.Stderr)
 	flags.StringVar(&cfg.ListenAddress, "listen", cfg.ListenAddress, "HTTP management API listen address")
 	flags.StringVar(&cfg.DataDirectory, "data-dir", cfg.DataDirectory, "persistent data directory")
@@ -118,6 +118,14 @@ func run(logger *slog.Logger) error {
 
 	startupContext, cancelStartup := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancelStartup()
+	// The database file was renamed from hx-proxygroup.db when the project took
+	// the hx-pxy name. Adopt the old file instead of creating a fresh one:
+	// opening a new path would silently produce an empty administrator account
+	// and make the existing login look broken. See
+	// .agents/notes/implemented/architecture/2026-10-03-rename-to-hx-pxy.md.
+	if err := migrateLegacyDatabasePath(cfg.DatabasePath, logger); err != nil {
+		return err
+	}
 	database, err := store.Open(startupContext, cfg.DatabasePath)
 	if err != nil {
 		return err
@@ -167,6 +175,12 @@ func run(logger *slog.Logger) error {
 			logger.Error("shutdown Mihomo", "error", err)
 		}
 	}()
+	// 数据面看护: mihomo 进程退出后不会自愈, 而控制面仍然健康 ——
+	// 故障会表现为"代理在跑但所有请求失败"。这里让它自己把数据面拉起来。
+	// 生命周期随本进程: Close 会 StopSupervisor, 不留游离 goroutine。
+	if !cfg.MihomoExternal {
+		mihomoManager.StartSupervisor(context.Background(), 0)
+	}
 	subscriptionService, err := subscription.NewService(
 		database,
 		secretBox,
@@ -251,7 +265,7 @@ func run(logger *slog.Logger) error {
 		return err
 	}
 	// 20260823 user decision: the CF worker fleet maintainer lives inside
-	// HX-ProxyGroup itself (not an external script) — give it CF accounts and
+	// HX-Pxy itself (not an external script) — give it CF accounts and
 	// it deploys/probes/recreates worker endpoints on the configured interval.
 	fleetService, err := fleet.NewService(
 		database,
@@ -352,7 +366,7 @@ func run(logger *slog.Logger) error {
 		Enabled:          cfg.TerminalEnabled,
 		Shell:            cfg.TerminalShell,
 		PrivilegedSocket: cfg.TerminalPrivilegedSocket,
-		UpdaterPath:      "/usr/local/sbin/hx-proxygroup-install",
+		UpdaterPath:      "/usr/local/sbin/hx-pxy-install",
 		PersistHistory:   cfg.TerminalHistory,
 		CwdStore:         database,
 		// The generated shell-integration startup files live next to the
@@ -443,9 +457,9 @@ func run(logger *slog.Logger) error {
 		api.WithUpdater(terminalService),
 		api.WithWebRoot(cfg.WebRoot),
 		api.WithSystemInfo(api.SystemInfo{
-			Application: "HX-ProxyGroup", Version: version,
-			RepositoryURL:      "https://github.com/HengXin666/HX-ProxyGroup",
-			UpdateCommand:      "sudo hx-proxygroup-install upgrade",
+			Application: "HX-Pxy", Version: version,
+			RepositoryURL:      "https://github.com/HengXin666/hx-pxy",
+			UpdateCommand:      "sudo hx-pxy-install upgrade",
 			AutomaticUpdate:    cfg.MihomoExternal && strings.TrimSpace(cfg.TerminalPrivilegedSocket) != "",
 			SupportedProtocols: nodeparse.SupportedProtocols(),
 		}),
@@ -560,14 +574,14 @@ func runTerminalHelper(logger *slog.Logger, arguments []string) error {
 	flags := flag.NewFlagSet("terminal-helper", flag.ContinueOnError)
 	flags.SetOutput(os.Stderr)
 	var config terminal.HelperConfig
-	flags.StringVar(&config.SocketPath, "terminal-socket", "/run/hx-proxygroup/terminal.sock", "Unix socket path")
-	flags.StringVar(&config.SocketGroup, "terminal-socket-group", "hx-proxygroup", "Unix socket group")
-	flags.StringVar(&config.AllowedUser, "terminal-helper-user", "hx-proxygroup", "only accept this local Unix socket user")
+	flags.StringVar(&config.SocketPath, "terminal-socket", "/run/hx-pxy/terminal.sock", "Unix socket path")
+	flags.StringVar(&config.SocketGroup, "terminal-socket-group", "hx-pxy", "Unix socket group")
+	flags.StringVar(&config.AllowedUser, "terminal-helper-user", "hx-pxy", "only accept this local Unix socket user")
 	flags.StringVar(&config.Shell, "terminal-shell", "", "shell executable")
 	flags.IntVar(&config.MaxSessions, "terminal-max-sessions", 2, "maximum helper sessions")
-	flags.StringVar(&config.UpdaterPath, "updater", "/usr/local/sbin/hx-proxygroup-install", "fixed automatic updater executable")
+	flags.StringVar(&config.UpdaterPath, "updater", "/usr/local/sbin/hx-pxy-install", "fixed automatic updater executable")
 	flags.BoolVar(&config.PersistHistory, "terminal-persist-history", true, "persist shell command history between sessions")
-	flags.StringVar(&config.RuntimeDirectory, "terminal-runtime-directory", "/var/lib/hx-proxygroup/runtime", "directory for the generated shell-integration startup files")
+	flags.StringVar(&config.RuntimeDirectory, "terminal-runtime-directory", "/var/lib/hx-pxy/runtime", "directory for the generated shell-integration startup files")
 	if err := flags.Parse(arguments); err != nil {
 		return err
 	}
@@ -592,7 +606,7 @@ func writePortableState(destination string, cfg config.Config, databaseSchemaVer
 	state := portableState{
 		SchemaVersion:         1,
 		DatabaseSchemaVersion: databaseSchemaVersion,
-		Application:           "HX-ProxyGroup",
+		Application:           "HX-Pxy",
 		Version:               version,
 		ListenAddress:         cfg.ListenAddress,
 		Features: []string{
@@ -633,5 +647,54 @@ func writePortableState(destination string, cfg config.Config, databaseSchemaVer
 	if err := os.Rename(temporaryPath, destination); err != nil {
 		return fmt.Errorf("publish state file: %w", err)
 	}
+	return nil
+}
+
+// legacyDatabaseName is the database file name this project used before it was
+// renamed to HX-Pxy.
+const legacyDatabaseName = "hx-proxygroup.db"
+
+// migrateLegacyDatabasePath moves a pre-rename database into place when the
+// configured path does not exist yet.
+//
+// This is a one-way rename of a live file, so it deliberately refuses to run
+// whenever the outcome would be ambiguous: it only acts when the configured
+// path is absent AND the legacy file is present. Every failure is returned
+// rather than logged and ignored, because starting with a fresh database is
+// not a degraded experience — it silently loses the administrator account and
+// every subscription, node and listener, which then looks like a broken login.
+func migrateLegacyDatabasePath(databasePath string, logger *slog.Logger) error {
+	if _, err := os.Stat(databasePath); err == nil {
+		return nil
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("inspect database path %s: %w", databasePath, err)
+	}
+	directory := filepath.Dir(databasePath)
+	legacyPath := filepath.Join(directory, legacyDatabaseName)
+	if _, err := os.Stat(legacyPath); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		return fmt.Errorf("inspect legacy database %s: %w", legacyPath, err)
+	}
+	// SQLite in WAL mode keeps committed data in -wal until a checkpoint, so
+	// the sidecars travel with the database; renaming only the main file would
+	// discard recent writes.
+	for _, suffix := range []string{"-wal", "-shm"} {
+		sidecar := legacyPath + suffix
+		if _, err := os.Stat(sidecar); err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				continue
+			}
+			return fmt.Errorf("inspect legacy database sidecar %s: %w", sidecar, err)
+		}
+		if err := os.Rename(sidecar, databasePath+suffix); err != nil {
+			return fmt.Errorf("adopt legacy database sidecar %s: %w", sidecar, err)
+		}
+	}
+	if err := os.Rename(legacyPath, databasePath); err != nil {
+		return fmt.Errorf("adopt legacy database %s: %w", legacyPath, err)
+	}
+	logger.Info("adopted legacy database after rename", "from", legacyPath, "to", databasePath)
 	return nil
 }

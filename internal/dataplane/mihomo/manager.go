@@ -3,6 +3,8 @@ package mihomo
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -68,9 +70,40 @@ type Manager struct {
 	logMaxBytes      int64
 	logBackups       int
 	externalProcess  bool
+	// sup 是数据面看护的运行态; nil 表示未启用。所有者是本 Manager。
+	sup *supervisor
 }
 
 type ManagerOption func(*Manager) error
+
+// controllerSocketPath 返回 mihomo 控制 socket 的路径。
+//
+// ## 为什么不能直接用 runtimeDirectory
+// unix socket 路径受内核 `sun_path` 长度限制 (108 字节, 含结尾 NUL ⇒ 可用 107)。
+// 项目搬到更深的目录后, runtimeDirectory + "/mihomo.sock" 达到 109 字符, 于是
+// 所有 dataplane 写操作都以 `connect: invalid argument` 失败。
+//
+// ## 取值策略
+// 用 HOME 下的短目录 `<home>/.hx-pxy-runtime/<runtimeDirectory 的摘要>`。摘要而不是
+// 固定名是必需的: 同一个进程里可以有多个 Manager (测试就是如此, 每个用自己的 t.TempDir
+// 作 runtimeDirectory), 而 unix socket 路径就是它的身份 —— 共用一条路径会让第二个
+// Manager 直接 `bind: address already in use`, 或者更糟: 覆盖掉第一个正在用的 socket。
+// 该目录无法建立时**退回原路径** —— 短路径尚未就绪也不会让服务起不来, 只是写操作会
+// 像修之前那样失败 (可观测, 好过直接崩)。
+func controllerSocketPath(runtimeDirectory string) string {
+	// 真实目录 (不是软链) —— socket 只需要一个目录落脚, 不需要与别的文件同处。
+	// HOME 为空时 (极端环境) 退回原路径: 那时行为与修之前一致, 不引入新失败模式。
+	home := os.Getenv("HOME")
+	if home == "" {
+		return filepath.Join(runtimeDirectory, "mihomo.sock")
+	}
+	digest := sha256.Sum256([]byte(runtimeDirectory))
+	short := filepath.Join(home, ".hx-pxy-runtime", hex.EncodeToString(digest[:8]))
+	if err := os.MkdirAll(short, 0o700); err != nil {
+		return filepath.Join(runtimeDirectory, "mihomo.sock")
+	}
+	return filepath.Join(short, "mihomo.sock")
+}
 
 func WithEgressInterface(name string) ManagerOption {
 	return func(manager *Manager) error {
@@ -130,13 +163,28 @@ func NewManager(
 	}
 	runtimeDirectory := filepath.Dir(activePath)
 	manager := &Manager{
-		compiler:         compiler,
-		runtimeDir:       runtimeDirectory,
-		activePath:       activePath,
-		candidate:        activePath + ".candidate",
-		previous:         activePath + ".previous",
-		logPath:          filepath.Join(runtimeDirectory, "mihomo.log"),
-		controllerSocket: filepath.Join(runtimeDirectory, "mihomo.sock"),
+		compiler:   compiler,
+		runtimeDir: runtimeDirectory,
+		activePath: activePath,
+		candidate:  activePath + ".candidate",
+		previous:   activePath + ".previous",
+		logPath:    filepath.Join(runtimeDirectory, "mihomo.log"),
+		// ⚠️ 2026-09-28 修正: unix socket 路径有内核长度上限 (108 字节含结尾 NUL)。
+		//
+		// 项目从 gpt-json-to-token/hx-pxy 搬到 HX-Jungle/toolbox/hx-pxy 后,
+		// runtimeDirectory 变长 18 字符, socket 全路径达到 **109 > 107**, 于是:
+		//
+		//   dial unix .../mihomo.sock: connect: invalid argument
+		//   -> subscription refreshed but dataplane apply failed
+		//
+		// 后果: 任何写操作 (改组/加订阅/改 listener) 都失败, 配置永远无法下发 ——
+		// 面板看着正常, 但数据面重画不了。这是路径搬迁引入的硬故障, 不是配置错误。
+		//
+		// 修法: socket 走一个**固定短路径** (在 HOME 下, 由启动脚本保证存在)。
+		// 为什么不用软链缩短 runtimeDirectory: `--data-dir` 同时决定 DB 与 snapshots
+		// 的位置, 换它要迁数据 (风险大)。只把 socket 这一个文件挪出来, 影响面最小。
+		// 为什么 HOME 而不是 /: 根目录无写权限 (实测 `ln -s` 到 / 报"权限不够")。
+		controllerSocket: controllerSocketPath(runtimeDirectory),
 		logger:           logger,
 		maxProcs:         min(runtime.NumCPU(), 4),
 		logMaxBytes:      8 << 20,
@@ -302,6 +350,7 @@ func (m *Manager) Status() Status {
 }
 
 func (m *Manager) Close(ctx context.Context) error {
+	m.StopSupervisor()
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.externalProcess {
@@ -368,6 +417,11 @@ func (m *Manager) startLocked(configPath string) error {
 	m.logger.Info("Mihomo process started", "pid", command.Process.Pid, "config", configPath)
 	item := &process{command: command, done: make(chan error, 1)}
 	m.process = item
+	// 立刻记 PID, 别等 refreshProcessLocked —— 否则拉起后的日志/状态里 PID 恒为 0,
+	// 排障时看不出"换了哪个进程"。
+	// 只记 PID, 不动 Running/State: 那两者的判据是"端口真的在听", 由看护的
+	// listenersReadyLocked 判定; 这里提前置 true 会让看护误以为已恢复而不再处理。
+	m.status.PID = command.Process.Pid
 	go func() {
 		err := command.Wait()
 		_ = logFile.Close()
