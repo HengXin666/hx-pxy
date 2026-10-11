@@ -8,9 +8,9 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/HengXin666/HX-ProxyGroup/internal/nodeparse"
-	"github.com/HengXin666/HX-ProxyGroup/internal/secret"
-	"github.com/HengXin666/HX-ProxyGroup/internal/store"
+	"github.com/HengXin666/hx-pxy/internal/nodeparse"
+	"github.com/HengXin666/hx-pxy/internal/secret"
+	"github.com/HengXin666/hx-pxy/internal/store"
 )
 
 // This is the end-to-end claim of the proxy-list feature, asserted against a

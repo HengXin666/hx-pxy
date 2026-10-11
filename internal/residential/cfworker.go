@@ -10,7 +10,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/HengXin666/HX-ProxyGroup/internal/nodeparse"
+	"github.com/HengXin666/hx-pxy/internal/nodeparse"
 )
 
 // FetchedWorkerNode is one proxy endpoint returned by a Cloudflare Worker

@@ -16,8 +16,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/HengXin666/HX-ProxyGroup/internal/secret"
-	"github.com/HengXin666/HX-ProxyGroup/internal/store"
+	"github.com/HengXin666/hx-pxy/internal/secret"
+	"github.com/HengXin666/hx-pxy/internal/store"
 )
 
 var (
@@ -77,6 +77,14 @@ type Session struct {
 	Username            string
 	ExpiresAt           time.Time
 	TwoFactorVerifiedAt *time.Time
+	// MachineCredential reports that this session came from an API key rather
+	// than a browser login. The two are otherwise indistinguishable once
+	// resolved (both yield a Session with the administrator's username), but a
+	// policy that constrains what an unattended caller may write needs the
+	// distinction, and deriving it from an empty CSRFToken would be reading a
+	// coincidence: the CSRF token is empty because a header credential needs no
+	// CSRF defence, not because the caller is a machine.
+	MachineCredential bool
 }
 
 // APIKey is the public view of a machine credential. Key carries the
@@ -368,7 +376,12 @@ func (s *Service) AuthenticateAPIKey(ctx context.Context, rawKey string) (Sessio
 	if now.Sub(record.LastUsedAt) > time.Minute {
 		_ = s.repository.TouchAPIKey(ctx, record.ID, now)
 	}
-	return Session{Token: rawKey, CSRFToken: "", Username: account.Username, ExpiresAt: record.LastUsedAt}, nil
+	return Session{
+		Token:             rawKey,
+		Username:          account.Username,
+		ExpiresAt:         record.LastUsedAt,
+		MachineCredential: true,
+	}, nil
 }
 
 // ListAPIKeys returns the machine credentials without any secret material.

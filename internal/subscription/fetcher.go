@@ -131,7 +131,7 @@ func (loader *DefaultSourceLoader) loadRemote(
 	if config.UserAgent != "" {
 		request.Header.Set("User-Agent", config.UserAgent)
 	} else {
-		request.Header.Set("User-Agent", "HX-ProxyGroup/1")
+		request.Header.Set("User-Agent", "HX-Pxy/1")
 	}
 	for key, value := range config.Headers {
 		request.Header.Set(key, value)

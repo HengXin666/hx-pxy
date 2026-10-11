@@ -179,7 +179,7 @@ func TestAutomaticUpdateUsesDedicatedHelperFrame(t *testing.T) {
 	}()
 	service, err := NewService(Config{
 		PrivilegedSocket: socketPath,
-		UpdaterPath:      "/usr/local/sbin/hx-proxygroup-install",
+		UpdaterPath:      "/usr/local/sbin/hx-pxy-install",
 	}, discardLogger())
 	if err != nil {
 		t.Fatal(err)

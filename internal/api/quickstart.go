@@ -5,7 +5,7 @@ import (
 	"errors"
 	"net/http"
 
-	"github.com/HengXin666/HX-ProxyGroup/internal/quickstart"
+	"github.com/HengXin666/hx-pxy/internal/quickstart"
 )
 
 // QuickstartPath is the one-call endpoint that reaches a published proxy.

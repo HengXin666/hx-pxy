@@ -1,17 +1,17 @@
-# HX-ProxyGroup 架构设计
+# HX-Pxy 架构设计
 
 ## 1. 架构结论
 
-HX-ProxyGroup 使用**控制面 / 数据面分离**：
+HX-Pxy 使用**控制面 / 数据面分离**：
 
-- **控制面 `hx-proxygroupd`**：Go 单体服务，负责订阅、规则、调度、统计、告警、管理 API、配置编译和数据面监督；可选的 Edge Relay 只转发固定 WebSocket 路由。
+- **控制面 `hx-pxyd`**：Go 单体服务，负责订阅、规则、调度、统计、告警、管理 API、配置编译和数据面监督；可选的 Edge Relay 只转发固定 WebSocket 路由。
 - **数据面 `mihomo`**：负责全部代理协议、Listener、Proxy Provider、Proxy Group、连接转发和实时流量数据。
 - **前端 `web`**：React 构建为静态资源，由控制面直接提供。
 - **存储 `SQLite`**：保存配置、快照、任务状态、统计聚合、告警和审计数据。
 
 ```mermaid
 flowchart LR
-    Admin[Admin Browser] -->|HTTPS / API / SSE| CP[hx-proxygroupd]
+    Admin[Admin Browser] -->|HTTPS / API / SSE| CP[hx-pxyd]
     CP --> DB[(SQLite WAL)]
     CP --> CFG[Config Compiler]
     CFG -->|validate + atomic publish| DP[Mihomo Data Plane]
@@ -44,7 +44,7 @@ v1 需求与 Mihomo 的原生抽象高度一致：
 
 因此，v1 不在 Go 控制面中重新实现 HTTP CONNECT、SOCKS5、VMess、VLESS 等数据转发逻辑。
 
-`easy-proxies` 使用 sing-box，是重要参考，但 HX-ProxyGroup 的需求更强调多代理组、负载均衡、会话粘滞和独立 Listener。架构中仍保留 `DataPlane` 抽象，未来可以实现 `SingBoxAdapter`，但 v1 只维护一个 Mihomo 实现，避免双内核带来的测试和运维成本。
+`easy-proxies` 使用 sing-box，是重要参考，但 HX-Pxy 的需求更强调多代理组、负载均衡、会话粘滞和独立 Listener。架构中仍保留 `DataPlane` 抽象，未来可以实现 `SingBoxAdapter`，但 v1 只维护一个 Mihomo 实现，避免双内核带来的测试和运维成本。
 
 ---
 
@@ -52,24 +52,24 @@ v1 需求与 Mihomo 的原生抽象高度一致：
 
 ```text
 systemd
-├── hx-proxygroup.service
-│   └── /usr/local/lib/hx-proxygroup/current/hx-proxygroupd --mihomo-external
-├── hx-proxygroup-dataplane.service
-│   └── /usr/local/lib/hx-proxygroup/current/mihomo -f /var/lib/hx-proxygroup/runtime/active.yaml
-└── hx-proxygroup-terminal.service
-    └── /usr/local/lib/hx-proxygroup/current/hx-proxygroupd --terminal-helper
+├── hx-pxy.service
+│   └── /usr/local/lib/hx-pxy/current/hx-pxyd --mihomo-external
+├── hx-pxy-dataplane.service
+│   └── /usr/local/lib/hx-pxy/current/mihomo -f /var/lib/hx-pxy/runtime/active.yaml
+└── hx-pxy-terminal.service
+    └── /usr/local/lib/hx-pxy/current/hx-pxyd --terminal-helper
 ```
 
 建议目录：
 
 ```text
-/etc/hx-proxygroup/
+/etc/hx-pxy/
 ├── config.yaml                 # 控制面最小启动配置
 ├── secrets.env                # 可选，0600
 └── certificates/              # 可选服务端证书
 
-/var/lib/hx-proxygroup/
-├── hx-proxygroup.db
+/var/lib/hx-pxy/
+├── hx-pxy.db
 ├── runtime/
 │   ├── active.yaml             # 当前生效数据面配置
 │   ├── previous.yaml           # 上一版有效配置
@@ -78,11 +78,11 @@ systemd
 ├── snapshots/                 # 订阅成功快照
 └── backups/
 
-/usr/local/lib/hx-proxygroup/
+/usr/local/lib/hx-pxy/
 ├── versions/<release>/        # 控制面、Mihomo、静态前端与 unit
 └── current -> versions/<release>
 
-/var/log/hx-proxygroup/
+/var/log/hx-pxy/
 └── audit.log                   # 可选；默认优先 journald
 ```
 
@@ -96,8 +96,8 @@ systemd
 
 ```text
 cmd/
-├── hx-proxygroupd/             # 服务入口
-└── hx-proxygroupctl/           # 初始化、诊断、备份、恢复 CLI
+├── hx-pxyd/             # 服务入口
+└── hx-pxyctl/           # 初始化、诊断、备份、恢复 CLI
 
 internal/
 ├── app/                        # 生命周期和依赖装配
@@ -565,7 +565,7 @@ SQLite。浏览器通过 `/api/v1/overview/stream` 订阅只读 SSE，关闭浏�
 ### 13.1 管理面
 
 ```text
-Admin -> VPN / private network / protected HTTPS -> hx-proxygroupd
+Admin -> VPN / private network / protected HTTPS -> hx-pxyd
 ```
 
 管理面默认不通过公开代理节点域名暴露。确需公网访问时，必须使用独立域名、强认证、访问控制和 TLS。
@@ -576,7 +576,7 @@ Admin -> VPN / private network / protected HTTPS -> hx-proxygroupd
 Client
   -> Cloudflare HTTPS 443
   -> LeiChi HTTPS virtual host
-  -> hx-proxygroupd:19090 /__hx-proxy__/<route>
+  -> hx-pxyd:19090 /__hx-proxy__/<route>
   -> localhost VLESS/VMess/Trojan WS Listener
   -> assigned Proxy Group or DIRECT
 ```
@@ -584,8 +584,8 @@ Client
 订阅和住宅控制 API 使用同一个 HTTPS 443 虚拟主机，但仍是普通 HTTP 路径：
 
 ```text
-Client -> HTTPS 443 /sub/<token> or /ctl/<token>/... -> LeiChi -> hx-proxygroupd:19090
-Legacy -> HTTPS 443 /rot/<token>/... -> LeiChi -> hx-proxygroupd:19090
+Client -> HTTPS 443 /sub/<token> or /ctl/<token>/... -> LeiChi -> hx-pxyd:19090
+Legacy -> HTTPS 443 /rot/<token>/... -> LeiChi -> hx-pxyd:19090
 ```
 
 发布给外部客户端的链接省略默认 `:443`。`19090` 和 WS Listener 内部端口只允许环回访问；
@@ -655,7 +655,7 @@ v1 只提供进程内注册表，不引入动态插件 ABI：
 ### ADR-001：Mihomo 负责协议，Edge Relay 只转发固定 WebSocket
 
 **决定**：Listener 和全部协议编解码仍由 Mihomo 负责；为支持 Cloudflare / 雷池只配置一个
-HX 上游，`hx-proxygroupd` 在保留的 `/__hx-proxy__/` 路径下提供受限 WebSocket Edge Relay。
+HX 上游，`hx-pxyd` 在保留的 `/__hx-proxy__/` 路径下提供受限 WebSocket Edge Relay。
 普通 HTTP、SOCKS5、Mixed 和直接 WebSocket Listener 仍由 Mihomo 直接承载。
 
 **原因**：不在 Go 中实现代理协议，同时允许雷池只维护一个 HTTPS 443 上游，不为每个 Mihomo

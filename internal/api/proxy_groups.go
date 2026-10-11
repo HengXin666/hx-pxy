@@ -5,8 +5,94 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/HengXin666/HX-ProxyGroup/internal/proxygroup"
+	"github.com/HengXin666/hx-pxy/internal/proxygroup"
 )
+
+// handleGroupMembers reports which nodes a group actually holds.
+//
+// See .agents/notes/implemented/architecture/2026-10-04-group-selection-endpoints.md
+//
+// `Get` cannot answer this: a group stores a source spec (subscriptions +
+// filters), so its membership is only known after the same resolution the
+// compiler runs. Without this endpoint a consumer sees "one node rejected" and
+// concludes the group is dead, discarding the other 150 members.
+func (s *Server) handleGroupMembers(writer http.ResponseWriter, request *http.Request, id string) {
+	if request.Method != http.MethodGet {
+		methodNotAllowed(writer, request, http.MethodGet)
+		return
+	}
+	view, err := s.proxyGroups.Members(request.Context(), id)
+	if err != nil {
+		s.handleError(writer, request, err)
+		return
+	}
+	// `now` is runtime state, not configuration: read it from the live data
+	// plane. A failure here must not fail the whole read — the member list is
+	// still useful, and the caller can tell "unknown" (empty) from a name.
+	if s.dataplane != nil {
+		if live, readErr := s.dataplane.ReadGroup(request.Context(), view.Name); readErr == nil {
+			view.Now = live.Now
+		}
+	}
+	writeJSON(writer, http.StatusOK, view)
+}
+
+// handleGroupSelection points a group at one of its members.
+//
+// Rejected for non-manual strategies instead of accepted-and-ignored: url-test
+// re-picks by latency and load-balance rotates, so a selection there would be
+// silently undone and the caller would believe it had changed egress.
+func (s *Server) handleGroupSelection(writer http.ResponseWriter, request *http.Request, id string) {
+	if request.Method != http.MethodPut {
+		methodNotAllowed(writer, request, http.MethodPut)
+		return
+	}
+	var body struct {
+		Proxy string `json:"proxy"`
+	}
+	if err := decodeJSONBody(writer, request, &body); err != nil {
+		s.writeAPIError(writer, request, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
+	view, err := s.proxyGroups.Members(request.Context(), id)
+	if err != nil {
+		s.handleError(writer, request, err)
+		return
+	}
+	if !view.Selectable {
+		s.writeAPIError(writer, request, http.StatusConflict, "group_not_selectable",
+			"group "+view.Name+" uses strategy "+view.Strategy+": it picks its own member, so a manual selection would not stick")
+		return
+	}
+	if s.dataplane == nil {
+		s.writeAPIError(writer, request, http.StatusServiceUnavailable, "dataplane_unavailable", "mihomo is not running")
+		return
+	}
+	target := strings.TrimSpace(body.Proxy)
+	if target == "" {
+		s.writeAPIError(writer, request, http.StatusBadRequest, "invalid_request", "proxy is required")
+		return
+	}
+	if !containsString(view.Members, target) {
+		s.writeAPIError(writer, request, http.StatusBadRequest, "unknown_member",
+			target+" is not a member of group "+view.Name)
+		return
+	}
+	if err := s.dataplane.SelectProxy(request.Context(), view.Name, target); err != nil {
+		s.handleError(writer, request, err)
+		return
+	}
+	writeJSON(writer, http.StatusOK, map[string]any{"ok": true, "group": view.Name, "now": target})
+}
+
+func containsString(items []string, want string) bool {
+	for _, item := range items {
+		if item == want {
+			return true
+		}
+	}
+	return false
+}
 
 func (s *Server) handleProxyGroups(writer http.ResponseWriter, request *http.Request) {
 	switch request.Method {
@@ -37,7 +123,28 @@ func (s *Server) handleProxyGroups(writer http.ResponseWriter, request *http.Req
 
 func (s *Server) handleProxyGroup(writer http.ResponseWriter, request *http.Request) {
 	id := strings.TrimPrefix(request.URL.Path, "/api/v1/proxy-groups/")
-	if id == "" || id == request.URL.Path || strings.Contains(id, "/") {
+	if id == "" || id == request.URL.Path {
+		http.NotFound(writer, request)
+		return
+	}
+	// Sub-resources: /proxy-groups/<id>/members and /selection.
+	//
+	// `members` answers "which nodes does this group actually hold?" — the
+	// question `Get` cannot answer, because a group stores a *spec*
+	// (subscriptions + filters), not a member list. A consumer that cannot see
+	// members treats one rejected node as the whole group being spent, which is
+	// wrong for a group holding 150+.
+	if parts := strings.Split(id, "/"); len(parts) == 2 {
+		switch parts[1] {
+		case "members":
+			s.handleGroupMembers(writer, request, parts[0])
+			return
+		case "selection":
+			s.handleGroupSelection(writer, request, parts[0])
+			return
+		}
+	}
+	if strings.Contains(id, "/") {
 		http.NotFound(writer, request)
 		return
 	}

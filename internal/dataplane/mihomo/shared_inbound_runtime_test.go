@@ -14,8 +14,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/HengXin666/HX-ProxyGroup/internal/listener"
-	"github.com/HengXin666/HX-ProxyGroup/internal/store"
+	"github.com/HengXin666/hx-pxy/internal/listener"
+	"github.com/HengXin666/hx-pxy/internal/store"
 )
 
 // TestSharedInboundRoutesOnePortPerService is the end-to-end proof for the

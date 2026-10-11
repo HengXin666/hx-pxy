@@ -1,4 +1,4 @@
-# HX-ProxyGroup v1 核心功能文档
+# HX-Pxy v1 核心功能文档
 
 ## 1. v1 目标
 
@@ -24,7 +24,7 @@ v1 必须满足以下底线：
 - **规则流水线 Rule Pipeline**：按顺序执行节点补充、过滤、评分、分组和排序的可扩展处理链。
 - **代理组 Proxy Group**：由若干订阅、节点、子代理组和规则组成的逻辑出站。
 - **入口 Listener**：对外监听的 HTTP、SOCKS5、Mixed、VLESS、VMess、Trojan 等服务端入口。
-- **控制面 Control Plane**：HX-ProxyGroup 后端，负责配置、调度、状态、统计和管理 API。
+- **控制面 Control Plane**：HX-Pxy 后端，负责配置、调度、状态、统计和管理 API。
 - **数据面 Data Plane**：Mihomo 进程，负责实际连接建立、协议处理、转发和流量统计。
 - **直连出口 Direct Egress**：不经过机场节点，直接使用当前服务器公网 IP 访问目标。
 
@@ -413,7 +413,7 @@ v1 优先提供适合反向代理和 CDN 的成熟协议模板：
 
 - [x] 浏览器内终端（本机 PTY Shell；生产通过受限 Unix Socket 使用独立 root PTY helper，跳板式 SSH 远程连接不在本迭代范围）。
 - [x] 基于成熟组件实现：前端 xterm.js，后端 creack/pty + coder/websocket，不自行实现终端协议。
-- [x] 默认开启浏览器终端并保留紧急关闭开关（`HX_PROXYGROUP_TERMINAL=0`），强制管理员认证和 TOTP 2FA step-up 验证；默认不因空闲断开，保留会话寿命上限（2 小时）、并发上限、结构化审计日志和页面内高风险操作提示；生产终端支持 `su` / `sudo`。
+- [x] 默认开启浏览器终端并保留紧急关闭开关（`HX_PXY_TERMINAL=0`），强制管理员认证和 TOTP 2FA step-up 验证；默认不因空闲断开，保留会话寿命上限（2 小时）、并发上限、结构化审计日志和页面内高风险操作提示；生产终端支持 `su` / `sudo`。
 - [x] 切换侧栏页面不断开终端连接（终端页常驻挂载，页面切换只隐藏/显示）。
 - [x] 服务器系统监控与文件面板仅在终端连接后显示；未连接时展示占位提示。
 - [x] 文件面板与 Shell 当前目录双向同步：面板导航向 Shell 发送 `cd`；Shell 目录变化通过连接时和不可解析 `cd` 后的 `pwd` 探测以及输入侧 `cd` 命令识别驱动面板更新（探测基于时间预算，兼容慢速横幅和花式提示符）。
@@ -433,7 +433,7 @@ v1 优先提供适合反向代理和 CDN 的成熟协议模板：
 - [ ] 列表接口支持分页、排序和结构化过滤。
 - [ ] 写操作支持幂等键或版本号，避免重复提交。
 - [x] 资源使用不可变 ID，不使用名称作为关联主键。
-- [x] 更新接口防止并发覆盖：root helper 对更新请求单飞互斥（进程内锁 + `systemctl is-active hx-proxygroup-update` 跨重启检测），更新进行中重复请求直接返回"更新进行中"错误；调度异步化，helper 先确认再在独立 goroutine 运行 `systemd-run`（30s 上限），busy systemd 不再导致控制面握手超时误报更新失败。
+- [x] 更新接口防止并发覆盖：root helper 对更新请求单飞互斥（进程内锁 + `systemctl is-active hx-pxy-update` 跨重启检测），更新进行中重复请求直接返回"更新进行中"错误；调度异步化，helper 先确认再在独立 goroutine 运行 `systemd-run`（30s 上限），busy systemd 不再导致控制面握手超时误报更新失败。
 - [ ] 长任务返回任务 ID，并通过 SSE 获取进度。
 - [x] 错误响应包含稳定错误码、用户可读消息和追踪 ID。
 - [x] 敏感字段在 API 响应中默认隐藏。
@@ -481,8 +481,8 @@ v1 优先提供适合反向代理和 CDN 的成熟协议模板：
 - [x] 检测并支持 Linux `amd64`、`arm64`。
 - [x] 默认解析最新 Release 为固定 tag，下载架构包和 `SHA256SUMS` 后校验。
 - [x] 支持带 `VERSION`、Release 包和 `SHA256SUMS` 的离线安装。
-- [x] 创建不可登录的系统用户 `hx-proxygroup`。
-- [x] 创建 `/etc/hx-proxygroup`、`/var/lib/hx-proxygroup`、`/var/log/hx-proxygroup`。
+- [x] 创建不可登录的系统用户 `hx-pxy`。
+- [x] 创建 `/etc/hx-pxy`、`/var/lib/hx-pxy`、`/var/log/hx-pxy`。
 - [x] 配置目录权限为最小可用权限。
 - [x] 安装控制面、Mihomo、静态前端、安装器自身和控制面/数据面/终端 helper 三个 systemd unit。
 - [x] 切换版本前用新 Mihomo 校验最后生效配置，服务启动执行数据库迁移。
@@ -490,14 +490,14 @@ v1 优先提供适合反向代理和 CDN 的成熟协议模板：
 - [x] 重复执行时只更新版本文件和服务定义，不主动删除用户数据。
 - [x] 支持 `install`、`upgrade`、`repair`、`status`、`uninstall`、`purge` 子命令。
 - [x] 更新 readiness 失败时原子恢复上一版完整 Release 链接；数据面配置应用失败恢复 `previous.yaml`。
-- [x] 安装后通过 `sudo hx-proxygroup-install upgrade` 一行命令更新，成功升级时同步替换安装器自身。
+- [x] 安装后通过 `sudo hx-pxy-install upgrade` 一行命令更新，成功升级时同步替换安装器自身。
 - [x] Git tag `v*` 工作流执行 Go/前端校验，构建 amd64/arm64 包，固定 Mihomo 版本并发布 `SHA256SUMS`。
 - [x] 生产前端可在管理员最近完成 2FA 后请求更新；root helper 只调度固定安装器 `upgrade`，不接受任意命令或版本参数。
 
 ### 12.2 systemd
 
-- [x] `hx-proxygroup.service` 管理控制面。
-- [x] `hx-proxygroup-dataplane.service` 独立管理 Mihomo。
+- [x] `hx-pxy.service` 管理控制面。
+- [x] `hx-pxy-dataplane.service` 独立管理 Mihomo。
 - [x] 配置 `After=network-online.target` 和 `Wants=network-online.target`。
 - [x] 配置 `Restart=on-failure`、合理退避和启动限速。
 - [ ] 支持 systemd Watchdog。
@@ -529,7 +529,7 @@ v1 优先提供适合反向代理和 CDN 的成熟协议模板：
 - [x] 10,000 个节点的解析、规范化、去重和配置生成耗时。
 - [ ] 100、1,000、10,000 并发 TCP 连接下的吞吐、延迟和文件描述符。
 - [ ] HTTP CONNECT 与 SOCKS5 的短连接和长连接性能。
-- [ ] 数据面直接配置与 HX-ProxyGroup 管理配置的性能差异。
+- [ ] 数据面直接配置与 HX-Pxy 管理配置的性能差异。
 - [ ] 大规模健康检查对 CPU、内存、带宽和正常代理流量的影响。
 - [x] SQLite 1,000 资源批量写入和 500 点图表查询基准；读写并发压力测试仍待补充。
 - [ ] 服务器重启、数据面崩溃、控制面崩溃和磁盘接近满时的恢复时间。

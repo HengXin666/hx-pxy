@@ -4,8 +4,8 @@ import (
 	"context"
 	"testing"
 
-	"github.com/HengXin666/HX-ProxyGroup/internal/listener"
-	"github.com/HengXin666/HX-ProxyGroup/internal/store"
+	"github.com/HengXin666/hx-pxy/internal/listener"
+	"github.com/HengXin666/hx-pxy/internal/store"
 )
 
 // TestSharedInboundCarriesHTTPAndSOCKSMembers is the compiler-side regression

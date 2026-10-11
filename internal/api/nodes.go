@@ -6,7 +6,7 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/HengXin666/HX-ProxyGroup/internal/node"
+	"github.com/HengXin666/hx-pxy/internal/node"
 )
 
 func (s *Server) handleNodes(writer http.ResponseWriter, request *http.Request) {

@@ -26,16 +26,16 @@ impact on the independent Mihomo data plane.
   tokens can rotate residential exits and spend provider quota. Treat both as
   passwords, serve them only over HTTPS, and rotate them independently after
   suspected disclosure.
-- Keep `/var/lib/hx-proxygroup`, the master key, SQLite database, runtime
+- Keep `/var/lib/hx-pxy`, the master key, SQLite database, runtime
   configuration, subscription snapshots, and disaster backups readable only
   by the service account and administrators.
-- Apply OS, Mihomo, and HX-ProxyGroup security updates together. The project's
+- Apply OS, Mihomo, and HX-Pxy security updates together. The project's
   MIT license does not change the licenses or security policies of bundled
   third-party components.
 
 ## Browser terminal threat model
 
-The optional browser terminal is a local PTY Shell on the HX-ProxyGroup server;
+The optional browser terminal is a local PTY Shell on the HX-Pxy server;
 it is not an SSH client or an SSH jump host. Enabling it grants the logged-in
 administrator command execution. A local development session runs as the
 control-plane account; the production systemd helper creates a root PTY. Treat
@@ -43,7 +43,7 @@ production management-panel administrator access as root-equivalent while the
 feature is on.
 
 The terminal is enabled by default, can be disabled with
-`HX_PROXYGROUP_TERMINAL=0`, and requires all of the following:
+`HX_PXY_TERMINAL=0`, and requires all of the following:
 
 - a configured, authenticated administrator session;
 - a configured TOTP second factor and a recent step-up verification;
@@ -56,7 +56,7 @@ The terminal is enabled by default, can be disabled with
 - a minimized Shell environment that excludes control-plane environment
   variables; command history is persisted by default (bash `~/.bash_history`,
   zsh `~/.zsh_history`) for the single administrator and can be restored to a
-  no-history lockdown with `HX_PROXYGROUP_TERMINAL_HISTORY=0`;
+  no-history lockdown with `HX_PXY_TERMINAL_HISTORY=0`;
 - structured open/close audit records without command contents or secrets.
 
 Predictive local echo is enabled only when the server reads both `ECHO` and
@@ -69,7 +69,7 @@ password reads such as `read -s` while reducing weak-network typing latency.
 In production the terminal helper creates a root PTY after validating the
 control-plane peer through Unix-socket permissions and `SO_PEERCRED`. Therefore
 successful terminal authentication grants root command execution, not merely
-the `hx-proxygroup` service account. The same helper accepts one separate,
+the `hx-pxy` service account. The same helper accepts one separate,
 argument-free update frame and can only schedule the root-owned installer's
 fixed `upgrade` action; browser input cannot supply a command or target version.
 The terminal file manager's list/stat/download/upload/mkdir/remove operations

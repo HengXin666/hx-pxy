@@ -3,7 +3,7 @@ package api
 import (
 	"net/http"
 
-	"github.com/HengXin666/HX-ProxyGroup/internal/routingrules"
+	"github.com/HengXin666/hx-pxy/internal/routingrules"
 )
 
 func (s *Server) handleRoutingRules(writer http.ResponseWriter, request *http.Request) {

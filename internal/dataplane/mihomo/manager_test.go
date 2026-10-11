@@ -21,13 +21,13 @@ import (
 	"testing"
 	"time"
 
-	listenerservice "github.com/HengXin666/HX-ProxyGroup/internal/listener"
-	"github.com/HengXin666/HX-ProxyGroup/internal/metrics"
-	"github.com/HengXin666/HX-ProxyGroup/internal/nodeparse"
-	"github.com/HengXin666/HX-ProxyGroup/internal/proxygroup"
-	"github.com/HengXin666/HX-ProxyGroup/internal/secret"
-	"github.com/HengXin666/HX-ProxyGroup/internal/store"
-	"github.com/HengXin666/HX-ProxyGroup/internal/subscription"
+	listenerservice "github.com/HengXin666/hx-pxy/internal/listener"
+	"github.com/HengXin666/hx-pxy/internal/metrics"
+	"github.com/HengXin666/hx-pxy/internal/nodeparse"
+	"github.com/HengXin666/hx-pxy/internal/proxygroup"
+	"github.com/HengXin666/hx-pxy/internal/secret"
+	"github.com/HengXin666/hx-pxy/internal/store"
+	"github.com/HengXin666/hx-pxy/internal/subscription"
 )
 
 func TestValidateEndpointAvailabilityRejectsPortOwnedByAnotherProcess(t *testing.T) {

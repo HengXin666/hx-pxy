@@ -8,8 +8,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/HengXin666/HX-ProxyGroup/internal/residential"
-	"github.com/HengXin666/HX-ProxyGroup/internal/systemsettings"
+	"github.com/HengXin666/hx-pxy/internal/residential"
+	"github.com/HengXin666/hx-pxy/internal/systemsettings"
 )
 
 func provisionTestServer(t *testing.T, service ResidentialService, settings systemsettings.Settings) *httptest.Server {

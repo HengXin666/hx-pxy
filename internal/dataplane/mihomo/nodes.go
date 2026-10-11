@@ -7,7 +7,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/HengXin666/HX-ProxyGroup/internal/store"
+	"github.com/HengXin666/hx-pxy/internal/store"
 )
 
 func (c *Compiler) decryptNode(record store.NodeConfigRecord, proxyName string, groupNameByID map[string]string) (map[string]any, error) {
@@ -50,6 +50,23 @@ func convertNodeConfig(canonical map[string]any) (map[string]any, error) {
 		config["tls"] = true
 	case "socks":
 		config["type"] = "socks5"
+	case "openvpn":
+		config["type"] = "openvpn"
+		// An OpenVPN outbound is a level-3 device: it must resolve destination
+		// hostnames *inside* the tunnel. Without a remote resolver Mihomo hands
+		// the fake-ip address (198.18.0.0/16) to the tun device, which cannot
+		// route it — measured as `dial tcp <tunnel-ip>:*->198.18.0.83:443:
+		// context deadline exceeded` while the tunnel itself is already up.
+		// Injecting the resolver pair is what makes the node usable at all; the
+		// operator does not have to know this. Verified end to end against
+		// VPNGate (JP) both directly and through a dialer-proxy chain.
+		// See .agents/notes/implemented/feature/2026-10-05-openvpn-outbound-as-first-class-node.md.
+		if _, exists := config["remote-dns-resolve"]; !exists {
+			config["remote-dns-resolve"] = true
+		}
+		if _, exists := config["dns"]; !exists {
+			config["dns"] = []any{"1.1.1.1", "8.8.8.8"}
+		}
 	case "anytls", "hysteria", "hysteria2", "http", "mieru", "shadow-tls", "snell", "socks5", "ss", "ssh", "ssr", "trojan", "tuic", "vless", "wireguard":
 		config["type"] = protocol
 	case "vmess":

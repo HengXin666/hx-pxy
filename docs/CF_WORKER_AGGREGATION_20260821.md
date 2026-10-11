@@ -2,7 +2,7 @@
 
 > 本文记录 v0.7.0 的两项核心变更：
 > **① CF Worker（BPB/cfnew）代理聚合链路打通**——用户核心诉求，CF 代理与住宅
-> 身份统一由 HX-ProxyGroup 聚合管理；
+> 身份统一由 HX-Pxy 聚合管理；
 > **② 会话懒分配**——创建渠道不再预占出口 IP，首个客户端请求才分配。
 >
 > 相关提交：`c4ad3e1`（CF 转发三处根因修复）、`1b1f460`（懒分配）。
@@ -17,13 +17,13 @@
 客户端（指纹浏览器/注册机等）
     │  统一订阅 /rot /ctl（换 IP 只调一次）
     ▼
-HX-ProxyGroup（控制面 + Mihomo 数据面）  ← 聚合层
-    ├── 住宅身份（HX-ProxyGroup 住宅渠道，session-template / api-list）
+HX-Pxy（控制面 + Mihomo 数据面）  ← 聚合层
+    ├── 住宅身份（HX-Pxy 住宅渠道，session-template / api-list）
     └── CF 身份（cf-worker：Cloudflare Worker VLESS WS 订阅）  ← 本次打通
 ```
 
-用户明确要求：**CF 代理也必须经过 HX-ProxyGroup 聚合**，与住宅身份一样由上游
-统一管理换 IP；后续新增服务只需对接 HX-ProxyGroup 一个控制层。此前 cf-worker
+用户明确要求：**CF 代理也必须经过 HX-Pxy 聚合**，与住宅身份一样由上游
+统一管理换 IP；后续新增服务只需对接 HX-Pxy 一个控制层。此前 cf-worker
 模式虽然能拉订阅，但**数据面转发全部失败**（`connection reset by peer`），
 表现为「支持 BPB 但没什么用」。
 
@@ -84,10 +84,10 @@ proxies:
 
 ### 3. ResolveEgressInterface：Wi-Fi 接口强制绑定导致全部 reset
 
-**现象**：独立 mihomo 配置相同节点可转发（出口美国 IP），HX-ProxyGroup 托管的
+**现象**：独立 mihomo 配置相同节点可转发（出口美国 IP），HX-Pxy 托管的
 mihomo 却全部 `connection reset by peer`。
 
-**根因**：HX-ProxyGroup 默认 `auto` 解析 Linux 主路由表得到默认出口网卡并注入
+**根因**：HX-Pxy 默认 `auto` 解析 Linux 主路由表得到默认出口网卡并注入
 `interface-name: wlo1`（Wi-Fi，处于省电 DORMANT 模式）。强制绑定该网卡后，
 mihomo 出站 WebSocket 被内核重置。
 

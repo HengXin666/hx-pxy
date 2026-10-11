@@ -1,10 +1,20 @@
 export type SourceType = "remote" | "inline" | "file"
 export type ArtifactKind = "backup" | "export"
 
+/**
+ * The operator's declared taxonomy of a node source. It selects the failure
+ * policy a source's nodes obey, and it is what the UI classifies a service by —
+ * never the service's name. See lib/service-shape.ts and
+ * .agents/notes/implemented/feature/2026-09-26-source-class-drives-probe-policy.md.
+ */
+export type SourceClass = "pool" | "subscription" | "residential"
+
 export interface Subscription {
   id: string
   name: string
   source_type: SourceType
+  /** Declared class of this source; decides its nodes' probe policy. */
+  source_class: SourceClass
   source_configured: boolean
   enabled: boolean
   refresh_interval_seconds: number
@@ -37,6 +47,12 @@ export interface SourceConfig {
 export interface CreateSubscriptionRequest {
   name: string
   source_type: SourceType
+  /**
+   * Omitted means the server's default, and the default is deliberately the
+   * promotion-safe class rather than the cheap one. State it explicitly for a
+   * pool, and always for a residential source.
+   */
+  source_class?: SourceClass
   source_config: SourceConfig
   enabled?: boolean
   refresh_interval_seconds?: number
@@ -47,6 +63,8 @@ export interface UpdateSubscriptionRequest {
   version: number
   name: string
   source_type: SourceType
+  /** Omit to keep the stored class; supply it to reclassify the source. */
+  source_class?: SourceClass
   source_config?: SourceConfig
   enabled: boolean
   refresh_interval_seconds: number
@@ -204,6 +222,21 @@ export interface GlobalSettings {
   // protocol through two URLs. "per_service" keeps the historical dedicated
   // port per service.
   shared_inbound: SharedInboundSettings
+  // Guard carries the operator's write-surface guards. See guard.deny_api_group_create.
+  guard: GuardSettings
+}
+
+export interface GuardSettings {
+  /**
+   * Blocks group-creating API writes (POST /proxy-groups, /proxy-services,
+   * /quickstart) for API-key callers. A browser session is unaffected: the
+   * guard constrains who writes, not what may be written.
+   *
+   * Optional because PUT /api/v1/settings replaces the whole document: a client
+   * that omits the field asks for "leave it as it is", not for "off". Sending
+   * an explicit false does turn it off.
+   */
+  deny_api_group_create?: boolean
 }
 
 export type SharedInboundMode = "per_service" | "shared"
@@ -327,7 +360,17 @@ export interface ListenerRecord {
   kind: ListenerKind
   bind_address: string
   port: number
+  /**
+   * The anchor group. On a pinned service this is only a schema anchor shared
+   * by every pinned service, NOT this service's policy — read `node_id` first.
+   */
   proxy_group_id: string
+  /**
+   * Set when this service's egress is pinned to exactly one node. When present
+   * the service ignores its group entirely, so the UI must render it as a
+   * single-node shape instead of a member list.
+   */
+  node_id?: string
   auth_configured: boolean
   transport: ListenerTransport
   public_endpoint: ListenerPublicEndpoint
@@ -417,6 +460,13 @@ export interface UpdateProxyServiceRequest {
     transport?: ListenerTransport
     public_endpoint?: ListenerPublicEndpoint
     enabled?: boolean
+    /**
+     * Moves the pin to another node. Omitted means "keep the stored pin": a
+     * composite update for an unrelated field must not release it.
+     */
+    node_id?: string
+    /** Releases the pin and hands the service back to its group. */
+    clear_node_pin?: boolean
   }
 }
 

@@ -1,6 +1,6 @@
 # 流量统计
 
-HX-ProxyGroup 从 Mihomo External Controller 的连接快照采集统计。普通入口的协议和目标连接
+HX-Pxy 从 Mihomo External Controller 的连接快照采集统计。普通入口的协议和目标连接
 由 Mihomo 处理；Cloudflare / 雷池拓扑中的 Edge Relay 只转发 WebSocket 连接，不解析协议，
 因此流量统计仍以 Mihomo 入站和代理链为准。
 

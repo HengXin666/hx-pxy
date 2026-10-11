@@ -1,7 +1,7 @@
 # 住宅代理客户端与自动化 API
 
 每个住宅渠道使用稳定节点模型：客户端通过该渠道的 `/sub/` 获取节点，自动化程序通过该渠道的 `/ctl/` 指定节点
-轮换出口。供应商会话和住宅 IP 是 HX-ProxyGroup 内部实现，不是客户端生命周期。
+轮换出口。供应商会话和住宅 IP 是 HX-Pxy 内部实现，不是客户端生命周期。
 
 完整字段契约见 [`RESIDENTIAL_V2_CONTRACT.md`](RESIDENTIAL_V2_CONTRACT.md)。
 **多服务并发对接标准（租约 + 版本护栏）见 [`RESIDENTIAL_INTEGRATION_STANDARD.md`](RESIDENTIAL_INTEGRATION_STANDARD.md)**：

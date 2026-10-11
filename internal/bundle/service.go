@@ -17,7 +17,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/HengXin666/HX-ProxyGroup/internal/artifact"
+	"github.com/HengXin666/hx-pxy/internal/artifact"
 )
 
 type Scope uint8
@@ -139,7 +139,7 @@ func (s *Service) Create(ctx context.Context, kind artifact.Kind, options Create
 
 		manifest := Manifest{
 			SchemaVersion:   1,
-			Application:     "HX-ProxyGroup",
+			Application:     "HX-Pxy",
 			ApplicationVer:  s.appVersion,
 			Kind:            kind,
 			CreatedAt:       createdAt,

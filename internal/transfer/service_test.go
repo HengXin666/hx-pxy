@@ -10,9 +10,9 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/HengXin666/HX-ProxyGroup/internal/artifact"
-	"github.com/HengXin666/HX-ProxyGroup/internal/bundle"
-	"github.com/HengXin666/HX-ProxyGroup/internal/store"
+	"github.com/HengXin666/hx-pxy/internal/artifact"
+	"github.com/HengXin666/hx-pxy/internal/bundle"
+	"github.com/HengXin666/hx-pxy/internal/store"
 )
 
 func TestBackupContainsConsistentDatabaseAndExportDoesNot(t *testing.T) {
@@ -66,14 +66,14 @@ func TestBackupContainsConsistentDatabaseAndExportDoesNot(t *testing.T) {
 	}
 
 	backupEntries := extractRegularEntries(t, service, backupRecord.ID, filepath.Join(root, "extracted-backup"))
-	if _, exists := backupEntries["payload/database/hx-proxygroup.db"]; !exists {
+	if _, exists := backupEntries["payload/database/hx-pxy.db"]; !exists {
 		t.Fatalf("backup entries = %#v, database snapshot missing", backupEntries)
 	}
 	if _, exists := backupEntries["payload/state/state.json"]; !exists {
 		t.Fatalf("backup entries = %#v, portable state missing", backupEntries)
 	}
 
-	extractedDatabase, err := store.Open(ctx, backupEntries["payload/database/hx-proxygroup.db"])
+	extractedDatabase, err := store.Open(ctx, backupEntries["payload/database/hx-pxy.db"])
 	if err != nil {
 		t.Fatalf("open extracted database: %v", err)
 	}
@@ -91,7 +91,7 @@ func TestBackupContainsConsistentDatabaseAndExportDoesNot(t *testing.T) {
 		t.Fatalf("Create(export) error = %v", err)
 	}
 	exportEntries := extractRegularEntries(t, service, exportRecord.ID, filepath.Join(root, "extracted-export"))
-	if _, exists := exportEntries["payload/database/hx-proxygroup.db"]; exists {
+	if _, exists := exportEntries["payload/database/hx-pxy.db"]; exists {
 		t.Fatalf("portable export unexpectedly contains database: %#v", exportEntries)
 	}
 	if _, exists := exportEntries["payload/state/state.json"]; !exists {

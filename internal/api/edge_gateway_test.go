@@ -14,7 +14,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/HengXin666/HX-ProxyGroup/internal/listener"
+	"github.com/HengXin666/hx-pxy/internal/listener"
 )
 
 func TestEdgeRelayForwardsWebSocketBytesToMihomoListener(t *testing.T) {

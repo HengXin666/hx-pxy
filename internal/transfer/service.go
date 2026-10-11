@@ -7,8 +7,8 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/HengXin666/HX-ProxyGroup/internal/artifact"
-	"github.com/HengXin666/HX-ProxyGroup/internal/bundle"
+	"github.com/HengXin666/hx-pxy/internal/artifact"
+	"github.com/HengXin666/hx-pxy/internal/bundle"
 )
 
 type DatabaseSnapshotter interface {
@@ -81,7 +81,7 @@ func (s *Service) Create(
 		return artifact.Record{}, fmt.Errorf("secure backup staging directory: %w", err)
 	}
 
-	databaseSnapshot := filepath.Join(stagingDirectory, "hx-proxygroup.db")
+	databaseSnapshot := filepath.Join(stagingDirectory, "hx-pxy.db")
 	if err := s.database.BackupTo(ctx, databaseSnapshot); err != nil {
 		return artifact.Record{}, fmt.Errorf("create database snapshot: %w", err)
 	}

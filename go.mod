@@ -1,4 +1,4 @@
-module github.com/HengXin666/HX-ProxyGroup
+module github.com/HengXin666/hx-pxy
 
 go 1.23.0
 

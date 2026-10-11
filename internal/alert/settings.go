@@ -8,7 +8,7 @@ import (
 	"net"
 	"strings"
 
-	"github.com/HengXin666/HX-ProxyGroup/internal/store"
+	"github.com/HengXin666/hx-pxy/internal/store"
 )
 
 const smtpSettingsAAD = "alert:smtp-settings"
@@ -117,8 +117,8 @@ func (s *Service) SendTest(ctx context.Context) error {
 	}
 	channel := s.channelFactory(config)
 	return channel.Send(ctx,
-		"[HX-ProxyGroup] test alert",
-		"This is a test notification from HX-ProxyGroup.\r\nIf you received this mail, the SMTP alert channel works.\r\n",
+		"[HX-Pxy] test alert",
+		"This is a test notification from HX-Pxy.\r\nIf you received this mail, the SMTP alert channel works.\r\n",
 	)
 }
 

@@ -1,4 +1,4 @@
-package hxproxygroup
+package hxpxy
 
 import (
 	"archive/tar"
@@ -23,24 +23,24 @@ func TestInstallScriptSyntax(t *testing.T) {
 
 func TestSystemdUnitKeepsManagementAPIPrivate(t *testing.T) {
 	t.Parallel()
-	content, err := os.ReadFile("deploy/systemd/hx-proxygroup.service")
+	content, err := os.ReadFile("deploy/systemd/hx-pxy.service")
 	if err != nil {
 		t.Fatalf("ReadFile() error = %v", err)
 	}
 	unit := string(content)
 	required := []string{
 		"--listen 127.0.0.1:19090",
-		"--master-key /var/lib/hx-proxygroup/master.key",
-		"--web-root /usr/local/lib/hx-proxygroup/current/web",
+		"--master-key /var/lib/hx-pxy/master.key",
+		"--web-root /usr/local/lib/hx-pxy/current/web",
 		"--mihomo-external",
-		"Requires=hx-proxygroup-dataplane.service hx-proxygroup-terminal.service",
-		"After=network-online.target hx-proxygroup-dataplane.service hx-proxygroup-terminal.service",
-		"--terminal-socket /run/hx-proxygroup/terminal.sock",
+		"Requires=hx-pxy-dataplane.service hx-pxy-terminal.service",
+		"After=network-online.target hx-pxy-dataplane.service hx-pxy-terminal.service",
+		"--terminal-socket /run/hx-pxy/terminal.sock",
 		"Restart=on-failure",
 		"NoNewPrivileges=true",
 		"ProtectSystem=strict",
 		"ProtectHome=true",
-		"ReadWritePaths=/var/lib/hx-proxygroup",
+		"ReadWritePaths=/var/lib/hx-pxy",
 	}
 	for _, expected := range required {
 		if !strings.Contains(unit, expected) {
@@ -51,7 +51,7 @@ func TestSystemdUnitKeepsManagementAPIPrivate(t *testing.T) {
 
 func TestPrivilegedTerminalSystemdUnitIsRootOnlyAndSocketScoped(t *testing.T) {
 	t.Parallel()
-	content, err := os.ReadFile("deploy/systemd/hx-proxygroup-terminal.service")
+	content, err := os.ReadFile("deploy/systemd/hx-pxy-terminal.service")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -59,9 +59,9 @@ func TestPrivilegedTerminalSystemdUnitIsRootOnlyAndSocketScoped(t *testing.T) {
 	for _, expected := range []string{
 		"User=root",
 		"--terminal-helper",
-		"--terminal-socket /run/hx-proxygroup/terminal.sock",
-		"--terminal-socket-group hx-proxygroup",
-		"--terminal-helper-user hx-proxygroup",
+		"--terminal-socket /run/hx-pxy/terminal.sock",
+		"--terminal-socket-group hx-pxy",
+		"--terminal-helper-user hx-pxy",
 		"RuntimeDirectoryMode=0750",
 	} {
 		if !strings.Contains(unit, expected) {
@@ -75,19 +75,19 @@ func TestPrivilegedTerminalSystemdUnitIsRootOnlyAndSocketScoped(t *testing.T) {
 
 func TestDataPlaneSystemdUnitIsIndependentAndSandboxed(t *testing.T) {
 	t.Parallel()
-	content, err := os.ReadFile("deploy/systemd/hx-proxygroup-dataplane.service")
+	content, err := os.ReadFile("deploy/systemd/hx-pxy-dataplane.service")
 	if err != nil {
 		t.Fatal(err)
 	}
 	unit := string(content)
 	required := []string{
-		"/usr/local/lib/hx-proxygroup/current/mihomo",
-		"/var/lib/hx-proxygroup/runtime/active.yaml",
+		"/usr/local/lib/hx-pxy/current/mihomo",
+		"/var/lib/hx-pxy/runtime/active.yaml",
 		"Restart=on-failure",
 		"StartLimitBurst=20",
 		"NoNewPrivileges=true",
 		"ProtectSystem=strict",
-		"ReadWritePaths=/var/lib/hx-proxygroup/runtime",
+		"ReadWritePaths=/var/lib/hx-pxy/runtime",
 	}
 	for _, expected := range required {
 		if !strings.Contains(unit, expected) {
@@ -106,7 +106,7 @@ func TestInstallScriptDocumentsVerifiedReleaseAndOneLineUpgrade(t *testing.T) {
 		t.Fatal(err)
 	}
 	script := string(content)
-	for _, expected := range []string{"SHA256SUMS", "verify_bundle", "safe_extract_bundle", "switch_current", "sudo hx-proxygroup-install upgrade", "hx-proxygroup-dataplane.service", "hx-proxygroup-terminal.service"} {
+	for _, expected := range []string{"SHA256SUMS", "verify_bundle", "safe_extract_bundle", "switch_current", "sudo hx-pxy-install upgrade", "hx-pxy-dataplane.service", "hx-pxy-terminal.service"} {
 		if !strings.Contains(script, expected) {
 			t.Errorf("install script is missing %q", expected)
 		}
@@ -124,7 +124,7 @@ func TestInstallScriptRejectsUnsafeOfflineVersion(t *testing.T) {
 func TestPackageReleaseBundleContract(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()
-	control := writeExecutable(t, root, "hx-proxygroupd")
+	control := writeExecutable(t, root, "hx-pxyd")
 	mihomo := writeExecutable(t, root, "mihomo")
 	web := filepath.Join(root, "web")
 	if err := os.Mkdir(web, 0o755); err != nil {
@@ -147,7 +147,7 @@ func TestPackageReleaseBundleContract(t *testing.T) {
 				t.Fatalf("package release: %v\n%s", err, combined)
 			}
 		}
-		bundle := filepath.Join(output, "hx-proxygroup_v1.2.3_linux_amd64.tar.gz")
+		bundle := filepath.Join(output, "hx-pxy_v1.2.3_linux_amd64.tar.gz")
 		payload, err := os.ReadFile(bundle)
 		if err != nil {
 			t.Fatal(err)
@@ -194,14 +194,14 @@ func assertReleaseArchive(t *testing.T, path string) {
 	}
 	defer compressed.Close()
 	wanted := map[string]bool{
-		"./bin/hx-proxygroupd":                   false,
-		"./bin/mihomo":                           false,
-		"./LICENSE":                              false,
-		"./web/index.html":                       false,
-		"./install.sh":                           false,
-		"./deploy/systemd/hx-proxygroup.service": false,
-		"./deploy/systemd/hx-proxygroup-dataplane.service": false,
-		"./deploy/systemd/hx-proxygroup-terminal.service":  false,
+		"./bin/hx-pxyd":                   false,
+		"./bin/mihomo":                    false,
+		"./LICENSE":                       false,
+		"./web/index.html":                false,
+		"./install.sh":                    false,
+		"./deploy/systemd/hx-pxy.service": false,
+		"./deploy/systemd/hx-pxy-dataplane.service": false,
+		"./deploy/systemd/hx-pxy-terminal.service":  false,
 	}
 	reader := tar.NewReader(compressed)
 	for {

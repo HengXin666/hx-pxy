@@ -7,7 +7,7 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/HengXin666/HX-ProxyGroup/internal/auth"
+	"github.com/HengXin666/hx-pxy/internal/auth"
 )
 
 const sessionCookieName = "hx_session"
@@ -149,6 +149,15 @@ func (s *Server) requireAuth(next http.Handler) http.Handler {
 				s.writeAPIError(writer, request, http.StatusForbidden, "csrf_token_mismatch", "missing or invalid CSRF token")
 				return
 			}
+		}
+		// The group-creation guard is checked after authentication resolves the
+		// credential, because who is calling is the whole question it answers;
+		// see denyMachineGroupCreation. It sits before dispatch so a guarded
+		// request never reaches a handler that has already begun writing.
+		if s.denyMachineGroupCreation(request, session) {
+			s.writeAPIError(writer, request, http.StatusForbidden, "api_group_create_denied",
+				"creating proxy groups through the API is disabled; create it in the web UI, or clear guard.deny_api_group_create in settings")
+			return
 		}
 		next.ServeHTTP(writer, request)
 	})

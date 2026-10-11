@@ -14,8 +14,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/HengXin666/HX-ProxyGroup/internal/auth"
-	"github.com/HengXin666/HX-ProxyGroup/internal/dataplane/mihomo"
+	"github.com/HengXin666/hx-pxy/internal/auth"
+	"github.com/HengXin666/hx-pxy/internal/dataplane/mihomo"
 )
 
 type systemInfoDataPlane struct{}
@@ -64,7 +64,11 @@ func (service *systemUpdateService) TriggerUpdate(context.Context) error {
 	return nil
 }
 
-func (systemInfoDataPlane) Apply(context.Context) error { return nil }
+func (systemInfoDataPlane) Apply(context.Context) error                       { return nil }
+func (systemInfoDataPlane) SelectProxy(context.Context, string, string) error { return nil }
+func (systemInfoDataPlane) ReadGroup(context.Context, string) (mihomo.GroupSelection, error) {
+	return mihomo.GroupSelection{}, nil
+}
 func (systemInfoDataPlane) Status() mihomo.Status {
 	return mihomo.Status{Version: "Mihomo Meta 1.20.0"}
 }
@@ -72,10 +76,10 @@ func (systemInfoDataPlane) Status() mihomo.Status {
 func TestSystemInfoAPI(t *testing.T) {
 	t.Parallel()
 	info := SystemInfo{
-		Application:        "HX-ProxyGroup",
+		Application:        "HX-Pxy",
 		Version:            "v1.2.3",
-		RepositoryURL:      "https://github.com/HengXin666/HX-ProxyGroup",
-		UpdateCommand:      "sudo hx-proxygroup-install upgrade",
+		RepositoryURL:      "https://github.com/HengXin666/hx-pxy",
+		UpdateCommand:      "sudo hx-pxy-install upgrade",
 		SupportedProtocols: []string{"VLESS", "TUIC"},
 	}
 	server, err := NewServer(

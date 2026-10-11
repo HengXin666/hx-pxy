@@ -1,6 +1,6 @@
-# HX-ProxyGroup Agent Development Guide
+# HX-Pxy Agent Development Guide
 
-本文件约束所有 AI / Agent 对 HX-ProxyGroup 的后续修改。开始编码前必须先阅读
+本文件约束所有 AI / Agent 对 HX-Pxy 的后续修改。开始编码前必须先阅读
 `README.md`、`docs/V1_CORE.md`、`docs/ARCHITECTURE.md`、`docs/RELIABILITY.md`。
 
 ## 本文件规则 (硬性)
@@ -146,7 +146,7 @@ api -> application service -> domain/interface -> repository/dataplane
 ## 13. 参考项目
 
 - `ref/` 下项目只用于研究：默认不修改；不复制不兼容许可证代码。
-- 借鉴设计时在文档或提交说明中记录来源和差异；HX-ProxyGroup 的领域模型和 API
+- 借鉴设计时在文档或提交说明中记录来源和差异；HX-Pxy 的领域模型和 API
   不应直接照搬参考项目的内部实现。
 
 ---

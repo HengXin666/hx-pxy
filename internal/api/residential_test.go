@@ -16,9 +16,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/HengXin666/HX-ProxyGroup/internal/auth"
-	"github.com/HengXin666/HX-ProxyGroup/internal/residential"
-	"github.com/HengXin666/HX-ProxyGroup/internal/store"
+	"github.com/HengXin666/hx-pxy/internal/auth"
+	"github.com/HengXin666/hx-pxy/internal/residential"
+	"github.com/HengXin666/hx-pxy/internal/store"
 )
 
 // stubResidentialService records calls and returns canned results so the HTTP

@@ -3,7 +3,7 @@ package node
 import (
 	"context"
 
-	"github.com/HengXin666/HX-ProxyGroup/internal/systemsettings"
+	"github.com/HengXin666/hx-pxy/internal/systemsettings"
 )
 
 // ErrInvalidSettings marks quality-settings validation failures so the API

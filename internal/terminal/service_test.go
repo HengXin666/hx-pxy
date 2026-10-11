@@ -215,16 +215,16 @@ func waitTerminalMode(t *testing.T, session Session, matches func(Mode) bool) Mo
 func TestSafeShellEnvironmentDropsApplicationSecrets(t *testing.T) {
 	environment := safeShellEnvironment([]string{
 		"HOME=/srv/hx",
-		"USER=hx-proxygroup",
+		"USER=hx-pxy",
 		"PATH=/usr/bin:/bin",
 		"LANG=C.UTF-8",
 		"LC_TIME=C",
-		"HX_PROXYGROUP_MASTER_KEY=must-not-leak",
+		"HX_PXY_MASTER_KEY=must-not-leak",
 		"DATABASE_URL=sqlite-secret",
 		"AUTHORIZATION=Bearer-secret",
 	}, "/bin/sh", false, "", nil)
 	joined := strings.Join(environment, "\n")
-	for _, secret := range []string{"must-not-leak", "sqlite-secret", "Bearer-secret", "HX_PROXYGROUP_MASTER_KEY", "DATABASE_URL", "AUTHORIZATION"} {
+	for _, secret := range []string{"must-not-leak", "sqlite-secret", "Bearer-secret", "HX_PXY_MASTER_KEY", "DATABASE_URL", "AUTHORIZATION"} {
 		if strings.Contains(joined, secret) {
 			t.Fatalf("safe environment leaks %q: %s", secret, joined)
 		}
@@ -368,7 +368,7 @@ func TestCwdReportCachedForConcurrentSessions(t *testing.T) {
 func TestSafeShellEnvironmentPersistsHistory(t *testing.T) {
 	base := []string{
 		"HOME=/srv/hx",
-		"USER=hx-proxygroup",
+		"USER=hx-pxy",
 		"PATH=/usr/bin:/bin",
 	}
 	// Bash keeps its default ~/.bash_history when history is enabled.

@@ -16,10 +16,10 @@ import (
 
 	"github.com/coder/websocket"
 
-	"github.com/HengXin666/HX-ProxyGroup/internal/auth"
-	"github.com/HengXin666/HX-ProxyGroup/internal/secret"
-	"github.com/HengXin666/HX-ProxyGroup/internal/store"
-	terminalservice "github.com/HengXin666/HX-ProxyGroup/internal/terminal"
+	"github.com/HengXin666/hx-pxy/internal/auth"
+	"github.com/HengXin666/hx-pxy/internal/secret"
+	"github.com/HengXin666/hx-pxy/internal/store"
+	terminalservice "github.com/HengXin666/hx-pxy/internal/terminal"
 )
 
 func TestTerminalWebSocketRejectsCrossOriginAndTracksStepUpRevocation(t *testing.T) {

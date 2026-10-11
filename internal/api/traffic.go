@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/HengXin666/HX-ProxyGroup/internal/metrics"
+	"github.com/HengXin666/hx-pxy/internal/metrics"
 )
 
 func (s *Server) handleTraffic(writer http.ResponseWriter, request *http.Request) {

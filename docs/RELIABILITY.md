@@ -1,4 +1,4 @@
-# HX-ProxyGroup 可靠性、安全与部署规范
+# HX-Pxy 可靠性、安全与部署规范
 
 ## 1. 目标
 
@@ -108,23 +108,23 @@ runtime/
 
 ```ini
 [Unit]
-Description=HX-ProxyGroup Control Plane
+Description=HX-Pxy Control Plane
 Wants=network-online.target
-Requires=hx-proxygroup-dataplane.service hx-proxygroup-terminal.service
-After=network-online.target hx-proxygroup-dataplane.service hx-proxygroup-terminal.service
+Requires=hx-pxy-dataplane.service hx-pxy-terminal.service
+After=network-online.target hx-pxy-dataplane.service hx-pxy-terminal.service
 
 [Service]
 Type=simple
-User=hx-proxygroup
-Group=hx-proxygroup
-ExecStart=/usr/local/lib/hx-proxygroup/current/hx-proxygroupd \
+User=hx-pxy
+Group=hx-pxy
+ExecStart=/usr/local/lib/hx-pxy/current/hx-pxyd \
   --listen 127.0.0.1:19090 \
-  --data-dir /var/lib/hx-proxygroup \
-  --config /etc/hx-proxygroup/config.yaml \
-  --web-root /usr/local/lib/hx-proxygroup/current/web \
-  --mihomo /usr/local/lib/hx-proxygroup/current/mihomo \
+  --data-dir /var/lib/hx-pxy \
+  --config /etc/hx-pxy/config.yaml \
+  --web-root /usr/local/lib/hx-pxy/current/web \
+  --mihomo /usr/local/lib/hx-pxy/current/mihomo \
   --mihomo-external \
-  --terminal-socket /run/hx-proxygroup/terminal.sock
+  --terminal-socket /run/hx-pxy/terminal.sock
 Restart=on-failure
 RestartSec=5s
 StartLimitIntervalSec=300
@@ -136,7 +136,7 @@ NoNewPrivileges=true
 PrivateTmp=true
 ProtectHome=true
 ProtectSystem=strict
-ReadWritePaths=/var/lib/hx-proxygroup
+ReadWritePaths=/var/lib/hx-pxy
 LockPersonality=true
 RestrictSUIDSGID=true
 
@@ -148,15 +148,15 @@ WantedBy=multi-user.target
 
 ```ini
 [Unit]
-Description=HX-ProxyGroup Mihomo Data Plane
+Description=HX-Pxy Mihomo Data Plane
 Wants=network-online.target
 After=network-online.target
 
 [Service]
-User=hx-proxygroup
-Group=hx-proxygroup
-ExecStartPre=/usr/local/lib/hx-proxygroup/current/mihomo -t -d /var/lib/hx-proxygroup/runtime -f /var/lib/hx-proxygroup/runtime/active.yaml
-ExecStart=/usr/local/lib/hx-proxygroup/current/mihomo -d /var/lib/hx-proxygroup/runtime -f /var/lib/hx-proxygroup/runtime/active.yaml
+User=hx-pxy
+Group=hx-pxy
+ExecStartPre=/usr/local/lib/hx-pxy/current/mihomo -t -d /var/lib/hx-pxy/runtime -f /var/lib/hx-pxy/runtime/active.yaml
+ExecStart=/usr/local/lib/hx-pxy/current/mihomo -d /var/lib/hx-pxy/runtime -f /var/lib/hx-pxy/runtime/active.yaml
 Restart=on-failure
 RestartSec=3s
 StartLimitIntervalSec=300
@@ -166,7 +166,7 @@ NoNewPrivileges=true
 PrivateTmp=true
 ProtectHome=true
 ProtectSystem=strict
-ReadWritePaths=/var/lib/hx-proxygroup/runtime
+ReadWritePaths=/var/lib/hx-pxy/runtime
 
 [Install]
 WantedBy=multi-user.target
@@ -174,16 +174,16 @@ WantedBy=multi-user.target
 
 ### 5.3 终端 Helper Unit
 
-生产安装额外运行 `hx-proxygroup-terminal.service`：它以 root 启动同一控制面二进制的
-`--terminal-helper` 模式，在 `/run/hx-proxygroup/terminal.sock` 提供 PTY。Socket 为
-`root:hx-proxygroup`、`0660`，helper 同时通过 Linux `SO_PEERCRED` 校验对端 UID；它不监听
+生产安装额外运行 `hx-pxy-terminal.service`：它以 root 启动同一控制面二进制的
+`--terminal-helper` 模式，在 `/run/hx-pxy/terminal.sock` 提供 PTY。Socket 为
+`root:hx-pxy`、`0660`，helper 同时通过 Linux `SO_PEERCRED` 校验对端 UID；它不监听
 TCP/HTTP，也不承载代理流量。控制面退出或关闭时，`PartOf` 会回收 helper 和其 root PTY。
 helper 还接受一个与 PTY 帧分离的无参数更新请求；它只在校验 root 所有、不可被组/其他用户写入的
-安装器后，通过 `systemd-run` 调度 `/usr/local/sbin/hx-proxygroup-install upgrade`，不接受浏览器
+安装器后，通过 `systemd-run` 调度 `/usr/local/sbin/hx-pxy-install upgrade`，不接受浏览器
 提供命令、路径或目标版本。更新请求先确认后调度：helper 立即回复 `frameReady`，再在独立 goroutine
 中运行 `systemd-run`（30 秒上限），systemd 繁忙不会拖住控制面握手（早期同步实现曾让客户端 5 秒
 超时报 `read .../terminal.sock: i/o timeout` 误报更新失败）。同一时刻只允许一个更新在飞：进程内
-单飞互斥，配合 `systemctl is-active hx-proxygroup-update` 覆盖 helper 重启后的重复请求，更新进行中
+单飞互斥，配合 `systemctl is-active hx-pxy-update` 覆盖 helper 重启后的重复请求，更新进行中
 的再次点击直接返回"更新进行中"错误；`systemd-run` 失败只记日志，不影响已确认的请求。
 
 仓库中的 `deploy/systemd/` 是发布包的权威 unit。控制面和数据面均以非 root 用户运行，管理 API 只监听 `127.0.0.1`，External Controller 使用 Unix Socket，并启用 systemd 文件系统、设备、内核和 capability 沙箱。浏览器终端另有一个 root PTY helper，只监听控制面用户可访问的本机 Unix Socket；它不接收网络流量，终端 WebSocket 仍必须通过管理员登录和 TOTP 2FA。
@@ -251,10 +251,10 @@ preflight
 ### 6.4 版本化布局
 
 ```text
-/usr/local/lib/hx-proxygroup/
+/usr/local/lib/hx-pxy/
 ├── versions/
 │   ├── 1.0.0/
-│   │   ├── hx-proxygroupd
+│   │   ├── hx-pxyd
 │   │   ├── mihomo
 │   │   └── web/
 │   └── 1.0.1/
@@ -263,10 +263,10 @@ preflight
 
 使用版本目录和原子符号链接切换，升级失败时恢复旧链接。至少保留上一版可用版本。
 
-稳定 Release 包名为 `hx-proxygroup_<tag>_linux_<amd64|arm64>.tar.gz`，固定包含 `bin/hx-proxygroupd`、`bin/mihomo`、`web/`、`deploy/systemd/` 和新版 `install.sh`。升级成功时安装器自身同步更新，因此后续版本继续使用：
+稳定 Release 包名为 `hx-pxy_<tag>_linux_<amd64|arm64>.tar.gz`，固定包含 `bin/hx-pxyd`、`bin/mihomo`、`web/`、`deploy/systemd/` 和新版 `install.sh`。升级成功时安装器自身同步更新，因此后续版本继续使用：
 
 ```bash
-sudo hx-proxygroup-install upgrade
+sudo hx-pxy-install upgrade
 ```
 
 `.github/workflows/release.yml` 是在线发布入口。推送 `v*` tag 后先执行 `go test ./...`、
@@ -372,9 +372,9 @@ readiness 和失败回滚仍全部由安装器执行。非 systemd 本地开发�
 ### 8.5 数据面回环与资源边界
 
 - 受管 Mihomo 默认读取 Linux 主路由表的默认出口，并通过全局 `interface-name` 绑定真实网卡，避免上游拨号重新进入 Clash / Mihomo TUN。
-- `HX_PROXYGROUP_MIHOMO_EGRESS_INTERFACE` 可指定网卡；只有显式设置 `off` 才允许数据面跟随宿主机策略路由。
+- `HX_PXY_MIHOMO_EGRESS_INTERFACE` 可指定网卡；只有显式设置 `off` 才允许数据面跟随宿主机策略路由。
 - 编译候选配置时拒绝上游节点直接指向同地址、同端口的受管 Listener。
-- Mihomo 默认 `GOMAXPROCS` 不超过 4，可通过 `HX_PROXYGROUP_MIHOMO_MAX_PROCS` 调整，避免异常连接风暴占满全部 CPU 核。
+- Mihomo 默认 `GOMAXPROCS` 不超过 4，可通过 `HX_PXY_MIHOMO_MAX_PROCS` 调整，避免异常连接风暴占满全部 CPU 核。
 - `runtime/mihomo.log` 在线轮转，默认单文件 8 MiB、保留 2 份；上限和备份数可通过环境变量调整。
 - 自动出口识别失败时控制面保持管理 API 可用并输出结构化告警，不伪装成已完成 TUN 隔离。
 
@@ -429,7 +429,7 @@ readiness 和失败回滚仍全部由安装器执行。非 systemd 本地开发�
 推荐方案：
 
 - 使用本机主密钥对敏感字段进行 AEAD 加密后存入 SQLite。
-- 当前部署将主密钥保存于 `/var/lib/hx-proxygroup/master.key`，权限 `0600`，由不可登录服务用户独占读取，不进入普通明文 Backup。
+- 当前部署将主密钥保存于 `/var/lib/hx-pxy/master.key`，权限 `0600`，由不可登录服务用户独占读取，不进入普通明文 Backup。
 - 支持通过 systemd credential 或外部环境注入主密钥。
 - 备份时明确包含或单独导出主密钥，否则备份不可恢复。
 

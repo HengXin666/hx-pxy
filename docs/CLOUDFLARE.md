@@ -1,6 +1,6 @@
 # Cloudflare 与雷池接入
 
-HX-ProxyGroup 的公网推荐拓扑是：
+HX-Pxy 的公网推荐拓扑是：
 
 ```text
 客户端 -> Cloudflare 橙云 :443 -> 雷池 HTTPS :443
@@ -33,7 +33,7 @@ Cloudflare 和雷池不会把 HTTP CONNECT、SOCKS5 或 Mixed 自动转换成 We
 2. 客户端导入对应代理服务或住宅渠道的 VLESS/VMess/Trojan WS 订阅，由客户端本机 Mihomo 提供
    `127.0.0.1:7890` 等 HTTP/SOCKS/Mixed 落地端口。
 
-## HX-ProxyGroup 入口配置
+## HX-Pxy 入口配置
 
 在普通代理服务或住宅渠道中选择 `VLESS WS`、`VMess WS` 或 `Trojan WS`：
 

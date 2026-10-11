@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/HengXin666/HX-ProxyGroup/internal/metrics"
+	"github.com/HengXin666/hx-pxy/internal/metrics"
 )
 
 type fakeTrafficService struct {

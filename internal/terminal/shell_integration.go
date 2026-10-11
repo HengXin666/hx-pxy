@@ -32,7 +32,7 @@ import (
 // probe.
 
 // shellIntegrationEnvVar disables the generated startup fragment entirely.
-const shellIntegrationEnvVar = "HX_PROXYGROUP_SHELL_INTEGRATION"
+const shellIntegrationEnvVar = "HX_PXY_SHELL_INTEGRATION"
 
 // ShellIntegrationDisabled reports whether the administrator turned the startup
 // fragment off. Only an explicit falsy value disables it.
@@ -106,7 +106,7 @@ func writeShellIntegration(directory, shell string) (scriptPath string, extraEnv
 // OSC 7 hook in front of any PROMPT_COMMAND they already configured.
 func bashIntegrationScript() string {
 	return strings.Join([]string{
-		"# HX-ProxyGroup shell integration (generated): report the working directory",
+		"# HX-Pxy shell integration (generated): report the working directory",
 		"# over OSC 7 so the web UI follows cd without running a probe command.",
 		"# This file is rewritten on every shell start and never replaces your own rc.",
 		"if [ -n \"${HX_ORIGINAL_BASHRC:-}\" ] && [ -r \"${HX_ORIGINAL_BASHRC}\" ]; then",
@@ -128,7 +128,7 @@ func bashIntegrationScript() string {
 // OSC 7 hook with add-zsh-hook so any existing precmd hook keeps running.
 func zshIntegrationScript() string {
 	return strings.Join([]string{
-		"# HX-ProxyGroup shell integration (generated): report the working directory",
+		"# HX-Pxy shell integration (generated): report the working directory",
 		"# over OSC 7 so the web UI follows cd without running a probe command.",
 		"# This file is rewritten on every shell start and never replaces your own rc.",
 		"if [ -n \"${HX_ORIGINAL_ZDOTDIR:-}\" ] && [ -r \"${HX_ORIGINAL_ZDOTDIR}/.zshrc\" ]; then",

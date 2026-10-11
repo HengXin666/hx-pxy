@@ -6,7 +6,7 @@ import (
 	"net"
 	"strings"
 
-	"github.com/HengXin666/HX-ProxyGroup/internal/listener"
+	"github.com/HengXin666/hx-pxy/internal/listener"
 )
 
 const (

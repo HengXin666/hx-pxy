@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/HengXin666/HX-ProxyGroup/internal/store"
+	"github.com/HengXin666/hx-pxy/internal/store"
 )
 
 // chainRepository serves whole node records plus the candidates node_ids resolve

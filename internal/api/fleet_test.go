@@ -10,8 +10,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/HengXin666/HX-ProxyGroup/internal/fleet"
-	"github.com/HengXin666/HX-ProxyGroup/internal/store"
+	"github.com/HengXin666/hx-pxy/internal/fleet"
+	"github.com/HengXin666/hx-pxy/internal/store"
 )
 
 // stubFleetService provides canned fleet data so the HTTP layer can be tested

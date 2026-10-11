@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/HengXin666/HX-ProxyGroup/internal/overview"
+	"github.com/HengXin666/hx-pxy/internal/overview"
 )
 
 type overviewConnectionsResponse struct {

@@ -762,7 +762,7 @@ ALTER TABLE residential_channels
 	{
 		version: 30,
 		name:    "cf_fleet",
-		// 20260823 用户决策：HX-ProxyGroup 内置 CF worker 舰队维护——
+		// 20260823 用户决策：HX-Pxy 内置 CF worker 舰队维护——
 		// 给定 CF 账号(API token)自动部署/探测/封禁重建/账号切换。
 		sql: `
 CREATE TABLE cf_accounts (
@@ -794,7 +794,7 @@ CREATE TABLE fleet_workers (
 		version: 31,
 		name:    "channel_providers",
 		// 20260823 user decision: one channel aggregates multiple providers —
-		// HX-Proxy → [CF-渠道] → [CF-Node1..N] visible in the frontend. The
+		// HX-Pxy → [CF-渠道] → [CF-Node1..N] visible in the frontend. The
 		// channel keeps its primary provider_id column for session routing;
 		// the junction carries the full node list.
 		sql: `

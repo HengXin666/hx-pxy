@@ -9,7 +9,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/HengXin666/HX-ProxyGroup/internal/store"
+	"github.com/HengXin666/hx-pxy/internal/store"
 )
 
 const MaxQueryRange = 30 * 24 * time.Hour

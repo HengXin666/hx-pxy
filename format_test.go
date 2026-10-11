@@ -1,4 +1,4 @@
-package hxproxygroup
+package hxpxy
 
 import (
 	"bytes"

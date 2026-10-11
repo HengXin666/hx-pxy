@@ -2,7 +2,7 @@
 
 ## 1. 两类 Artifact
 
-HX-ProxyGroup 将“备份”和“导出”定义为两个不同用途：
+HX-Pxy 将“备份”和“导出”定义为两个不同用途：
 
 | 类型 | 用途 | 默认内容 | 兼容性 |
 | --- | --- | --- | --- |
@@ -71,7 +71,7 @@ backup-<id>.tar.gz
 ├── payload/
 │   ├── control-plane-state/
 │   └── database/
-│       └── hx-proxygroup.db
+│       └── hx-pxy.db
 └── manifest.json
 ```
 
@@ -82,7 +82,7 @@ Manifest 示例字段：
 ```json
 {
   "schema_version": 1,
-  "application": "HX-ProxyGroup",
+  "application": "HX-Pxy",
   "application_version": "dev",
   "kind": "backup",
   "created_at": "2026-07-25T12:00:00Z",

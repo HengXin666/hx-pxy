@@ -8,8 +8,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/HengXin666/HX-ProxyGroup/internal/secret"
-	"github.com/HengXin666/HX-ProxyGroup/internal/store"
+	"github.com/HengXin666/hx-pxy/internal/secret"
+	"github.com/HengXin666/hx-pxy/internal/store"
 )
 
 func TestSubscriptionLifecycleEncryptsSourceConfiguration(t *testing.T) {
@@ -17,7 +17,7 @@ func TestSubscriptionLifecycleEncryptsSourceConfiguration(t *testing.T) {
 
 	ctx := context.Background()
 	root := t.TempDir()
-	databasePath := filepath.Join(root, "hx-proxygroup.db")
+	databasePath := filepath.Join(root, "hx-pxy.db")
 	database, err := store.Open(ctx, databasePath)
 	if err != nil {
 		t.Fatalf("store.Open() error = %v", err)
@@ -40,7 +40,7 @@ func TestSubscriptionLifecycleEncryptsSourceConfiguration(t *testing.T) {
 		SourceConfig: SourceConfig{
 			URL:       secretURL,
 			Headers:   map[string]string{"Authorization": secretHeader},
-			UserAgent: "HX-ProxyGroup-Test",
+			UserAgent: "HX-Pxy-Test",
 		},
 	})
 	if err != nil {
@@ -185,7 +185,7 @@ func assertDatabaseDoesNotContain(t *testing.T, root string, plaintext []byte) {
 func newClassTestService(t *testing.T) (*Service, *store.Store) {
 	t.Helper()
 	ctx := context.Background()
-	database, err := store.Open(ctx, filepath.Join(t.TempDir(), "hx-proxygroup.db"))
+	database, err := store.Open(ctx, filepath.Join(t.TempDir(), "hx-pxy.db"))
 	if err != nil {
 		t.Fatalf("store.Open() error = %v", err)
 	}

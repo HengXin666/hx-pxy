@@ -7,10 +7,10 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/HengXin666/HX-ProxyGroup/internal/listener"
-	"github.com/HengXin666/HX-ProxyGroup/internal/proxygroup"
-	"github.com/HengXin666/HX-ProxyGroup/internal/store"
-	"github.com/HengXin666/HX-ProxyGroup/internal/systemsettings"
+	"github.com/HengXin666/hx-pxy/internal/listener"
+	"github.com/HengXin666/hx-pxy/internal/proxygroup"
+	"github.com/HengXin666/hx-pxy/internal/store"
+	"github.com/HengXin666/hx-pxy/internal/systemsettings"
 )
 
 var ErrCreateFailed = errors.New("create proxy service failed")
@@ -24,6 +24,7 @@ type GroupService interface {
 
 type ListenerService interface {
 	Create(context.Context, listener.CreateRequest) (listener.Listener, error)
+	Get(context.Context, string) (listener.Listener, error)
 	Update(context.Context, string, listener.UpdateRequest) (listener.Listener, error)
 	// EnsureSharedInbounds converges the aggregate listener rows for the
 	// requested protocol families and returns every managed aggregate.
@@ -74,6 +75,19 @@ type ListenerUpdateRequest struct {
 	Transport      listener.Transport      `json:"transport,omitempty"`
 	PublicEndpoint listener.PublicEndpoint `json:"public_endpoint,omitempty"`
 	Enabled        *bool                   `json:"enabled,omitempty"`
+	// NodeID moves this service's pin to another node. Omit it to keep the
+	// stored pin: a composite update that does not mention the pin must not
+	// release it, because "rename this service" would otherwise silently move
+	// its egress onto whichever group the row happens to anchor to.
+	//
+	// See .agents/notes/implemented/simplification/2026-10-01-service-shape-follows-source-class.md.
+	NodeID string `json:"node_id,omitempty"`
+	// ClearNodePin releases the pin explicitly and hands the service back to
+	// its group. It exists because an omitted NodeID means "keep", so the two
+	// intentions cannot share one representation — the empty string is a
+	// meaningful value on this field, and the row that stores it agrees
+	// (listeners.node_id is NULLable and read through COALESCE).
+	ClearNodePin bool `json:"clear_node_pin,omitempty"`
 }
 
 type UpdateRequest struct {
@@ -269,6 +283,17 @@ func isWebSocketKind(kind string) bool {
 }
 
 func (s *Service) Update(ctx context.Context, request UpdateRequest) (ServiceRecord, error) {
+	// An entry point belongs to exactly one service. Without this check the
+	// update would happily hand another service's listener over to this group,
+	// because the listener service only knows the row id it was given: the
+	// caller (and the body) decided which group to attach it to. Naming someone
+	// else's listener is a conflict, not a move.
+	//
+	// Checked before the first write: a rejected update must not consume a group
+	// version, or the caller's next legitimate attempt fails on a stale one.
+	if err := s.ensureListenerOwnedBy(ctx, request.ListenerID, request.GroupID); err != nil {
+		return ServiceRecord{}, err
+	}
 	original, err := s.groups.Get(ctx, request.GroupID)
 	if err != nil {
 		return ServiceRecord{}, err
@@ -307,6 +332,22 @@ func (s *Service) Update(ctx context.Context, request UpdateRequest) (ServiceRec
 		port = sharedPort
 		transport = listener.Transport{Type: "ws", WSPath: listener.SharedInboundRoutePath()}
 	}
+	// The pin is carried through unless the caller explicitly moves or clears
+	// it. Measured 2026-10-01: this call used to drop the field entirely, so
+	// saving an unrelated edit on a pinned service (`ioa-vm-mixed`) rewrote its
+	// egress from the pinned node to the anchor group's members — a rename that
+	// silently rerouted traffic. Reading the stored pin is cheap and it is the
+	// only place that knows the current one.
+	pinnedNodeID := strings.TrimSpace(request.Listener.NodeID)
+	if request.Listener.ClearNodePin {
+		pinnedNodeID = ""
+	} else if pinnedNodeID == "" {
+		current, err := s.listeners.Get(ctx, request.ListenerID)
+		if err != nil {
+			return ServiceRecord{}, err
+		}
+		pinnedNodeID = strings.TrimSpace(current.NodeID)
+	}
 	updatedListener, err := s.listeners.Update(ctx, request.ListenerID, listener.UpdateRequest{
 		Version:        request.ListenerVersion,
 		Name:           request.Listener.Name,
@@ -314,6 +355,7 @@ func (s *Service) Update(ctx context.Context, request UpdateRequest) (ServiceRec
 		BindAddress:    bind,
 		Port:           port,
 		ProxyGroupID:   request.GroupID,
+		NodeID:         pinnedNodeID,
 		Auth:           request.Listener.Auth,
 		Transport:      transport,
 		PublicEndpoint: request.Listener.PublicEndpoint,
@@ -343,6 +385,25 @@ func (s *Service) Update(ctx context.Context, request UpdateRequest) (ServiceRec
 		return ServiceRecord{}, fmt.Errorf("%w: %v", listener.ErrApplyFailed, err)
 	}
 	return ServiceRecord{Group: updatedGroup, Listener: updatedListener}, nil
+}
+
+// ensureListenerOwnedBy rejects an update that names a listener belonging to a
+// different proxy group. The composite update exists so a service's group and
+// its entry point stay consistent; re-pointing a foreign listener would silently
+// empty the service that owned it.
+func (s *Service) ensureListenerOwnedBy(ctx context.Context, listenerID, groupID string) error {
+	listenerID = strings.TrimSpace(listenerID)
+	if listenerID == "" {
+		return fmt.Errorf("%w: listener_id is required", listener.ErrInvalid)
+	}
+	current, err := s.listeners.Get(ctx, listenerID)
+	if err != nil {
+		return err
+	}
+	if current.ProxyGroupID != groupID {
+		return fmt.Errorf("%w: listener %q belongs to another proxy group", listener.ErrConflict, listenerID)
+	}
+	return nil
 }
 
 // sortGroups is a tiny helper kept so the anchor selection stays deterministic

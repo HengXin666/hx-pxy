@@ -97,6 +97,12 @@ INSERT INTO l VALUES('a',NULL,NULL);
 
 **新增能力**: `POST/PUT /api/v1/listeners` 接受 `node_id`, 单独给即可, 不需要组。
 
+**后续 (2026-10-01)**: 本能力**已经存在却仍被绕过** —— `gh-registrar/proto/watch_t.py` 继续为每个
+节点建单成员组, 12 天内又积累了 6 个。原因与对策 (机机凭据不许建组的闸门) 见
+`implemented/architecture/2026-10-01-api-cannot-grow-the-group-graph.md`。那篇同时修掉了该调用方。
+所以本 note 描述的是**能力**, 那篇描述的是**约束**; 两者必须一起读, 否则会得出"能力已有 ⇒ 问题已解"
+的错误结论。
+
 **实机端到端实测** (服务经 HX-WebX 重启后):
 
 - 只带 `node_id` 建 listener -> `201`, 返回体里没有组语义; 生成规则为

@@ -70,7 +70,7 @@ func (bundle ShareBundle) uriBody() string {
 func (bundle ShareBundle) Render(format string) (body, fileName, contentType string, err error) {
 	name := bundle.Name
 	if name == "" {
-		name = "HX-ProxyGroup"
+		name = "HX-Pxy"
 	}
 	uriBody := bundle.uriBody()
 	switch strings.ToLower(strings.TrimSpace(format)) {

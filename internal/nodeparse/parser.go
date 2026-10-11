@@ -50,16 +50,27 @@ type ProviderReference struct {
 
 var nativeProtocols = map[string]struct{}{
 	"anytls": {}, "hysteria": {}, "hysteria2": {}, "http": {}, "https": {},
-	"mieru": {}, "shadow-tls": {}, "snell": {}, "socks": {}, "socks5": {},
-	"ss": {}, "ssh": {}, "ssr": {}, "trojan": {}, "tuic": {}, "vless": {},
-	"vmess": {}, "wireguard": {},
+	"mieru": {}, "openvpn": {}, "shadow-tls": {}, "snell": {}, "socks": {},
+	"socks5": {}, "ss": {}, "ssh": {}, "ssr": {}, "trojan": {}, "tuic": {},
+	"vless": {}, "vmess": {}, "wireguard": {},
 }
 
 // SupportedProtocols returns the outbound protocol names accepted from native
 // Mihomo YAML. Actual availability is still determined by the installed
 // Mihomo build during candidate validation.
+//
+// openvpn is listed because the installed Mihomo build carries a native
+// OpenVPN outbound (`adapter/outbound/openvpn.go`), which is how VPNGate-style
+// home-broadband exits are consumed. It is deliberately *not* in the same
+// category as the share-URI protocols: it only ever arrives as native YAML with
+// inline ca/cert/key, and the compiler injects a remote DNS resolver for it
+// (see convertNodeConfig) because the tunnel's own resolver must be used once it
+// is up. masque is intentionally absent — it needs an IPv6 endpoint and a
+// different field set (private-key/public-key/ip), which no source we consume
+// provides.
+// See .agents/notes/implemented/feature/2026-10-05-openvpn-outbound-as-first-class-node.md.
 func SupportedProtocols() []string {
-	return []string{"anytls", "hysteria", "hysteria2", "http", "mieru", "shadow-tls", "snell", "socks5", "ss", "ssh", "ssr", "trojan", "tuic", "vless", "vmess", "wireguard"}
+	return []string{"anytls", "hysteria", "hysteria2", "http", "mieru", "openvpn", "shadow-tls", "snell", "socks5", "ss", "ssh", "ssr", "trojan", "tuic", "vless", "vmess", "wireguard"}
 }
 
 func Parse(content []byte) (Result, error) {
@@ -277,6 +288,14 @@ func nodeFromClash(raw map[string]any) (Node, error) {
 		canonical["tls"] = true
 	case "socks":
 		protocol = "socks5"
+	case "openvpn":
+		// An OpenVPN outbound is useless without its inline CA/cert/key: the
+		// data plane rejects it (`openvpn config requires inline <ca> block`).
+		// Rejecting here turns a whole-subscription silent failure into a
+		// per-node failure row the operator can see.
+		if strings.TrimSpace(stringValue(canonical["ca"])) == "" {
+			return Node{}, errors.New("openvpn node requires an inline ca block")
+		}
 	}
 	server := strings.TrimSpace(stringValue(canonical["server"]))
 	if server == "" {

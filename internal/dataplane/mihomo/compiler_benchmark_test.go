@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/HengXin666/HX-ProxyGroup/internal/store"
+	"github.com/HengXin666/hx-pxy/internal/store"
 )
 
 type benchmarkCompilerRepository struct{ nodes []store.NodeConfigRecord }

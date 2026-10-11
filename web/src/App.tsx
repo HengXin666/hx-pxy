@@ -30,7 +30,7 @@ import { cn } from "@/lib/utils"
 
 type Page = "overview" | "subscriptions" | "routing" | "residential" | "rules" | "settings" | "alerts" | "artifacts" | "terminal" | "about"
 type Notice = { id: number; message: string; tone: "success" | "error" }
-const sidebarStorageKey = "hx-proxygroup.sidebar-collapsed"
+const sidebarStorageKey = "hx-pxy.sidebar-collapsed"
 
 // One loader per page, shared by React.lazy (render path) and preloadPage
 // (hover/focus prefetch). A second import() of the same specifier is free: the
@@ -231,7 +231,7 @@ export default function App() {
         <div className={cn("flex h-14 items-center border-b", sidebarCollapsed ? "justify-center px-2" : "gap-2.5 px-3")}>
           {!sidebarCollapsed && <>
             <div className="flex size-7 shrink-0 items-center justify-center rounded-md bg-[#24292f] text-white"><Network className="size-4" /></div>
-            <div className="min-w-0 flex-1 truncate text-sm font-semibold">HX-ProxyGroup</div>
+            <div className="min-w-0 flex-1 truncate text-sm font-semibold">HX-Pxy</div>
           </>}
           <div className="group relative flex">
             <button
@@ -292,13 +292,13 @@ export default function App() {
         </div>
       </aside>
 
-      <div className={cn("min-w-0 lg:h-screen", page === "routing" ? "lg:overflow-y-auto xl:overflow-hidden" : "lg:overflow-y-auto")}>
+      <div className={cn("min-w-0 lg:h-screen", page === "routing" ? "lg:overflow-y-auto 2xl:overflow-hidden" : "lg:overflow-y-auto")}>
         <header className="sticky top-0 z-40 border-b bg-card lg:hidden">
           <div className="flex h-13 items-center gap-2 px-3">
             <div className="flex size-7 items-center justify-center rounded-md bg-[#24292f] text-white">
               <Network className="size-4" />
             </div>
-            <span className="font-semibold">HX-ProxyGroup</span>
+            <span className="font-semibold">HX-Pxy</span>
             <div className="ml-auto flex items-center gap-1"><ThemeToggle /><StatusDot healthy={healthy} /></div>
           </div>
           <nav className="scrollbar-none flex gap-1 overflow-x-auto border-t px-2 py-1.5">
@@ -335,7 +335,7 @@ export default function App() {
           page === "terminal"
             ? "lg:h-full lg:max-w-none lg:overflow-hidden"
             : "max-w-[1440px] px-4 py-5 sm:px-6 lg:px-8 lg:py-7",
-          page === "routing" && "xl:h-full xl:max-w-none xl:overflow-hidden",
+          page === "routing" && "2xl:h-full 2xl:max-w-none 2xl:overflow-hidden",
         )}>
           {healthy === false && (
             <div className="mb-4 flex items-start gap-2.5 rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2.5 text-sm text-destructive">
@@ -350,7 +350,7 @@ export default function App() {
           )}
 
           {page !== "terminal" && (
-            <div key={page} className={cn("page-enter", page === "routing" && "xl:h-full")}>
+            <div key={page} className={cn("page-enter", page === "routing" && "2xl:h-full")}>
               <Suspense fallback={<PageFallback />}>
                 {page === "overview" && <OverviewPage onNotice={showNotice} />}
                 {page === "subscriptions" && <InventoryPage initialView={window.location.hash.includes("nodes") ? "nodes" : "subscriptions"} onNotice={showNotice} />}

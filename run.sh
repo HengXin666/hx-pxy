@@ -39,19 +39,19 @@ timestamp() {
 }
 
 log() {
-    local line="[$(timestamp)] [hx-proxygroup] $*"
+    local line="[$(timestamp)] [hx-pxy] $*"
     printf '%s\n' "${line}"
     append_run_log "${line}"
 }
 
 warn() {
-    local line="[$(timestamp)] [hx-proxygroup] warning: $*"
+    local line="[$(timestamp)] [hx-pxy] warning: $*"
     printf '%s\n' "${line}" >&2
     append_run_log "${line}"
 }
 
 fail() {
-    local line="[$(timestamp)] [hx-proxygroup] error: $*"
+    local line="[$(timestamp)] [hx-pxy] error: $*"
     printf '%s\n' "${line}" >&2
     append_run_log "${line}"
     exit 1
@@ -62,12 +62,12 @@ usage() {
 Usage:
   ./run.sh [options]
 
-Starts HX-ProxyGroup locally without root, systemd, service users, or files under
+Starts HX-Pxy locally without root, systemd, service users, or files under
 /usr/local, /etc, /var/lib, and /var/log. Ctrl+C stops all child processes.
 
 Options:
   --version VERSION          Backend build version. Default: dev
-  --binary PATH              Run an existing hx-proxygroupd binary.
+  --binary PATH              Run an existing hx-pxyd binary.
   --listen ADDRESS           Backend listen address. Default: random loopback high port
   --data-dir PATH            Local runtime data. Default: ./.tmp/run-data
   --frontend-dir PATH        React project directory. Default: ./web
@@ -260,7 +260,7 @@ prepare_local_directories() {
 }
 
 build_or_copy_backend() {
-    BACKEND_BINARY="${RUN_DIR}/bin/hx-proxygroupd"
+    BACKEND_BINARY="${RUN_DIR}/bin/hx-pxyd"
     if [[ -n "${BINARY_SOURCE}" ]]; then
         [[ -f "${BINARY_SOURCE}" ]] || fail "binary does not exist: ${BINARY_SOURCE}"
         [[ -x "${BINARY_SOURCE}" ]] || fail "binary is not executable: ${BINARY_SOURCE}"
@@ -277,7 +277,7 @@ build_or_copy_backend() {
             -trimpath \
             -ldflags "-s -w -X main.version=${VERSION}" \
             -o "${BACKEND_BINARY}" \
-            ./cmd/hx-proxygroupd
+            ./cmd/hx-pxyd
     ) 2>&1 | tee -a "${RUN_LOG}"
     chmod 0755 "${BACKEND_BINARY}"
 }
@@ -290,7 +290,7 @@ start_backend() {
         --listen "${LISTEN_ADDRESS}" \
         --data-dir "${DATA_DIR}" \
         --config "${RUN_DIR}/config.yaml" \
-        --database "${DATA_DIR}/hx-proxygroup.db" \
+        --database "${DATA_DIR}/hx-pxy.db" \
         --master-key "${DATA_DIR}/master.key" \
         --runtime-config "${DATA_DIR}/runtime/active.yaml" \
         --snapshots "${DATA_DIR}/snapshots" \
@@ -423,7 +423,18 @@ start_frontend_if_available() {
     (
         cd "${FRONTEND_DIR}"
         export VITE_BACKEND_TARGET="${api_base}"
-        exec setsid "${package_manager}" run dev -- \
+        # `--` is required to forward flags to the underlying Vite CLI only for
+        # npm and yarn, which consume unknown flags themselves. pnpm and bun
+        # forward everything after the script name verbatim, so passing `--`
+        # there hands it to Vite as a positional argument and the flags are
+        # dropped — Vite then falls back to its default port 5173 and dies with
+        # `Port 5173 is already in use` instead of using ${FRONTEND_PORT}.
+        local forward_terminator="--"
+        case "${package_manager}" in
+            pnpm | bun) forward_terminator="" ;;
+        esac
+        # shellcheck disable=SC2086 # the empty value must disappear, not become an empty argument
+        exec setsid "${package_manager}" run dev ${forward_terminator} \
             --host "${FRONTEND_HOST}" \
             --port "${FRONTEND_PORT}" \
             --strictPort \

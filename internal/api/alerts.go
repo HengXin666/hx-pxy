@@ -8,8 +8,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/HengXin666/HX-ProxyGroup/internal/alert"
-	"github.com/HengXin666/HX-ProxyGroup/internal/store"
+	"github.com/HengXin666/hx-pxy/internal/alert"
+	"github.com/HengXin666/hx-pxy/internal/store"
 )
 
 type AlertService interface {

@@ -13,7 +13,7 @@ func TestOpenMigratesAndPersistsMetadata(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
-	databasePath := filepath.Join(t.TempDir(), "state", "hx-proxygroup.db")
+	databasePath := filepath.Join(t.TempDir(), "state", "hx-pxy.db")
 	storage, err := Open(ctx, databasePath)
 	if err != nil {
 		t.Fatalf("Open() error = %v", err)

@@ -6,6 +6,7 @@ import { CreateSubscriptionForm } from "@/components/create-subscription-form"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { api } from "@/lib/api"
+import { sourceClassLabel } from "@/lib/service-shape"
 import type { NodeRecord, SourceType, Subscription, TrafficSummary } from "@/lib/types"
 import { cn, compactId, formatBytes, formatDate } from "@/lib/utils"
 
@@ -310,6 +311,9 @@ function SubscriptionRow({
 
         <div className="flex flex-wrap items-center gap-1.5">
           <Badge variant="outline"><SourceIcon className="mr-1 size-3" />{source.label}</Badge>
+          {/* 来源类别决定了这类节点失败后怎么处理, 所以它是行上的主要信息之一:
+              一个池里掉几个节点是零代价, 一个住宅源掉了要人修。 */}
+          <Badge variant={sourceClassLabel[item.source_class].variant} title={sourceClassLabel[item.source_class].detail}>{sourceClassLabel[item.source_class].label}</Badge>
           <Badge variant={item.enabled ? "success" : "secondary"}>{item.enabled ? "已启用" : "已禁用"}</Badge>
           {item.consecutive_failures > 0 && <Badge variant="warning">失败 {item.consecutive_failures}</Badge>}
           <span className="w-full text-[11px] text-muted-foreground">{nodes.length} 个节点 · {formatBytes(totalTraffic)}</span>

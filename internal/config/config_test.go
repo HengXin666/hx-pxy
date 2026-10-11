@@ -19,13 +19,13 @@ func TestConfigValidateAcceptsExplicitLoopbackAddresses(t *testing.T) {
 }
 
 func TestConfigEnablesTerminalByDefaultAndSupportsEmergencyDisable(t *testing.T) {
-	t.Setenv("HX_PROXYGROUP_TERMINAL", "")
+	t.Setenv("HX_PXY_TERMINAL", "")
 	if !Default().TerminalEnabled {
 		t.Fatal("terminal must be enabled by default")
 	}
-	t.Setenv("HX_PROXYGROUP_TERMINAL", "0")
+	t.Setenv("HX_PXY_TERMINAL", "0")
 	if Default().TerminalEnabled {
-		t.Fatal("HX_PROXYGROUP_TERMINAL=0 must disable the terminal")
+		t.Fatal("HX_PXY_TERMINAL=0 must disable the terminal")
 	}
 }
 
@@ -59,7 +59,7 @@ func TestConfigEnsureDirectories(t *testing.T) {
 		ListenAddress:     "127.0.0.1:19090",
 		DataDirectory:     filepath.Join(root, "data"),
 		ApplicationConfig: filepath.Join(root, "etc", "config.yaml"),
-		DatabasePath:      filepath.Join(root, "data", "db", "hx-proxygroup.db"),
+		DatabasePath:      filepath.Join(root, "data", "db", "hx-pxy.db"),
 		MasterKeyPath:     filepath.Join(root, "data", "master.key"),
 		RuntimeConfigPath: filepath.Join(root, "data", "runtime", "active.yaml"),
 		SnapshotsPath:     filepath.Join(root, "data", "snapshots"),
@@ -111,7 +111,7 @@ func validTestConfig(t *testing.T) Config {
 		ListenAddress:         "127.0.0.1:19090",
 		DataDirectory:         filepath.Join(root, "data"),
 		ApplicationConfig:     filepath.Join(root, "config.yaml"),
-		DatabasePath:          filepath.Join(root, "data", "hx-proxygroup.db"),
+		DatabasePath:          filepath.Join(root, "data", "hx-pxy.db"),
 		MasterKeyPath:         filepath.Join(root, "data", "master.key"),
 		RuntimeConfigPath:     filepath.Join(root, "data", "runtime", "active.yaml"),
 		SnapshotsPath:         filepath.Join(root, "data", "snapshots"),

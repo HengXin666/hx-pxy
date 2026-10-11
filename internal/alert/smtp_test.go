@@ -109,7 +109,7 @@ func TestSMTPChannelDeliversPlainMail(t *testing.T) {
 	})
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	if err := channel.Send(ctx, "[HX-ProxyGroup] FIRING warning: subscription-refresh-failing", "Message: refresh failed\r\n"); err != nil {
+	if err := channel.Send(ctx, "[HX-Pxy] FIRING warning: subscription-refresh-failing", "Message: refresh failed\r\n"); err != nil {
 		t.Fatalf("send: %v", err)
 	}
 	from, rcpts, data := server.message()
@@ -119,7 +119,7 @@ func TestSMTPChannelDeliversPlainMail(t *testing.T) {
 	if len(rcpts) != 2 {
 		t.Fatalf("expected 2 recipients, got %v", rcpts)
 	}
-	if !strings.Contains(data, "Subject: [HX-ProxyGroup] FIRING warning: subscription-refresh-failing") {
+	if !strings.Contains(data, "Subject: [HX-Pxy] FIRING warning: subscription-refresh-failing") {
 		t.Fatalf("subject missing in message:\n%s", data)
 	}
 	if !strings.Contains(data, "refresh failed") {

@@ -3,10 +3,10 @@ package main
 import (
 	"context"
 
-	"github.com/HengXin666/HX-ProxyGroup/internal/listener"
-	"github.com/HengXin666/HX-ProxyGroup/internal/sharedinbound"
-	"github.com/HengXin666/HX-ProxyGroup/internal/store"
-	"github.com/HengXin666/HX-ProxyGroup/internal/systemsettings"
+	"github.com/HengXin666/hx-pxy/internal/listener"
+	"github.com/HengXin666/hx-pxy/internal/sharedinbound"
+	"github.com/HengXin666/hx-pxy/internal/store"
+	"github.com/HengXin666/hx-pxy/internal/systemsettings"
 )
 
 // sharedInboundHook converges the aggregate listeners and migrates existing

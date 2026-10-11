@@ -3,13 +3,14 @@ package proxyservice
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
-	"github.com/HengXin666/HX-ProxyGroup/internal/listener"
-	"github.com/HengXin666/HX-ProxyGroup/internal/proxygroup"
-	"github.com/HengXin666/HX-ProxyGroup/internal/store"
-	"github.com/HengXin666/HX-ProxyGroup/internal/systemsettings"
+	"github.com/HengXin666/hx-pxy/internal/listener"
+	"github.com/HengXin666/hx-pxy/internal/proxygroup"
+	"github.com/HengXin666/hx-pxy/internal/store"
+	"github.com/HengXin666/hx-pxy/internal/systemsettings"
 )
 
 type fakeGroups struct {
@@ -51,7 +52,23 @@ func (groups *fakeGroups) Delete(_ context.Context, id string, _ int) error {
 }
 
 type fakeListeners struct {
+	// err fails the write paths (Create, Update) so a test can exercise the
+	// composite rollback. It deliberately does not fail Get: the ownership
+	// check runs first, and a read error there would mask the write failure
+	// the test is about.
 	err error
+	// getErr fails the ownership lookup on its own.
+	getErr error
+	// owner is the group every stored listener belongs to. Update refuses a
+	// listener owned by anyone else, so a test that updates a service has to
+	// state who owns its entry point.
+	owner string
+	// pin is the node the stored listener is pinned to, if any. The composite
+	// update has to read it to know whether the caller is keeping the pin.
+	pin string
+	// updates records every listener update so a test can assert the pin that
+	// was actually carried to the listener service.
+	updates []listener.UpdateRequest
 }
 
 func (listeners *fakeListeners) Create(_ context.Context, request listener.CreateRequest) (listener.Listener, error) {
@@ -59,6 +76,16 @@ func (listeners *fakeListeners) Create(_ context.Context, request listener.Creat
 		return listener.Listener{}, listeners.err
 	}
 	return listener.Listener{ID: "listener-1", ProxyGroupID: request.ProxyGroupID}, nil
+}
+
+func (listeners *fakeListeners) Get(_ context.Context, id string) (listener.Listener, error) {
+	if listeners.getErr != nil {
+		return listener.Listener{}, listeners.getErr
+	}
+	if id != "listener-1" {
+		return listener.Listener{}, fmt.Errorf("%w: %s", listener.ErrNotFound, id)
+	}
+	return listener.Listener{ID: id, ProxyGroupID: listeners.owner, NodeID: listeners.pin}, nil
 }
 
 func (listeners *fakeListeners) EnsureSharedInbounds(context.Context, listener.SharedInboundSpec, []store.ProxyGroupRecord, []listener.SharedInboundMember) ([]listener.Listener, error) {
@@ -69,7 +96,8 @@ func (listeners *fakeListeners) Update(_ context.Context, _ string, request list
 	if listeners.err != nil {
 		return listener.Listener{}, listeners.err
 	}
-	return listener.Listener{ID: "listener-1", ProxyGroupID: request.ProxyGroupID, Name: request.Name}, nil
+	listeners.updates = append(listeners.updates, request)
+	return listener.Listener{ID: "listener-1", ProxyGroupID: request.ProxyGroupID, NodeID: request.NodeID, Name: request.Name}, nil
 }
 
 func TestCreateBindsListenerToGroup(t *testing.T) {
@@ -141,7 +169,7 @@ func TestCreateRemovesGroupWhenListenerFails(t *testing.T) {
 
 func TestUpdateBindsUpdatedListenerToGroup(t *testing.T) {
 	groups := &fakeGroups{stored: proxygroup.Group{ID: "group-1", Version: 1, Name: "original"}}
-	service, err := NewService(groups, &fakeListeners{}, nil)
+	service, err := NewService(groups, &fakeListeners{owner: "group-1"}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -167,9 +195,88 @@ func TestUpdateBindsUpdatedListenerToGroup(t *testing.T) {
 	}
 }
 
+// A composite update that does not mention the pin must carry the stored one
+// through. Measured 2026-10-01: this call dropped the field, so renaming a
+// pinned service silently re-pointed its egress at the anchor group's members.
+func TestUpdateKeepsStoredNodePinWhenCallerOmitsIt(t *testing.T) {
+	groups := &fakeGroups{stored: proxygroup.Group{ID: "group-1", Version: 1, Name: "original"}}
+	listeners := &fakeListeners{owner: "group-1", pin: "node-a"}
+	service, err := NewService(groups, listeners, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	updated, err := service.Update(context.Background(), UpdateRequest{
+		GroupID:         "group-1",
+		GroupVersion:    1,
+		Name:            "renamed",
+		ListenerID:      "listener-1",
+		ListenerVersion: 1,
+		Listener:        ListenerUpdateRequest{Name: "listener-renamed"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(listeners.updates) != 1 {
+		t.Fatalf("listener updates = %d, want 1", len(listeners.updates))
+	}
+	if got := listeners.updates[0].NodeID; got != "node-a" {
+		t.Fatalf("carried pin = %q, want %q (stored pin dropped by a rename)", got, "node-a")
+	}
+	if updated.Listener.NodeID != "node-a" {
+		t.Fatalf("returned pin = %q, want %q", updated.Listener.NodeID, "node-a")
+	}
+}
+
+// Moving the pin is a real edit and must be honoured.
+func TestUpdateMovesNodePinWhenCallerNamesOne(t *testing.T) {
+	groups := &fakeGroups{stored: proxygroup.Group{ID: "group-1", Version: 1, Name: "original"}}
+	listeners := &fakeListeners{owner: "group-1", pin: "node-a"}
+	service, err := NewService(groups, listeners, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.Update(context.Background(), UpdateRequest{
+		GroupID:         "group-1",
+		GroupVersion:    1,
+		Name:            "renamed",
+		ListenerID:      "listener-1",
+		ListenerVersion: 1,
+		Listener:        ListenerUpdateRequest{Kind: "mixed", Name: "listener-renamed", NodeID: "node-b"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if got := listeners.updates[0].NodeID; got != "node-b" {
+		t.Fatalf("moved pin = %q, want %q", got, "node-b")
+	}
+}
+
+// Releasing the pin is the one case an omitted NodeID cannot express, so it has
+// its own flag; the empty string is a meaningful value there.
+func TestUpdateClearsNodePinOnlyWhenAsked(t *testing.T) {
+	groups := &fakeGroups{stored: proxygroup.Group{ID: "group-1", Version: 1, Name: "original"}}
+	listeners := &fakeListeners{owner: "group-1", pin: "node-a"}
+	service, err := NewService(groups, listeners, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.Update(context.Background(), UpdateRequest{
+		GroupID:         "group-1",
+		GroupVersion:    1,
+		Name:            "renamed",
+		ListenerID:      "listener-1",
+		ListenerVersion: 1,
+		Listener:        ListenerUpdateRequest{Kind: "mixed", Name: "listener-renamed", ClearNodePin: true},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if got := listeners.updates[0].NodeID; got != "" {
+		t.Fatalf("cleared pin = %q, want empty", got)
+	}
+}
+
 func TestUpdateRollsBackGroupWhenListenerFails(t *testing.T) {
 	groups := &fakeGroups{stored: proxygroup.Group{ID: "group-1", Version: 1, Name: "original"}}
-	service, err := NewService(groups, &fakeListeners{err: errors.New("port conflict")}, nil)
+	service, err := NewService(groups, &fakeListeners{owner: "group-1", err: errors.New("port conflict")}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -197,5 +304,56 @@ func TestUpdateRollsBackGroupWhenListenerFails(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "port conflict") {
 		t.Fatalf("Update() error = %v, want listener error", err)
+	}
+}
+
+// TestUpdateRejectsListenerOwnedByAnotherGroup pins the boundary that a
+// composite save may only touch its own entry point. The HTTP handler used to
+// take the listener id from the body and the group id from the body, so naming
+// someone else's listener moved it: the source service was left pointing at a
+// listener that now routed to a different group.
+func TestUpdateRejectsListenerOwnedByAnotherGroup(t *testing.T) {
+	groups := &fakeGroups{stored: proxygroup.Group{ID: "group-1", Version: 1, Name: "original"}}
+	service, err := NewService(groups, &fakeListeners{owner: "group-2"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = service.Update(context.Background(), UpdateRequest{
+		GroupID:         "group-1",
+		GroupVersion:    1,
+		Name:            "renamed",
+		ListenerID:      "listener-1",
+		ListenerVersion: 1,
+		Listener:        ListenerUpdateRequest{Name: "listener-renamed"},
+	})
+	if !errors.Is(err, listener.ErrConflict) {
+		t.Fatalf("Update() error = %v, want %v", err, listener.ErrConflict)
+	}
+	// Nothing may be written: a rejected update that still bumped the group
+	// version would make the caller's retry fail on a stale version.
+	if len(groups.updateCalls) != 0 {
+		t.Fatalf("group updates on rejection = %d, want 0", len(groups.updateCalls))
+	}
+}
+
+// TestUpdateRejectsUnknownListener keeps a stale listener id from being
+// reported as an internal error.
+func TestUpdateRejectsUnknownListener(t *testing.T) {
+	groups := &fakeGroups{stored: proxygroup.Group{ID: "group-1", Version: 1, Name: "original"}}
+	service, err := NewService(groups, &fakeListeners{owner: "group-1"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = service.Update(context.Background(), UpdateRequest{
+		GroupID:         "group-1",
+		GroupVersion:    1,
+		ListenerID:      "listener-missing",
+		ListenerVersion: 1,
+	})
+	if !errors.Is(err, listener.ErrNotFound) {
+		t.Fatalf("Update() error = %v, want %v", err, listener.ErrNotFound)
+	}
+	if len(groups.updateCalls) != 0 {
+		t.Fatalf("group updates on rejection = %d, want 0", len(groups.updateCalls))
 	}
 }

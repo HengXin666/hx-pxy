@@ -1,14 +1,30 @@
 import { useRef, useState, type FormEvent, type ReactNode } from "react"
 import { FileUp, Globe2, LoaderCircle, Radio, ShieldCheck } from "lucide-react"
 
+import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Checkbox } from "@/components/ui/checkbox"
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Textarea } from "@/components/ui/textarea"
+import { cn } from "@/lib/utils"
 import { api } from "@/lib/api"
-import type { SourceConfig, SourceType, Subscription } from "@/lib/types"
+import { sourceClassLabel } from "@/lib/service-shape"
+import type { SourceClass, SourceConfig, SourceType, Subscription } from "@/lib/types"
+
+/**
+ * 来源类别不是"高级选项", 它决定这类节点失败后是弃用还是重试:
+ * 池里掉几个节点是零代价, 唯一一条住宅出口被自动退役则不可恢复。
+ * 服务端对缺省值取保守方向, 但"保守"只对住宅是对的 —— 一个上千成员的池
+ * 按订阅策略处理会白烧大量探测额度, 且被隔离的成员不会被换掉。
+ * 见 .agents/notes/implemented/feature/2026-09-26-source-class-drives-probe-policy.md。
+ */
+const sourceClassChoices: Array<{ value: SourceClass; label: string; detail: string }> = [
+  { value: "subscription", label: "订阅资产", detail: "几十个有价节点；失败先退避重试，很晚才退役" },
+  { value: "pool", label: "代理池", detail: "成百上千个一次性成员；失败即隔离并停止探测" },
+  { value: "residential", label: "住宅出口", detail: "一个到几个不可替代的出口；永不自动隔离或退役" },
+]
 
 interface SubscriptionFormProps {
   subscription?: Subscription
@@ -20,6 +36,8 @@ interface SubscriptionFormProps {
 export function CreateSubscriptionForm({ subscription, onSaved, onCancel, onError }: SubscriptionFormProps) {
   const editing = Boolean(subscription)
   const [sourceType, setSourceType] = useState<SourceType>(subscription?.source_type ?? "remote")
+  // 编辑既有订阅时先把存库的值填进来, 否则一个缺省的保存会把住宅源悄悄降级成订阅。
+  const [sourceClass, setSourceClass] = useState<SourceClass>(subscription?.source_class ?? "subscription")
   const [replaceSource, setReplaceSource] = useState(!editing)
   const [name, setName] = useState(subscription?.name ?? "")
   const [sourceValue, setSourceValue] = useState("")
@@ -84,6 +102,7 @@ export function CreateSubscriptionForm({ subscription, onSaved, onCancel, onErro
             version: subscription.version,
             name: name.trim(),
             source_type: sourceType,
+            source_class: sourceClass,
             source_config: source,
             enabled,
             refresh_interval_seconds: interval,
@@ -92,6 +111,7 @@ export function CreateSubscriptionForm({ subscription, onSaved, onCancel, onErro
         : await api.createSubscription({
             name: name.trim(),
             source_type: sourceType,
+            source_class: sourceClass,
             source_config: source!,
             enabled,
             refresh_interval_seconds: interval,
@@ -144,6 +164,16 @@ export function CreateSubscriptionForm({ subscription, onSaved, onCancel, onErro
               </div>
             )}
 
+            <div className="space-y-1.5">
+              <span className="text-xs font-medium">来源类别</span>
+              <div className="grid gap-1.5 sm:grid-cols-3">
+                {sourceClassChoices.map((choice) => <button key={choice.value} type="button" onClick={() => setSourceClass(choice.value)} className={cn("min-w-0 rounded-md border px-3 py-2 text-left text-xs transition-colors", sourceClass === choice.value ? "border-primary bg-accent" : "bg-card hover:bg-muted/60")}>
+                  <span className="flex items-center gap-1.5"><span className="font-medium">{choice.label}</span><Badge variant={sourceClassLabel[choice.value].variant}>{choice.value}</Badge></span>
+                  <span className="mt-0.5 block text-[11px] leading-4 text-muted-foreground">{choice.detail}</span>
+                </button>)}
+              </div>
+              <p className="text-[11px] leading-4 text-muted-foreground">它决定这类节点失败后怎么处理，不影响解析或选点。填错方向是有代价的：把唯一出口当池成员会被自动退役且无法自动恢复。</p>
+            </div>
             <div className="grid gap-3 sm:grid-cols-2"><Field label="刷新周期（秒）"><Input type="number" min={60} value={interval} onChange={(event) => setInterval(Number(event.target.value))} /></Field><Field label="Cron（UTC，可选）"><Input value={cron} onChange={(event) => setCron(event.target.value)} placeholder="0 */6 * * *" /></Field></div>
             <div className="flex gap-2 rounded-md border border-primary/25 bg-accent px-3 py-2 text-[11px] leading-4 text-accent-foreground"><ShieldCheck className="mt-0.5 size-4 shrink-0" />支持 Clash/Mihomo `proxies`、常见分享 URI 和 Base64 列表。导入 YAML 后仍需刷新，解析成功才会切换活动快照。</div>
           </div>

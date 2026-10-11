@@ -11,7 +11,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/HengXin666/HX-ProxyGroup/internal/artifact"
+	"github.com/HengXin666/hx-pxy/internal/artifact"
 )
 
 func TestServiceCreatesBackupAndPortableExport(t *testing.T) {
@@ -19,7 +19,7 @@ func TestServiceCreatesBackupAndPortableExport(t *testing.T) {
 
 	root := t.TempDir()
 	statePath := filepath.Join(root, "state.json")
-	databasePath := filepath.Join(root, "hx-proxygroup.db")
+	databasePath := filepath.Join(root, "hx-pxy.db")
 	secretPath := filepath.Join(root, "active.yaml")
 	writeTestFile(t, statePath, `{"listen":"127.0.0.1:19090"}`)
 	writeTestFile(t, databasePath, "sqlite-placeholder")
@@ -45,7 +45,7 @@ func TestServiceCreatesBackupAndPortableExport(t *testing.T) {
 	}
 	backupManifest := readManifest(t, service, backup.ID)
 	assertManifestPaths(t, backupManifest, []string{
-		"payload/database/hx-proxygroup.db",
+		"payload/database/hx-pxy.db",
 		"payload/state/state.json",
 	})
 	if len(backupManifest.Skipped) != 1 || backupManifest.Skipped[0].Source != "runtime" {

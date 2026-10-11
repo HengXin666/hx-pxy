@@ -16,21 +16,21 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/HengXin666/HX-ProxyGroup/internal/alert"
-	"github.com/HengXin666/HX-ProxyGroup/internal/artifact"
-	"github.com/HengXin666/HX-ProxyGroup/internal/auth"
-	"github.com/HengXin666/HX-ProxyGroup/internal/bundle"
-	"github.com/HengXin666/HX-ProxyGroup/internal/dataplane/mihomo"
-	"github.com/HengXin666/HX-ProxyGroup/internal/listener"
-	"github.com/HengXin666/HX-ProxyGroup/internal/metrics"
-	"github.com/HengXin666/HX-ProxyGroup/internal/node"
-	"github.com/HengXin666/HX-ProxyGroup/internal/overview"
-	"github.com/HengXin666/HX-ProxyGroup/internal/proxygroup"
-	"github.com/HengXin666/HX-ProxyGroup/internal/proxyservice"
-	"github.com/HengXin666/HX-ProxyGroup/internal/residential"
-	"github.com/HengXin666/HX-ProxyGroup/internal/routingrules"
-	"github.com/HengXin666/HX-ProxyGroup/internal/subscription"
-	"github.com/HengXin666/HX-ProxyGroup/internal/systemsettings"
+	"github.com/HengXin666/hx-pxy/internal/alert"
+	"github.com/HengXin666/hx-pxy/internal/artifact"
+	"github.com/HengXin666/hx-pxy/internal/auth"
+	"github.com/HengXin666/hx-pxy/internal/bundle"
+	"github.com/HengXin666/hx-pxy/internal/dataplane/mihomo"
+	"github.com/HengXin666/hx-pxy/internal/listener"
+	"github.com/HengXin666/hx-pxy/internal/metrics"
+	"github.com/HengXin666/hx-pxy/internal/node"
+	"github.com/HengXin666/hx-pxy/internal/overview"
+	"github.com/HengXin666/hx-pxy/internal/proxygroup"
+	"github.com/HengXin666/hx-pxy/internal/proxyservice"
+	"github.com/HengXin666/hx-pxy/internal/residential"
+	"github.com/HengXin666/hx-pxy/internal/routingrules"
+	"github.com/HengXin666/hx-pxy/internal/subscription"
+	"github.com/HengXin666/hx-pxy/internal/systemsettings"
 )
 
 type BundleService interface {
@@ -69,6 +69,8 @@ type ProxyGroupService interface {
 	List(context.Context) ([]proxygroup.Group, error)
 	Update(context.Context, string, proxygroup.UpdateRequest) (proxygroup.Group, error)
 	Delete(context.Context, string, int) error
+	// Members resolves the group's real node list. Get only returns the spec.
+	Members(context.Context, string) (proxygroup.MembersView, error)
 }
 
 type ListenerService interface {
@@ -84,6 +86,13 @@ type ListenerService interface {
 type DataPlaneService interface {
 	Apply(context.Context) error
 	Status() mihomo.Status
+	// SelectProxy points a `select` group at one of its members, so a consumer
+	// can move to another node *inside* a group instead of treating the whole
+	// group as spent. See handleGroupSelection.
+	SelectProxy(context.Context, string, string) error
+	// ReadGroup returns a group's live members and current selection, so the
+	// control plane can report runtime state rather than only stored config.
+	ReadGroup(context.Context, string) (mihomo.GroupSelection, error)
 }
 
 type SystemInfo struct {
@@ -798,6 +807,12 @@ func (s *Server) handleError(writer http.ResponseWriter, request *http.Request, 
 		s.writeAPIError(writer, request, http.StatusServiceUnavailable, "node_check_unavailable", "node quality check is unavailable")
 	case errors.Is(err, proxygroup.ErrApplyFailed), errors.Is(err, listener.ErrApplyFailed):
 		s.writeAPIError(writer, request, http.StatusBadGateway, "dataplane_apply_failed", err.Error())
+	case errors.Is(err, proxygroup.ErrReferenced):
+		// Distinct from ErrConflict so the caller can act: this refusal is
+		// resolved by pointing the listeners elsewhere (or pinning them to a
+		// node), not by editing the group. Sent before the ErrConflict case
+		// because errors.Is would also match a wrapped ErrConflict.
+		s.writeAPIError(writer, request, http.StatusConflict, "proxy_group_in_use", err.Error())
 	case errors.Is(err, proxygroup.ErrConflict), errors.Is(err, listener.ErrConflict):
 		s.writeAPIError(writer, request, http.StatusConflict, "conflict", "resource changed or conflicts with existing configuration")
 	case errors.Is(err, mihomo.ErrUnavailable):

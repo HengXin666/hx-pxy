@@ -10,7 +10,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/HengXin666/HX-ProxyGroup/internal/store"
+	"github.com/HengXin666/hx-pxy/internal/store"
 )
 
 const MetadataKey = "routing_rule_sets"

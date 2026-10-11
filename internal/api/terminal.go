@@ -10,7 +10,7 @@ import (
 
 	"github.com/coder/websocket"
 
-	"github.com/HengXin666/HX-ProxyGroup/internal/terminal"
+	"github.com/HengXin666/hx-pxy/internal/terminal"
 )
 
 type TerminalService interface {
@@ -175,7 +175,7 @@ func (s *Server) handleTerminalSocket(writer http.ResponseWriter, request *http.
 		return
 	}
 	if !s.terminal.Enabled() {
-		s.writeAPIError(writer, request, http.StatusForbidden, "terminal_disabled", "terminal is disabled; set HX_PROXYGROUP_TERMINAL=1 or remove HX_PROXYGROUP_TERMINAL=0")
+		s.writeAPIError(writer, request, http.StatusForbidden, "terminal_disabled", "terminal is disabled; set HX_PXY_TERMINAL=1 or remove HX_PXY_TERMINAL=0")
 		return
 	}
 	twoFactor, err := s.auth.TwoFactorStatus(request.Context(), token)

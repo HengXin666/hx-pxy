@@ -6,7 +6,7 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/HengXin666/HX-ProxyGroup/internal/node"
+	"github.com/HengXin666/hx-pxy/internal/node"
 )
 
 type NodeChecker interface {

@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/HengXin666/HX-ProxyGroup/internal/store"
+	"github.com/HengXin666/hx-pxy/internal/store"
 )
 
 // newChainService returns a service over a real store so the dialer rules are

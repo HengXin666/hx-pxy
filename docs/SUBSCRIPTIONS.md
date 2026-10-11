@@ -30,7 +30,7 @@
     "headers": {
       "X-Example": "value"
     },
-    "user_agent": "HX-ProxyGroup/1",
+    "user_agent": "HX-Pxy/1",
     "timeout_seconds": 30,
     "allow_private": false
   },
@@ -116,7 +116,7 @@ Remote 来源默认拒绝解析或连接到：
 生产默认路径：
 
 ```text
-/var/lib/hx-proxygroup/master.key
+/var/lib/hx-pxy/master.key
 ```
 
 主密钥丢失后，数据库中的来源配置无法恢复。因此完整跨服务器灾难恢复必须等待加密 Backup Wrapper 完成。
@@ -152,7 +152,7 @@ HTTP 409 subscription_conflict
 每个成功拉取的不同内容保存为不可变快照：
 
 ```text
-/var/lib/hx-proxygroup/snapshots/<subscription-id>/<snapshot-id>.source
+/var/lib/hx-pxy/snapshots/<subscription-id>/<snapshot-id>.source
 ```
 
 保证：

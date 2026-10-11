@@ -5,7 +5,7 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/HengXin666/HX-ProxyGroup/internal/listener"
+	"github.com/HengXin666/hx-pxy/internal/listener"
 )
 
 func (s *Server) handleListeners(writer http.ResponseWriter, request *http.Request) {

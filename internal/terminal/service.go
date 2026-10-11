@@ -143,7 +143,7 @@ func NewService(config Config, logger *slog.Logger) (*Service, error) {
 		lastCwd:        make(map[string]string),
 		lastWrite:      make(map[string]time.Time),
 		host:           newHostCollector(),
-		metricsTargets: map[int]string{os.Getpid(): "hx-proxygroupd"},
+		metricsTargets: map[int]string{os.Getpid(): "hx-pxyd"},
 	}, nil
 }
 

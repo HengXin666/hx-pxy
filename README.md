@@ -1,6 +1,6 @@
 <div align="center">
 
-<h1>HX-ProxyGroup</h1>
+<h1>HX-Pxy</h1>
 
 **面向个人 Linux 服务器的代理订阅、节点质量评估、Proxy Group 编排与多协议出口控制平面。**
 
@@ -18,16 +18,16 @@
 
 </div>
 
-![HX-ProxyGroup 全局总览](docs/screenshots/global-overview-desktop.png)
+![HX-Pxy 全局总览](docs/screenshots/global-overview-desktop.png)
 
 > [!IMPORTANT]
-> HX-ProxyGroup 是代理控制平面，不是新的代理协议内核。VMess、VLESS、Trojan、Hysteria、TUIC、SOCKS5、HTTP CONNECT 等协议仍由当前安装的 Mihomo 构建负责。普通 Listener 直接由 Mihomo 提供；Cloudflare / 雷池 WebSocket 拓扑可选经过 HX 的受限 Edge Relay，Relay 只做固定路径的连接转发，不解析或实现代理协议。
+> HX-Pxy 是代理控制平面，不是新的代理协议内核。VMess、VLESS、Trojan、Hysteria、TUIC、SOCKS5、HTTP CONNECT 等协议仍由当前安装的 Mihomo 构建负责。普通 Listener 直接由 Mihomo 提供；Cloudflare / 雷池 WebSocket 拓扑可选经过 HX 的受限 Edge Relay，Relay 只做固定路径的连接转发，不解析或实现代理协议。
 
-## 为什么使用 HX-ProxyGroup
+## 为什么使用 HX-Pxy
 
-普通订阅客户端适合在单台终端上选节点；HX-ProxyGroup 面向长期运行的服务器场景，把“订阅输入”转化为可恢复、可解释、可组合的 Desired State：
+普通订阅客户端适合在单台终端上选节点；HX-Pxy 面向长期运行的服务器场景，把“订阅输入”转化为可恢复、可解释、可组合的 Desired State：
 
-| 需求 | HX-ProxyGroup 的处理方式 |
+| 需求 | HX-Pxy 的处理方式 |
 | --- | --- |
 | 多个机场和自定义节点 | 统一刷新、规范化、稳定指纹去重，同时保留来源关系 |
 | 节点质量不断变化 | 经 Mihomo 指定节点执行真实 HTTP 检测，支持批量复测、降级和隔离 |
@@ -136,9 +136,9 @@ flowchart LR
 
 ```text
 systemd
-├── hx-proxygroup.service              # Go 控制面、管理 API、静态前端
-├── hx-proxygroup-dataplane.service    # Mihomo 数据面、真实代理转发
-└── hx-proxygroup-terminal.service     # 仅经 Unix Socket 提供 root PTY
+├── hx-pxy.service              # Go 控制面、管理 API、静态前端
+├── hx-pxy-dataplane.service    # Mihomo 数据面、真实代理转发
+└── hx-pxy-terminal.service     # 仅经 Unix Socket 提供 root PTY
 ```
 
 生产环境只有一个控制面进程和一个数据面进程，root PTY helper 是只处理管理员终端的隔离辅助进程。默认代理入口仍由 Mihomo 直接承载；启用 Cloudflare / 雷池拓扑时，控制面内的 Edge Relay 只接收固定 `/__hx-proxy__/` 前缀下的 WebSocket Upgrade，并把连接转发到环回 Mihomo Listener，不承担协议解析。控制面重启时，直接监听的健康数据面继续使用最后有效配置工作；经 Edge Relay 的新连接会在控制面恢复后继续可用。
@@ -156,8 +156,8 @@ systemd
 ### 本地运行
 
 ```bash
-git clone https://github.com/HengXin666/HX-ProxyGroup.git
-cd HX-ProxyGroup
+git clone https://github.com/HengXin666/hx-pxy.git
+cd HX-Pxy
 bash run.sh
 ```
 
@@ -190,7 +190,7 @@ http://127.0.0.1:<49152-65535 之间的随机端口>
 Proxy Group。实际数据面链路为：
 
 ```text
-客户端 -> HX-ProxyGroup Listener -> 住宅节点 -> 上游海外 Proxy Group -> 住宅网关 -> 目标站点
+客户端 -> HX-Pxy Listener -> 住宅节点 -> 上游海外 Proxy Group -> 住宅网关 -> 目标站点
 ```
 
 住宅节点配置中的上游组使用稳定 ID 保存，Mihomo 编译时解析为当前组名并输出
@@ -235,7 +235,7 @@ Proxy Group。实际数据面链路为：
 - **复制入口**：在「代理服务」页面的住宅渠道服务行分别选择“复制 Clash / Mihomo 订阅”或
   “复制自动化控制 URL”；「住宅代理」页面只负责供应商、渠道和声明节点管理。
 
-住宅渠道使用 `Cloudflare -> 雷池 -> HX-ProxyGroup` 下选定的 VLESS、VMess 或 Trojan over
+住宅渠道使用 `Cloudflare -> 雷池 -> HX-Pxy` 下选定的 VLESS、VMess 或 Trojan over
 WebSocket，实际链路为：
 
 ```text
@@ -311,13 +311,13 @@ bash run.sh --no-install-frontend-deps
 > 在线安装依赖 Release 中已上传符合 [发布包契约](scripts/package-release.sh) 的架构包与 `SHA256SUMS`。
 
 ```bash
-curl -fsSLO https://raw.githubusercontent.com/HengXin666/HX-ProxyGroup/main/install.sh && sudo bash install.sh install
+curl -fsSLO https://raw.githubusercontent.com/HengXin666/hx-pxy/main/install.sh && sudo bash install.sh install
 ```
 
 安装成功后，后续版本只需要一行命令：
 
 ```bash
-sudo hx-proxygroup-install upgrade
+sudo hx-pxy-install upgrade
 ```
 
 生产 systemd 安装也可在「关于」页执行一键更新。页面内可输入认证器的 6 位 TOTP 完成当前
@@ -329,13 +329,13 @@ Session 的 2FA 验证；root helper 只接受固定的无参数升级请求，�
 
 | 命令 | 用途 |
 | --- | --- |
-| `sudo hx-proxygroup-install upgrade` | 获取并升级到最新固定 Release |
-| `sudo hx-proxygroup-install upgrade --version vX.Y.Z` | 安装指定版本 |
-| `sudo hx-proxygroup-install status` | 查看三个服务与当前版本 |
-| `sudo hx-proxygroup-install repair` | 恢复目录权限、unit 和服务 |
-| `sudo hx-proxygroup-install backup` | 创建包含秘密的 `0600` 灾难归档 |
-| `sudo hx-proxygroup-install uninstall` | 移除服务和程序，保留数据与备份 |
-| `sudo hx-proxygroup-install purge --confirm-purge` | 明确确认后删除程序和全部持久数据 |
+| `sudo hx-pxy-install upgrade` | 获取并升级到最新固定 Release |
+| `sudo hx-pxy-install upgrade --version vX.Y.Z` | 安装指定版本 |
+| `sudo hx-pxy-install status` | 查看三个服务与当前版本 |
+| `sudo hx-pxy-install repair` | 恢复目录权限、unit 和服务 |
+| `sudo hx-pxy-install backup` | 创建包含秘密的 `0600` 灾难归档 |
+| `sudo hx-pxy-install uninstall` | 移除服务和程序，保留数据与备份 |
+| `sudo hx-pxy-install purge --confirm-purge` | 明确确认后删除程序和全部持久数据 |
 
 离线安装：
 
@@ -348,12 +348,12 @@ sudo bash install.sh install --offline-dir /path/to/release
 默认布局：
 
 ```text
-/usr/local/lib/hx-proxygroup/
+/usr/local/lib/hx-pxy/
 ├── versions/<release>/
 └── current -> versions/<release>
 
-/etc/hx-proxygroup/                 # 最小启动配置
-/var/lib/hx-proxygroup/             # SQLite、密钥、快照、运行配置、备份
+/etc/hx-pxy/                 # 最小启动配置
+/var/lib/hx-pxy/             # SQLite、密钥、快照、运行配置、备份
 /etc/systemd/system/                # 控制面、数据面与终端 helper unit
 ```
 
@@ -413,32 +413,32 @@ TUIC        VLESS        VMess         WireGuard
 
 ```bash
 # 显式指定物理出口
-HX_PROXYGROUP_MIHOMO_EGRESS_INTERFACE=eth0 bash run.sh
+HX_PXY_MIHOMO_EGRESS_INTERFACE=eth0 bash run.sh
 
 # 明确允许数据面跟随宿主机策略路由
-HX_PROXYGROUP_MIHOMO_EGRESS_INTERFACE=off bash run.sh
+HX_PXY_MIHOMO_EGRESS_INTERFACE=off bash run.sh
 ```
 
-默认 `GOMAXPROCS` 最多为 4，Mihomo 日志单文件上限 8 MiB、保留 2 份。可通过 `HX_PROXYGROUP_MIHOMO_MAX_PROCS`、`HX_PROXYGROUP_MIHOMO_LOG_MAX_BYTES` 和 `HX_PROXYGROUP_MIHOMO_LOG_BACKUPS` 调整。
+默认 `GOMAXPROCS` 最多为 4，Mihomo 日志单文件上限 8 MiB、保留 2 份。可通过 `HX_PXY_MIHOMO_MAX_PROCS`、`HX_PXY_MIHOMO_LOG_MAX_BYTES` 和 `HX_PXY_MIHOMO_LOG_BACKUPS` 调整。
 
 ### 浏览器终端
 
 浏览器本机 Shell 默认开启。需要紧急关闭时：
 
 ```bash
-HX_PROXYGROUP_TERMINAL=0 bash run.sh
+HX_PXY_TERMINAL=0 bash run.sh
 ```
 
 首次登录后进入「全局配置 -> 账号安全」，生成并启用 TOTP 2FA；终端连接前需要输入验证器当前的 6 位验证码。解锁状态对当前管理员 Session 有效 15 分钟。终端不因空闲自动断开、无会话寿命上限、最多 2 个并发会话，并记录建立、关闭、来源、操作者、时长和原因。面板集成系统资源监控（CPU/内存/负载/上行下行）与文件管理（目录浏览、拖拽上传、点击下载，文件树采用 vscode-icons 图标）；切换标签页不会断开连接，系统监控与文件面板仅在终端连接后显示，文件面板目录与 Shell 当前目录实时同步。文件浏览、上传、下载、新建与删除在配置了 root PTY helper 时通过同一特权 Socket 由 helper 执行，因此文件面板与 Shell 看到同一文件系统（root 视图，包括 `/home` 与 `/root`），而不是受沙箱限制的控制面视图；`run.sh` 本地模式则由当前运行用户执行。确实无法读取的目录（权限不足或已被删除）会在面板内显示内联提示并提供返回上级入口，而不是弹出错误提示。弱网适配：服务端 15s 心跳 + 前端自动重连（指数退避，保留终端滚动历史），文件面板瞬时失败自动重试，重连或重新登录后 Shell 会从上次使用的目录启动（按管理员持久化，目录已删除则回退 HOME）。它不是远程 SSH 跳板。
 
-这是 HX-ProxyGroup 所在服务器的本机 PTY Shell。输入与输出直接经 WebSocket 由服务端 PTY 回显，前端不做本地预测回显，避免重连后出现重复输入；vim/top 等 raw/full-screen 程序可正常显示。
+这是 HX-Pxy 所在服务器的本机 PTY Shell。输入与输出直接经 WebSocket 由服务端 PTY 回显，前端不做本地预测回显，避免重连后出现重复输入；vim/top 等 raw/full-screen 程序可正常显示。
 
-WebSocket 只接受同源连接，并在会话存续期间周期性复核数据库中的管理员 Session；退出全部会话、修改账号或密码、Session 过期都会关闭已连接终端。生产安装使用 root PTY helper，但控制面本身仍以 `hx-proxygroup` 运行；helper 只监听权限为 `0660` 的本机 Unix Socket，并校验对端 UID。通过管理员登录和 2FA 后，终端可以直接使用 `su`、`sudo` 及完整 root 环境，因此应把它视为 root 管理入口，日常运维仍优先使用带密钥和系统级审计的 SSH。`run.sh` 本地模式没有 root helper，只提供当前运行用户的 PTY。完整威胁模型与漏洞报告方式见 [安全策略](SECURITY.md)。
+WebSocket 只接受同源连接，并在会话存续期间周期性复核数据库中的管理员 Session；退出全部会话、修改账号或密码、Session 过期都会关闭已连接终端。生产安装使用 root PTY helper，但控制面本身仍以 `hx-pxy` 运行；helper 只监听权限为 `0660` 的本机 Unix Socket，并校验对端 UID。通过管理员登录和 2FA 后，终端可以直接使用 `su`、`sudo` 及完整 root 环境，因此应把它视为 root 管理入口，日常运维仍优先使用带密钥和系统级审计的 SSH。`run.sh` 本地模式没有 root helper，只提供当前运行用户的 PTY。完整威胁模型与漏洞报告方式见 [安全策略](SECURITY.md)。
 
 ### 备份语义
 
 - 管理面的普通 Backup 使用 SQLite Online Backup，适合同实例恢复，不包含主密钥和完整敏感运行状态。
-- `hx-proxygroup-install backup` 会短暂停止控制面，归档配置、数据库、主密钥、运行配置和快照；归档包含秘密。
+- `hx-pxy-install backup` 会短暂停止控制面，归档配置、数据库、主密钥、运行配置和快照；归档包含秘密。
 - Portable Export 默认不导出秘密，用于跨实例迁移配置。
 - 自动 Restore 和加密 Backup Wrapper 仍在后续清单。
 
@@ -501,7 +501,7 @@ npm run build
 
 ## 项目边界
 
-HX-ProxyGroup 明确不做：
+HX-Pxy 明确不做：
 
 - 自行实现 VMess、VLESS、Trojan、Hysteria、TUIC、SOCKS5 或 HTTP CONNECT 转发。
 - 让 Go 控制面进入实际代理流量路径。
@@ -522,12 +522,12 @@ HX-ProxyGroup 明确不做：
 
 ## 许可
 
-HX-ProxyGroup 自有代码采用 [MIT License](LICENSE)。Mihomo 由其上游独立发布，依赖项和随 Release 分发的第三方组件继续适用各自的许可证；MIT License 不会覆盖或替代这些上游条款。
+HX-Pxy 自有代码采用 [MIT License](LICENSE)。Mihomo 由其上游独立发布，依赖项和随 Release 分发的第三方组件继续适用各自的许可证；MIT License 不会覆盖或替代这些上游条款。
 
 ---
 
 <div align="center">
 
-HX-ProxyGroup · 一个控制面，一个数据面，配置可解释，失败可恢复。
+HX-Pxy · 一个控制面，一个数据面，配置可解释，失败可恢复。
 
 </div>

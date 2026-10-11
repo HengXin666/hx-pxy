@@ -1,22 +1,22 @@
 [Unit]
-Description=HX-ProxyGroup Privileged Terminal PTY Helper
-Documentation=https://github.com/HengXin666/HX-ProxyGroup
+Description=HX-Pxy Privileged Terminal PTY Helper
+Documentation=https://github.com/HengXin666/hx-pxy
 After=local-fs.target
-Before=hx-proxygroup.service
-PartOf=hx-proxygroup.service
+Before=hx-pxy.service
+PartOf=hx-pxy.service
 
 [Service]
 Type=simple
 User=root
 Group=root
-RuntimeDirectory=hx-proxygroup
+RuntimeDirectory=hx-pxy
 RuntimeDirectoryMode=0750
 RuntimeDirectoryPreserve=no
 Environment=HOME=/root
 Environment=USER=root
 Environment=LOGNAME=root
 Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
-ExecStart=/usr/local/lib/hx-proxygroup/current/hx-proxygroupd --terminal-helper --terminal-socket /run/hx-proxygroup/terminal.sock --terminal-socket-group hx-proxygroup --terminal-helper-user hx-proxygroup --updater /usr/local/sbin/hx-proxygroup-install
+ExecStart=/usr/local/lib/hx-pxy/current/hx-pxyd --terminal-helper --terminal-socket /run/hx-pxy/terminal.sock --terminal-socket-group hx-pxy --terminal-helper-user hx-pxy --updater /usr/local/sbin/hx-pxy-install
 Restart=on-failure
 RestartSec=3s
 TimeoutStopSec=20s

@@ -8,7 +8,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/HengXin666/HX-ProxyGroup/internal/store"
+	"github.com/HengXin666/hx-pxy/internal/store"
 )
 
 func parseIPAddress(value string) net.IP { return net.ParseIP(strings.TrimSpace(value)) }

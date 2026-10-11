@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/HengXin666/HX-ProxyGroup/internal/store"
+	"github.com/HengXin666/hx-pxy/internal/store"
 )
 
 // validateResidentialDialerChains prevents a residential node from selecting a

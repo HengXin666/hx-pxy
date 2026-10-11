@@ -3,7 +3,7 @@ package api
 import (
 	"net/http"
 
-	"github.com/HengXin666/HX-ProxyGroup/internal/terminal"
+	"github.com/HengXin666/hx-pxy/internal/terminal"
 )
 
 // SystemResourceService provides a low-frequency host resource snapshot for

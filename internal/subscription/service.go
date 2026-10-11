@@ -13,9 +13,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/HengXin666/HX-ProxyGroup/internal/cron"
-	"github.com/HengXin666/HX-ProxyGroup/internal/nodeparse"
-	"github.com/HengXin666/HX-ProxyGroup/internal/store"
+	"github.com/HengXin666/hx-pxy/internal/cron"
+	"github.com/HengXin666/hx-pxy/internal/nodeparse"
+	"github.com/HengXin666/hx-pxy/internal/store"
 )
 
 type SourceType string

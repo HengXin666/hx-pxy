@@ -6,8 +6,8 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/HengXin666/HX-ProxyGroup/internal/proxygroup"
-	"github.com/HengXin666/HX-ProxyGroup/internal/store"
+	"github.com/HengXin666/hx-pxy/internal/proxygroup"
+	"github.com/HengXin666/hx-pxy/internal/store"
 )
 
 // derivedProxySeparator joins a node's proxy name with the id of the group that

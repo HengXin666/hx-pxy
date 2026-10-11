@@ -8,10 +8,11 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"sort"
 	"strings"
 	"time"
 
-	"github.com/HengXin666/HX-ProxyGroup/internal/store"
+	"github.com/HengXin666/hx-pxy/internal/store"
 )
 
 var (
@@ -19,6 +20,13 @@ var (
 	ErrConflict    = errors.New("proxy group conflict")
 	ErrInvalid     = errors.New("invalid proxy group")
 	ErrApplyFailed = errors.New("proxy group apply failed")
+	// ErrReferenced reports that a group cannot be deleted because listeners
+	// still resolve their egress through it. It is distinct from ErrConflict,
+	// which means "another group names this one": the two have different
+	// remedies (repoint the listeners vs. edit the group's members), and the
+	// front end needs to tell them apart without reading a message string —
+	// this repository has already been bitten by judging logic off error text.
+	ErrReferenced = errors.New("proxy group still has listeners attached")
 )
 
 const defaultTestURL = "http://cp.cloudflare.com/generate_204"
@@ -32,6 +40,10 @@ type Repository interface {
 	ListNodeConfigs(context.Context, []string) ([]store.NodeConfigRecord, error)
 	ListGroupNodeCandidates(context.Context) ([]store.GroupNodeCandidate, error)
 	GetSubscription(context.Context, string) (store.SubscriptionRecord, error)
+	// ListListeners answers "is this group still carrying traffic?", which is a
+	// different question from referencedBy's "does another group name it?".
+	// Both must be asked before a delete; see Service.Delete.
+	ListListeners(context.Context) ([]store.ListenerRecord, error)
 }
 
 type Reconciler interface {
@@ -155,6 +167,90 @@ func (s *Service) Create(ctx context.Context, request CreateRequest) (Group, err
 	return fromRecord(created), nil
 }
 
+// MembersView is a group's resolved membership, as the data plane would see it.
+type MembersView struct {
+	GroupID string `json:"group_id"`
+	Name    string `json:"name"`
+	// Selectable mirrors the data plane rule: only a `manual` group compiles to
+	// a Mihomo Selector, which is the only type where an explicit member choice
+	// sticks. url-test re-picks by latency, load-balance rotates.
+	Selectable bool   `json:"selectable"`
+	Strategy   string `json:"strategy"`
+	Count      int    `json:"count"`
+	// Members are the Mihomo proxy names (`hx-node-<fingerprint prefix>`), i.e.
+	// exactly the strings the control API accepts as a selection target.
+	Members []string `json:"members"`
+	// Now is the member currently selected, read from the **live data plane**.
+	// Empty when the data plane is unreachable — callers must treat empty as
+	// "unknown", not as "nothing selected".
+	Now string `json:"now,omitempty"`
+}
+
+// nodeProxyNameOf mirrors the data plane's proxy naming so a member returned
+// here can be handed straight back as a selection target. Kept in sync with
+// mihomo.nodeProxyName (unexported there); the value is a published contract,
+// not an internal detail.
+func nodeProxyNameOf(fingerprint string) string {
+	fingerprint = strings.TrimSpace(fingerprint)
+	if len(fingerprint) > 16 {
+		fingerprint = fingerprint[:16]
+	}
+	return "hx-node-" + fingerprint
+}
+
+// Members resolves a group's actual member list from its source spec.
+//
+// Why this exists: `Get` returns only the *spec* (subscriptions + filters), so a
+// caller cannot tell which nodes the group really holds. A consumer that sees
+// one member rejected then has no way to know the group still has 150 more, and
+// treats the whole group as spent. Resolution is the same code path the compiler
+// uses, so this answer cannot drift from what the data plane actually runs.
+func (s *Service) Members(ctx context.Context, id string) (MembersView, error) {
+	record, err := s.repository.GetProxyGroup(ctx, id)
+	if err != nil {
+		return MembersView{}, mapStoreError(err)
+	}
+	group := fromRecord(record)
+	spec, err := DecodeSourceSpec(record.SourceSpecJSON)
+	if err != nil {
+		return MembersView{}, err
+	}
+	candidates, err := s.repository.ListGroupNodeCandidates(ctx)
+	if err != nil {
+		return MembersView{}, err
+	}
+	resolution, err := ResolveMembers(spec, record.RulePipelineJSON, candidates)
+	if err != nil {
+		return MembersView{}, err
+	}
+	names := make([]string, 0, len(resolution.NodeIDs))
+	for _, nodeID := range resolution.NodeIDs {
+		configs, cfgErr := s.repository.ListNodeConfigs(ctx, []string{nodeID})
+		if cfgErr != nil || len(configs) == 0 {
+			// Keep the ID so the list still reflects the resolved membership;
+			// a missing config is a data-plane concern, not a resolution one.
+			names = append(names, nodeID)
+			continue
+		}
+		names = append(names, nodeProxyNameOf(configs[0].Fingerprint))
+	}
+	return MembersView{
+		GroupID: group.ID,
+		Name:    group.Name,
+		// Only a manual (Selector) group honours an explicit selection; url-test
+		// re-picks by latency and load-balance rotates, so a chosen member there
+		// would be silently undone. Mirrors the data plane's own rule.
+		Selectable: group.Strategy == "manual",
+		Strategy:   group.Strategy,
+		Count:      len(names),
+		Members:    names,
+		// Now is filled in by the API layer from the live data plane: the stored
+		// record is *configuration*, while `now` is runtime state. Keeping them
+		// separate is why this field is not read here.
+		Now: "",
+	}, nil
+}
+
 func (s *Service) Get(ctx context.Context, id string) (Group, error) {
 	record, err := s.repository.GetProxyGroup(ctx, id)
 	if err != nil {
@@ -223,6 +319,34 @@ func (s *Service) Delete(ctx context.Context, id string, version int) error {
 			}
 		}
 		return fmt.Errorf("%w: group is referenced by %s", ErrConflict, strings.Join(names, ", "))
+	}
+	// Being named by another group is not the only way a group can still be in
+	// use: a listener points at one directly. That reference is invisible to
+	// referencedBy, which only walks group-to-group edges, so a delete used to
+	// reach the database and be refused there by the RESTRICT foreign key —
+	// correct, but reported as an unmapped SQLite error the API turned into a
+	// generic 500. Asking the question here instead keeps the refusal
+	// answerable: the caller learns *what* still uses the group.
+	//
+	// Measured 2026-10-01: the front end's service list offered to delete a
+	// service, then deleted the group it found on the listener. Because a
+	// pinned listener's proxy_group_id is only a schema anchor shared by every
+	// pinned listener, that group was the operator's main subscription group.
+	// The foreign key saved it; nothing in this service did.
+	listeners, err := s.repository.ListListeners(ctx)
+	if err != nil {
+		return err
+	}
+	attached := make([]string, 0, 1)
+	for _, record := range listeners {
+		if record.ProxyGroupID == id {
+			attached = append(attached, record.Name)
+		}
+	}
+	if len(attached) > 0 {
+		sort.Strings(attached)
+		return fmt.Errorf("%w: %d listener(s) still resolve their egress through it: %s",
+			ErrReferenced, len(attached), strings.Join(attached, ", "))
 	}
 	if err := s.repository.DeleteProxyGroup(ctx, id, version); err != nil {
 		return mapStoreError(err)

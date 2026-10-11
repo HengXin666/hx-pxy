@@ -3,7 +3,7 @@ package mihomo
 import (
 	"testing"
 
-	"github.com/HengXin666/HX-ProxyGroup/internal/store"
+	"github.com/HengXin666/hx-pxy/internal/store"
 )
 
 func TestCompileResidentialClientRulesKeepSessionsIndependent(t *testing.T) {

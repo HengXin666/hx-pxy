@@ -1,8 +1,8 @@
-# HX-Webx 子路径访问 (/proxy/hx-proxygroup/ 白屏) — 诊断与落地
+# HX-Webx 子路径访问 (/proxy/hx-pxy/ 白屏) — 诊断与落地
 
 日期: 2026-09-17 · 状态: **已落地并端到端验证** (非侵入: 不改被代理服务源码, 不改 HX-Webx 既有语义)
 
-**入口: `http://127.0.0.1:36000/proxy/hx-proxygroup/` (原 URL, 现已可用)**
+**入口: `http://127.0.0.1:36000/proxy/hx-pxy/` (原 URL, 现已可用)**
 
 ## 1. 现象与根因
 
@@ -16,10 +16,10 @@ GET http://127.0.0.1:36000/src/main.tsx     ->  200 text/html   (内容被"重�
 
 | 观测 | 结果 |
 | --- | --- |
-| `GET 36000/proxy/hx-proxygroup/` | 200, 与直连根**逐字节相同**的 index.html → 转发本身没坏 |
+| `GET 36000/proxy/hx-pxy/` | 200, 与直连根**逐字节相同**的 index.html → 转发本身没坏 |
 | 该 index.html 的资源引用 | `/@vite/client` `/@react-refresh` `/src/main.tsx` `/favicon.svg` —— **全是根绝对路径, 不带访问前缀** |
 | `GET 36000/src/main.tsx` | 200 `text/html` —— 落到 **HX-Webx 面板自己的 SPA 兜底**, 不是 JS 模块 |
-| `GET 36000/proxy/hx-proxygroup/src/main.tsx` | 200 `text/javascript` → **带前缀的转发完全正常** |
+| `GET 36000/proxy/hx-pxy/src/main.tsx` | 200 `text/javascript` → **带前缀的转发完全正常** |
 | `GET 36000/proxy/hx-email/` | 同样引用根绝对路径 → **同一故障, 非本服务独有** |
 
 机制: HX-Webx 挂载顺序为 `/proxy` → 图标 → `express.static(web/dist)` → SPA 兜底
@@ -33,7 +33,7 @@ base 的 path 被丢弃。必须做**响应体路径重写**。
 ## 2. 落地拓扑
 
 ```
-浏览器 → HX-Webx :36000 /proxy/hx-proxygroup/*
+浏览器 → HX-Webx :36000 /proxy/hx-pxy/*
        → 适配反代 :28340   (剥前缀转发 + 响应体根绝对路径补前缀)
        → Vite dev :28341   (原样不动)
        → Go 控制面 :19090  (原样不动)
@@ -49,29 +49,29 @@ base 的 path 被丢弃。必须做**响应体路径重写**。
    —— 头是权威来源, 任何注册名都能直接用, 不需要白名单。
 
 **为什么把适配层放在 28340 (原端口)**: 一开始的方案是让真实栈留在 28340、适配层另开
-28341 并注册成新名字 `hx-proxygroup-web`。用户随后按**原 URL** 复测, 原 URL 仍指向
+28341 并注册成新名字 `hx-pxy-web`。用户随后按**原 URL** 复测, 原 URL 仍指向
 28340 真实栈 → 白屏照旧。端口对调后原 URL 直接生效, 且完全不必碰 HX-Webx 的基址缓存。
 
 ## 3. 注册形态 (由面板托管, 随 pxy 组自启)
 
 | 注册名 | 端口 | 角色 |
 | --- | --- | --- |
-| `hx-proxygroup` | 28340 | **入口** = 适配反代 → 28341 |
-| `hx-proxygroup-stack` | 28341 | 真实栈 (Vite + Go 控制面 19090 + Mihomo), 前端/后端日志归它 |
+| `hx-pxy` | 28340 | **入口** = 适配反代 → 28341 |
+| `hx-pxy-stack` | 28341 | 真实栈 (Vite + Go 控制面 19090 + Mihomo), 前端/后端日志归它 |
 
-服务组 `pxy` 顺序: `hx-proxygroup-stack` → `hx-proxygroup` (适配层依赖真实栈先就绪),
+服务组 `pxy` 顺序: `hx-pxy-stack` → `hx-pxy` (适配层依赖真实栈先就绪),
 `autostart: true`。
 
 ## 4. 端到端验证 (全部实测)
 
 | 检查 | 结果 |
 | --- | --- |
-| 入口 HTML 资源引用 | `/proxy/hx-proxygroup/@vite/client`、`/proxy/hx-proxygroup/src/main.tsx` ✓ |
-| `36000/proxy/hx-proxygroup/src/main.tsx` | 200 `text/javascript` (**修复前: 200 text/html**) |
+| 入口 HTML 资源引用 | `/proxy/hx-pxy/@vite/client`、`/proxy/hx-pxy/src/main.tsx` ✓ |
+| `36000/proxy/hx-pxy/src/main.tsx` | 200 `text/javascript` (**修复前: 200 text/html**) |
 | 无头 Chromium 渲染修复前 | DOM **902 B, 可见文本为空** → 复现白屏 |
-| 无头 Chromium 渲染修复后 | DOM **67.6 KB**, 可见 `HX-ProxyGroup Control Plane · 管理员登录 · 用户名 · 密码 · 登录` |
-| API 全链路 | `/proxy/hx-proxygroup/api/v1/auth/status` → 200 `{"authenticated":false,"configured":true}` |
-| 静态资源 | `/proxy/hx-proxygroup/favicon.svg` → 200 `image/svg+xml` |
+| 无头 Chromium 渲染修复后 | DOM **67.6 KB**, 可见 `HX-Pxy Control Plane · 管理员登录 · 用户名 · 密码 · 登录` |
+| API 全链路 | `/proxy/hx-pxy/api/v1/auth/status` → 200 `{"authenticated":false,"configured":true}` |
+| 静态资源 | `/proxy/hx-pxy/favicon.svg` → 200 `image/svg+xml` |
 
 `GET 36000/src/main.tsx` (**不带前缀**) 仍返回面板自己的 HTML —— 这是**正确行为**,
 它本就该由 HX-Webx 的面板处理; 适配后页面不再请求这条 URL。

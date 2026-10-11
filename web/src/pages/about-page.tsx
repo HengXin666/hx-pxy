@@ -96,7 +96,7 @@ export function AboutPage({ onNotice }: { onNotice: (message: string, tone?: "su
   return <div className="space-y-4">
     <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
       <div>
-        <h1 className="text-xl font-semibold tracking-tight">关于 HX-ProxyGroup</h1>
+        <h1 className="text-xl font-semibold tracking-tight">关于 HX-Pxy</h1>
         <p className="mt-1 max-w-3xl text-sm leading-5 text-muted-foreground">控制面版本、Mihomo 数据面能力与发布更新信息。</p>
       </div>
       <div className="flex items-center gap-2">
@@ -110,7 +110,7 @@ export function AboutPage({ onNotice }: { onNotice: (message: string, tone?: "su
         <div className="grid sm:grid-cols-2 lg:grid-cols-3">
           <VersionItem icon={PackageCheck} label="控制面" value={info.version} />
           <VersionItem icon={ServerCog} label="Mihomo 数据面" value={info.dataplane_version || "当前未连接"} border />
-          <VersionItem icon={GitFork} label="项目仓库" value="HengXin666/HX-ProxyGroup" border />
+          <VersionItem icon={GitFork} label="项目仓库" value="HengXin666/hx-pxy" border />
         </div>
       </section>
 
@@ -174,7 +174,7 @@ export function AboutPage({ onNotice }: { onNotice: (message: string, tone?: "su
     </>}
     <ConfirmDialog
       open={confirmingUpdate}
-      title="更新 HX-ProxyGroup"
+      title="更新 HX-Pxy"
       description="将下载最新 GitHub Release、校验 SHA-256，并重启控制面、数据面和终端 helper；readiness 失败会自动回滚。"
       confirmLabel="开始更新"
       busy={updating}

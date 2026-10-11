@@ -3,7 +3,7 @@ package api
 import (
 	"net/http"
 
-	"github.com/HengXin666/HX-ProxyGroup/internal/listener"
+	"github.com/HengXin666/hx-pxy/internal/listener"
 )
 
 // capabilityEndpoints returns the endpoints section of the catalog. It is data only: see capabilities.go for the types and the live enum wiring.
@@ -95,6 +95,7 @@ func capabilityEndpoints() []CapabilityEndpoint {
 				{Name: "listener.public_endpoint.port", Type: "integer", Description: "Public port. Defaults to the listen port."},
 				{Name: "listener.public_endpoint.tls", Type: "boolean", Description: "Whether the public endpoint terminates TLS."},
 				{Name: "listener.enabled", Type: "boolean", Default: true, Description: "Whether the listener starts enabled."},
+				{Name: "listener.node_id", Type: "string", Description: "Pin this service to exactly one node. Same semantics as listener.create's node_id, and the preferred way to make one service exit through one node: without it the caller builds a one-member group for that node. Setting it also silences the group's selection fields, because a pinned service performs no selection.", Example: "node-4ffe509398b139e74afe3f9f94841427", SeeAlso: []string{"listener.create"}},
 			},
 			Example: map[string]any{
 				"name":           "hk-pool",
@@ -113,6 +114,32 @@ func capabilityEndpoints() []CapabilityEndpoint {
 			},
 			ResponseRef: "Returns the created group and listener, including the listener's share_path.",
 			SeeAlso:     []string{"listener.share.read", "consumer_nodes.read"},
+		},
+		{
+			ID:         "proxy_service.update",
+			Method:     http.MethodPut,
+			Path:       "/api/v1/proxy-services/<group-id>",
+			Summary:    "Replace a service's group policy and its entry point in one call. The addressed group id in the path is authoritative; a body that contradicts it is a client error.",
+			Auth:       "api-key",
+			PathParams: []string{"group-id"},
+			Fields: []CapabilityField{
+				{Name: "group_id", Type: "string", Description: "May be omitted; the path supplies it. Supplying a different one is rejected rather than silently redirecting the write."},
+				{Name: "group_version", Type: "integer", Required: true, Description: "Optimistic-lock precondition for the group."},
+				{Name: "name", Type: "string", Required: true},
+				{Name: "strategy", Type: "string", Required: true, Enum: "proxy_group_strategy"},
+				{Name: "source_spec", Type: "object", Required: true, Description: "Member selection. Same fields as proxy_service.create."},
+				{Name: "listener_id", Type: "string", Required: true},
+				{Name: "listener_version", Type: "integer", Required: true, Description: "Optimistic-lock precondition for the entry point."},
+				{Name: "listener", Type: "object", Required: true},
+				{Name: "listener.node_id", Type: "string", Description: "Move the pin to this node. Omit to KEEP the stored pin — a composite update that does not mention it must not release it, because a rename would otherwise silently reroute the service onto its anchor group's members.", SeeAlso: []string{"proxy_service.create"}},
+				{Name: "listener.clear_node_pin", Type: "boolean", Description: "Release the pin explicitly and hand the service back to its group. It exists because an omitted node_id means keep-the-stored-one, so clear cannot share that representation.", Default: false},
+			},
+			Errors: []CapabilityError{
+				{Status: 409, Code: "proxy_group_conflict", Meaning: "listener_id names an entry point belonging to another group. Re-pointing a foreign listener would silently empty the service that owned it.", Remediation: "Read the group_id off that listener and address the service it actually belongs to."},
+				{Status: 404, Code: "not_found", Meaning: "The addressed group or the named listener does not exist."},
+			},
+			ResponseRef: "The updated group and listener.",
+			SeeAlso:     []string{"proxy_service.create", "listener.create"},
 		},
 		{
 			ID:      "backup.create",

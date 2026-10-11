@@ -16,7 +16,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/HengXin666/HX-ProxyGroup/internal/store"
+	"github.com/HengXin666/hx-pxy/internal/store"
 )
 
 const (
@@ -239,7 +239,7 @@ func renderNotification(record store.AlertRecord, recovered bool) (string, strin
 	if recovered {
 		state = "RESOLVED"
 	}
-	subject := fmt.Sprintf("[HX-ProxyGroup] %s %s: %s", state, record.Severity, record.Rule)
+	subject := fmt.Sprintf("[HX-Pxy] %s %s: %s", state, record.Severity, record.Rule)
 	var body strings.Builder
 	fmt.Fprintf(&body, "Alert: %s\r\n", record.Rule)
 	fmt.Fprintf(&body, "State: %s\r\n", state)

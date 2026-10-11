@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/HengXin666/HX-ProxyGroup/internal/proxygroup"
-	"github.com/HengXin666/HX-ProxyGroup/internal/store"
+	"github.com/HengXin666/hx-pxy/internal/proxygroup"
+	"github.com/HengXin666/hx-pxy/internal/store"
 )
 
 func sessionAllocationExpired(record store.ResidentialClientSessionRecord, now time.Time) bool {

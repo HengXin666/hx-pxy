@@ -8,8 +8,8 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/HengXin666/HX-ProxyGroup/internal/listener"
-	"github.com/HengXin666/HX-ProxyGroup/internal/residential"
+	"github.com/HengXin666/hx-pxy/internal/listener"
+	"github.com/HengXin666/hx-pxy/internal/residential"
 )
 
 // handleResidentialPresets serves the vendor preset catalog. Presets carry a

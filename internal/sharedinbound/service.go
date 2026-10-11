@@ -21,8 +21,8 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/HengXin666/HX-ProxyGroup/internal/listener"
-	"github.com/HengXin666/HX-ProxyGroup/internal/store"
+	"github.com/HengXin666/hx-pxy/internal/listener"
+	"github.com/HengXin666/hx-pxy/internal/store"
 )
 
 // Repository reads the rows the migration has to reason about.

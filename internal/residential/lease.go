@@ -6,7 +6,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/HengXin666/HX-ProxyGroup/internal/store"
+	"github.com/HengXin666/hx-pxy/internal/store"
 )
 
 // Lease constants define the bounded TTL window of a node lease. A consumer

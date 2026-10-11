@@ -6,7 +6,7 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/HengXin666/HX-ProxyGroup/internal/terminal"
+	"github.com/HengXin666/hx-pxy/internal/terminal"
 )
 
 // TerminalResourceService exposes host resource sampling for the terminal UI.

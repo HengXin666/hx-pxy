@@ -1,18 +1,18 @@
 [Unit]
-Description=HX-ProxyGroup Control Plane
-Documentation=https://github.com/HengXin666/HX-ProxyGroup
+Description=HX-Pxy Control Plane
+Documentation=https://github.com/HengXin666/hx-pxy
 Wants=network-online.target
-Requires=hx-proxygroup-dataplane.service hx-proxygroup-terminal.service
-After=network-online.target hx-proxygroup-dataplane.service hx-proxygroup-terminal.service
+Requires=hx-pxy-dataplane.service hx-pxy-terminal.service
+After=network-online.target hx-pxy-dataplane.service hx-pxy-terminal.service
 StartLimitIntervalSec=300
 StartLimitBurst=10
 
 [Service]
 Type=simple
-User=hx-proxygroup
-Group=hx-proxygroup
-WorkingDirectory=/var/lib/hx-proxygroup
-ExecStart=/usr/local/lib/hx-proxygroup/current/hx-proxygroupd --listen 127.0.0.1:19090 --data-dir /var/lib/hx-proxygroup --config /etc/hx-proxygroup/config.yaml --database /var/lib/hx-proxygroup/hx-proxygroup.db --master-key /var/lib/hx-proxygroup/master.key --runtime-config /var/lib/hx-proxygroup/runtime/active.yaml --snapshots /var/lib/hx-proxygroup/snapshots --web-root /usr/local/lib/hx-proxygroup/current/web --mihomo /usr/local/lib/hx-proxygroup/current/mihomo --mihomo-external --terminal-socket /run/hx-proxygroup/terminal.sock
+User=hx-pxy
+Group=hx-pxy
+WorkingDirectory=/var/lib/hx-pxy
+ExecStart=/usr/local/lib/hx-pxy/current/hx-pxyd --listen 127.0.0.1:19090 --data-dir /var/lib/hx-pxy --config /etc/hx-pxy/config.yaml --database /var/lib/hx-pxy/hx-pxy.db --master-key /var/lib/hx-pxy/master.key --runtime-config /var/lib/hx-pxy/runtime/active.yaml --snapshots /var/lib/hx-pxy/snapshots --web-root /usr/local/lib/hx-pxy/current/web --mihomo /usr/local/lib/hx-pxy/current/mihomo --mihomo-external --terminal-socket /run/hx-pxy/terminal.sock
 Restart=on-failure
 RestartSec=3s
 TimeoutStartSec=30s
@@ -41,7 +41,7 @@ SystemCallArchitectures=native
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
 CapabilityBoundingSet=
 AmbientCapabilities=
-ReadWritePaths=/var/lib/hx-proxygroup
+ReadWritePaths=/var/lib/hx-pxy
 
 [Install]
 WantedBy=multi-user.target

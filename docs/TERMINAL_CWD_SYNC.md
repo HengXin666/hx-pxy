@@ -116,5 +116,5 @@ cd web && npm run test:terminal-cwd
 
 | 变量 | 作用 |
 | --- | --- |
-| `HX_PROXYGROUP_SHELL_INTEGRATION=0` | 关闭启动片段注入（内核 cwd 仍然生效） |
-| `HX_PROXYGROUP_RUNTIME_DIR` | 生成片段与所有运行时文件所在目录 |
+| `HX_PXY_SHELL_INTEGRATION=0` | 关闭启动片段注入（内核 cwd 仍然生效） |
+| `HX_PXY_RUNTIME_DIR` | 生成片段与所有运行时文件所在目录 |

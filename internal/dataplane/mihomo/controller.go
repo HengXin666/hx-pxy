@@ -14,8 +14,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/HengXin666/HX-ProxyGroup/internal/metrics"
-	"github.com/HengXin666/HX-ProxyGroup/internal/store"
+	"github.com/HengXin666/hx-pxy/internal/metrics"
+	"github.com/HengXin666/hx-pxy/internal/store"
 )
 
 var ErrNotRunning = errors.New("mihomo is not running")
@@ -240,6 +240,78 @@ func controllerClient(socketPath string, timeout time.Duration) (*http.Client, *
 		},
 	}
 	return &http.Client{Transport: transport, Timeout: timeout}, transport
+}
+
+// GroupSelection is a group's live member list and which member is selected.
+//
+// The stored group record holds a *spec* (subscriptions + filters), so its
+// membership is a compile-time result. This reads what the running data plane
+// actually has, which is what a caller rotating egress needs.
+type GroupSelection struct {
+	Name string `json:"name"`
+	Type string `json:"type"`
+	// Selectable is true only for a Selector: url-test re-picks by latency and
+	// load-balance rotates, so a manual choice there would be silently undone.
+	Selectable bool     `json:"selectable"`
+	Now        string   `json:"now"`
+	Members    []string `json:"members"`
+}
+
+// ReadGroup reads one group's live members and current selection. Read-only.
+func (m *Manager) ReadGroup(ctx context.Context, groupName string) (GroupSelection, error) {
+	groupName = strings.TrimSpace(groupName)
+	if groupName == "" {
+		return GroupSelection{}, errors.New("proxy group name is required")
+	}
+	m.mu.Lock()
+	m.refreshProcessLocked()
+	if !m.isRunningLocked() || !m.status.Running {
+		m.mu.Unlock()
+		return GroupSelection{}, ErrNotRunning
+	}
+	socketPath := m.controllerSocket
+	m.mu.Unlock()
+
+	client, transport := controllerClient(socketPath, 5*time.Second)
+	defer transport.CloseIdleConnections()
+	request, err := http.NewRequestWithContext(
+		ctx, http.MethodGet,
+		"http://unix/proxies/"+url.PathEscape(groupName), nil,
+	)
+	if err != nil {
+		return GroupSelection{}, fmt.Errorf("create Mihomo group read request: %w", err)
+	}
+	response, err := client.Do(request)
+	if err != nil {
+		if strings.Contains(err.Error(), "dial unix") {
+			return GroupSelection{}, fmt.Errorf("%w: control socket unreachable", ErrNotRunning)
+		}
+		return GroupSelection{}, fmt.Errorf("Mihomo group read failed: %w", err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		return GroupSelection{}, fmt.Errorf(
+			"Mihomo group read returned status %d: %s",
+			response.StatusCode, controllerMessage(response.Body),
+		)
+	}
+	var raw struct {
+		Type string   `json:"type"`
+		Now  string   `json:"now"`
+		All  []string `json:"all"`
+	}
+	if err := json.NewDecoder(response.Body).Decode(&raw); err != nil {
+		return GroupSelection{}, fmt.Errorf("decode Mihomo group: %w", err)
+	}
+	out := GroupSelection{Name: groupName, Type: raw.Type, Now: raw.Now}
+	for _, name := range raw.All {
+		if strings.EqualFold(name, "REJECT") || strings.EqualFold(name, "DIRECT") {
+			continue
+		}
+		out.Members = append(out.Members, name)
+	}
+	out.Selectable = strings.EqualFold(raw.Type, "Selector")
+	return out, nil
 }
 
 // SelectProxy points a `select` proxy group at one of its members.

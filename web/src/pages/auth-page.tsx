@@ -50,7 +50,7 @@ export function AuthPage({
             <Network className="size-5" />
           </div>
           <div>
-            <div className="text-base font-semibold leading-5">HX-ProxyGroup</div>
+            <div className="text-base font-semibold leading-5">HX-Pxy</div>
             <div className="text-xs text-muted-foreground">Control Plane</div>
           </div>
         </div>

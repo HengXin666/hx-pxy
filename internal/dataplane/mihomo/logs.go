@@ -13,7 +13,7 @@ import (
 
 	"github.com/coder/websocket"
 
-	"github.com/HengXin666/HX-ProxyGroup/internal/proxylog"
+	"github.com/HengXin666/hx-pxy/internal/proxylog"
 )
 
 const maxLogFrameSize = 32 << 10

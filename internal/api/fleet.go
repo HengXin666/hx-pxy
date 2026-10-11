@@ -6,8 +6,8 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/HengXin666/HX-ProxyGroup/internal/fleet"
-	"github.com/HengXin666/HX-ProxyGroup/internal/store"
+	"github.com/HengXin666/hx-pxy/internal/fleet"
+	"github.com/HengXin666/hx-pxy/internal/store"
 )
 
 // FleetService is the API surface of the built-in CF worker fleet maintainer.

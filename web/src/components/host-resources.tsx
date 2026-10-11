@@ -48,7 +48,7 @@ export function HostResources({ onNotice }: { onNotice: (m: string, tone?: "succ
   }, [onNotice])
 
   if (error) return null
-  const controlPlane = sample?.processes?.find((p) => p.name === "hx-proxygroupd")
+  const controlPlane = sample?.processes?.find((p) => p.name === "hx-pxyd")
   const dataplane = sample?.processes?.find((p) => p.name === "mihomo")
   const processes = [controlPlane, dataplane].filter(Boolean) as NonNullable<typeof controlPlane>[]
   if (!sample && !error) return null

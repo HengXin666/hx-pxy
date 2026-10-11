@@ -8,7 +8,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/HengXin666/HX-ProxyGroup/internal/subscription"
+	"github.com/HengXin666/hx-pxy/internal/subscription"
 )
 
 type DueSubscriptionRepository interface {

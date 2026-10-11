@@ -22,7 +22,7 @@ func TestCatalogLifecycle(t *testing.T) {
 	}
 
 	createdAt := time.Date(2026, time.July, 25, 12, 30, 0, 0, time.UTC)
-	payload := []byte("hx-proxygroup-backup")
+	payload := []byte("hx-pxy-backup")
 	record, err := catalog.Write(context.Background(), Record{
 		ID:          "test-artifact-0001",
 		Kind:        KindBackup,

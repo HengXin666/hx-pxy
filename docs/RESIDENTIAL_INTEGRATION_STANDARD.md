@@ -1,7 +1,7 @@
 # 住宅代理并发集成标准（Unified Window Standard）
 
 > 版本：v1 · 状态：已实现（schema v32）
-> 本文是外部服务（OutlookRegister、爬虫集群、多租户自动化等）对接 HX-ProxyGroup
+> 本文是外部服务（OutlookRegister、爬虫集群、多租户自动化等）对接 HX-Pxy
 > 住宅代理的**唯一并发契约**。协议与流量转发属于 Mihomo；本文件只定义控制面提供的
 > 并发保证、统一窗口模型和自动化 API 标准。
 

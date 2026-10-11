@@ -1,6 +1,6 @@
 # 配置中心端点（/provision/<token>，v0.7.1，2026-08-21）
 
-> 用户方案：HX-ProxyGroup 是**配置中心/授权机构**，不是转发中继。消费者
+> 用户方案：HX-Pxy 是**配置中心/授权机构**，不是转发中继。消费者
 > （如 HX-OutlookRegister 的 cf_bpb 预设）从 `/provision/<token>` 拉取 CF
 > worker 订阅 URL 清单，**本地隧道直连 worker**，流量不经过本控制面。
 >

@@ -16,7 +16,7 @@ import (
 
 const (
 	cfAPIBase = "https://api.cloudflare.com/client/v4"
-	userAgent = "hx-proxygroup-fleet/1"
+	userAgent = "hx-pxy-fleet/1"
 )
 
 // Client talks to the Cloudflare API for one account token.

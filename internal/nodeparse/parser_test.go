@@ -4,6 +4,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"slices"
+	"strings"
 	"testing"
 )
 
@@ -154,6 +155,7 @@ proxies:
   - {name: Hysteria2, type: hysteria2, server: hy2.example.com, port: 443, password: secret}
   - {name: HTTP, type: http, server: http.example.com, port: 8080}
   - {name: Mieru, type: mieru, server: mieru.example.com, port: 443, username: user, password: secret}
+  - {name: OpenVPN, type: openvpn, server: ovpn.example.com, port: 443, proto: tcp, cipher: AES-128-CBC, auth: SHA1, ca: "-----BEGIN CERTIFICATE-----"}
   - {name: ShadowTLS, type: shadow-tls, server: shadow.example.com, port: 443, password: secret}
   - {name: Snell, type: snell, server: snell.example.com, port: 443, psk: secret}
   - {name: SOCKS5, type: socks5, server: socks.example.com, port: 1080}
@@ -170,7 +172,7 @@ proxies:
 	if err != nil {
 		t.Fatalf("Parse() error = %v", err)
 	}
-	if len(result.Nodes) != 16 || len(result.Failures) != 0 {
+	if len(result.Nodes) != 17 || len(result.Failures) != 0 {
 		t.Fatalf("nodes = %d, failures = %+v", len(result.Nodes), result.Failures)
 	}
 	got := make([]string, 0, len(result.Nodes))
@@ -271,5 +273,62 @@ func TestProtocolAliasesNormalizeForMihomoCompiler(t *testing.T) {
 				t.Fatalf("tls = %v, want %v", tls, test.tls)
 			}
 		})
+	}
+}
+
+// An OpenVPN outbound without its inline CA is not a usable node, and the data
+// plane would reject it at load time. It must surface as a single node failure
+// rather than being accepted (or taking the rest of the subscription down).
+func TestParseOpenVPNRequiresInlineCA(t *testing.T) {
+	result, err := Parse([]byte(`
+proxies:
+  - {name: NoCA, type: openvpn, server: ovpn.example.com, port: 443, proto: tcp, cipher: AES-128-CBC}
+  - {name: Good, type: ss, server: ss.example.com, port: 8388, cipher: aes-128-gcm, password: secret}
+`))
+	if err != nil {
+		t.Fatalf("Parse() error = %v", err)
+	}
+	if len(result.Nodes) != 1 || len(result.Failures) != 1 {
+		t.Fatalf("nodes = %d, failures = %+v", len(result.Nodes), result.Failures)
+	}
+	if result.Failures[0].Name != "NoCA" || !strings.Contains(result.Failures[0].Reason, "inline ca") {
+		t.Fatalf("unexpected failure: %+v", result.Failures[0])
+	}
+	if result.Nodes[0].Protocol != "ss" {
+		t.Fatalf("surviving node = %q, want ss", result.Nodes[0].Protocol)
+	}
+}
+
+// A full VPNGate-style node (inline ca/cert/key) must be accepted and must keep
+// its certificate material in the canonical config, since the data plane needs
+// it to build the tunnel.
+func TestParseOpenVPNKeepsInlineMaterial(t *testing.T) {
+	result, err := Parse([]byte(`
+proxies:
+  - name: HomeJP
+    type: openvpn
+    server: 219.100.37.96
+    port: 443
+    proto: tcp
+    cipher: AES-128-CBC
+    auth: SHA1
+    ca: "-----BEGIN CERTIFICATE-----CA-----END CERTIFICATE-----"
+    cert: "-----BEGIN CERTIFICATE-----CERT-----END CERTIFICATE-----"
+    key: "-----BEGIN PRIVATE KEY-----KEY-----END PRIVATE KEY-----"
+`))
+	if err != nil {
+		t.Fatalf("Parse() error = %v", err)
+	}
+	if len(result.Nodes) != 1 || len(result.Failures) != 0 {
+		t.Fatalf("nodes = %d, failures = %+v", len(result.Nodes), result.Failures)
+	}
+	node := result.Nodes[0]
+	if node.Protocol != "openvpn" {
+		t.Fatalf("protocol = %q, want openvpn", node.Protocol)
+	}
+	for _, key := range []string{"ca", "cert", "key"} {
+		if strings.TrimSpace(node.Canonical[key].(string)) == "" {
+			t.Fatalf("canonical %s was dropped", key)
+		}
 	}
 }

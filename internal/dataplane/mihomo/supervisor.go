@@ -36,9 +36,9 @@ const (
 
 // supervisor 是看护循环的运行态。所有者是 Manager, 生命周期随 ctx。
 type supervisor struct {
-	interval   time.Duration
-	restarts   []time.Time
-	cancel     context.CancelFunc
+	interval time.Duration
+	restarts []time.Time
+	cancel   context.CancelFunc
 	supervisorDone
 }
 

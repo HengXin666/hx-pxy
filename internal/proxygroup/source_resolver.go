@@ -5,8 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/HengXin666/HX-ProxyGroup/internal/pipeline"
-	"github.com/HengXin666/HX-ProxyGroup/internal/store"
+	"github.com/HengXin666/hx-pxy/internal/pipeline"
+	"github.com/HengXin666/hx-pxy/internal/store"
 )
 
 var defaultRegistry = pipeline.DefaultRegistry()

@@ -10,7 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/HengXin666/HX-ProxyGroup/internal/routingrules"
+	"github.com/HengXin666/hx-pxy/internal/routingrules"
 )
 
 type fakeRoutingRulesService struct{ config routingrules.Config }

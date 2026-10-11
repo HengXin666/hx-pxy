@@ -456,8 +456,21 @@ export const api = {
     return request("/api/v1/system/update", { method: "POST" })
   },
 
-  listSubscriptions(): Promise<SubscriptionList> {
-    return request("/api/v1/subscriptions?limit=500&offset=0")
+  /**
+   * Lists every subscription. The server caps a page at 1000 rows and the list
+   * endpoint takes no filters, so one page is enough for any real deployment;
+   * the loop is a correctness guard, not a regular cost.
+   */
+  async listSubscriptions(): Promise<SubscriptionList> {
+    // The subscriptions endpoint caps a page at 500 (nodes allows 1000); asking
+    // for more is a 400, not a quietly smaller page.
+    const pageSize = 500
+    const items: Subscription[] = []
+    for (let offset = 0; ; offset += pageSize) {
+      const page = await request<SubscriptionList>(`/api/v1/subscriptions?limit=${pageSize}&offset=${offset}`)
+      items.push(...page.items)
+      if (page.items.length < pageSize) return { items, limit: pageSize, offset: 0 }
+    }
   },
 
   createSubscription(payload: CreateSubscriptionRequest): Promise<Subscription> {
@@ -487,12 +500,28 @@ export const api = {
     })
   },
 
-  listNodes(filters?: { search?: string; protocol?: string; state?: string }): Promise<NodeList> {
-    const query = new URLSearchParams({ limit: "1000", offset: "0" })
-    if (filters?.search) query.set("search", filters.search)
-    if (filters?.protocol) query.set("protocol", filters.protocol)
-    if (filters?.state) query.set("state", filters.state)
-    return request(`/api/v1/nodes?${query.toString()}`)
+  /**
+   * Lists nodes, paging until exhausted.
+   *
+   * This used to be a single `limit=1000` request. That silently truncated the
+   * inventory: with 1349 nodes the page returned exactly 1000, so every count
+   * derived from it — the `N 可用` badge on a service row, the "healthy" metric,
+   * the per-subscription node counts — was computed over a partial set. The
+   * pool service showed `0/493 可用` when it held 1305 members. The server caps
+   * a page at 1000, so the only correct shape is to keep asking.
+   */
+  async listNodes(filters?: { search?: string; protocol?: string; state?: string }): Promise<NodeList> {
+    const pageSize = 1000
+    const items: NodeRecord[] = []
+    for (let offset = 0; ; offset += pageSize) {
+      const query = new URLSearchParams({ limit: String(pageSize), offset: String(offset) })
+      if (filters?.search) query.set("search", filters.search)
+      if (filters?.protocol) query.set("protocol", filters.protocol)
+      if (filters?.state) query.set("state", filters.state)
+      const page = await request<NodeList>(`/api/v1/nodes?${query.toString()}`)
+      items.push(...page.items)
+      if (page.items.length < pageSize) return { items, limit: pageSize, offset: 0 }
+    }
   },
 
   checkNode(id: string): Promise<NodeCheckResult> {

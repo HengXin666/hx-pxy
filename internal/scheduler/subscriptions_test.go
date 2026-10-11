@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/HengXin666/HX-ProxyGroup/internal/subscription"
+	"github.com/HengXin666/hx-pxy/internal/subscription"
 )
 
 func TestSubscriptionSchedulerRunOnceUsesBoundedWorkers(t *testing.T) {

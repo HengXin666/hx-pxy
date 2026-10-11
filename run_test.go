@@ -1,4 +1,4 @@
-package hxproxygroup
+package hxpxy
 
 import (
 	"bytes"
@@ -292,7 +292,7 @@ func TestRunScriptRejectsOccupiedBackendAddressBeforeBuild(t *testing.T) {
 		"run.sh",
 		"--backend-only",
 		"--listen", listener.Addr().String(),
-		"--binary", filepath.Join(t.TempDir(), "missing-hx-proxygroupd"),
+		"--binary", filepath.Join(t.TempDir(), "missing-hx-pxyd"),
 	)
 	output, err := command.CombinedOutput()
 	if err == nil {
@@ -315,14 +315,14 @@ func TestBackendRejectsOccupiedAddressBeforeOpeningPersistentState(t *testing.T)
 	defer listener.Close()
 
 	buildDirectory := t.TempDir()
-	binary := filepath.Join(buildDirectory, "hx-proxygroupd")
-	build := exec.Command("go", "build", "-o", binary, "./cmd/hx-proxygroupd")
+	binary := filepath.Join(buildDirectory, "hx-pxyd")
+	build := exec.Command("go", "build", "-o", binary, "./cmd/hx-pxyd")
 	if output, err := build.CombinedOutput(); err != nil {
 		t.Fatalf("build backend: %v\n%s", err, output)
 	}
 
 	dataDirectory := t.TempDir()
-	databasePath := filepath.Join(dataDirectory, "hx-proxygroup.db")
+	databasePath := filepath.Join(dataDirectory, "hx-pxy.db")
 	masterKeyPath := filepath.Join(dataDirectory, "master.key")
 	command := exec.Command(
 		binary,

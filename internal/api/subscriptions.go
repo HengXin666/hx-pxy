@@ -8,7 +8,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/HengXin666/HX-ProxyGroup/internal/subscription"
+	"github.com/HengXin666/hx-pxy/internal/subscription"
 )
 
 const subscriptionBodyLimit = 5 << 20

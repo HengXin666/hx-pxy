@@ -3,7 +3,7 @@ package api
 import (
 	"net/http"
 
-	"github.com/HengXin666/HX-ProxyGroup/internal/systemsettings"
+	"github.com/HengXin666/hx-pxy/internal/systemsettings"
 )
 
 func (s *Server) handleSettings(writer http.ResponseWriter, request *http.Request) {

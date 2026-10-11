@@ -16,11 +16,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/HengXin666/HX-ProxyGroup/internal/metrics"
-	"github.com/HengXin666/HX-ProxyGroup/internal/nodeparse"
-	"github.com/HengXin666/HX-ProxyGroup/internal/secret"
-	"github.com/HengXin666/HX-ProxyGroup/internal/store"
-	"github.com/HengXin666/HX-ProxyGroup/internal/subscription"
+	"github.com/HengXin666/hx-pxy/internal/metrics"
+	"github.com/HengXin666/hx-pxy/internal/nodeparse"
+	"github.com/HengXin666/hx-pxy/internal/secret"
+	"github.com/HengXin666/hx-pxy/internal/store"
+	"github.com/HengXin666/hx-pxy/internal/subscription"
 )
 
 func TestMapTrafficConnectionsAttributesKnownResources(t *testing.T) {

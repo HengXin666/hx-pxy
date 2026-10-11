@@ -18,7 +18,7 @@ func TestShareBundleRendersAllFormatsAcrossEndpoints(t *testing.T) {
 			Name: "shared-name", Auth: &Auth{Username: "client", Password: "secret"},
 		}}, Transport{}, PublicEndpoint{}),
 	}
-	bundle := NewShareBundle("HX-ProxyGroup", exports)
+	bundle := NewShareBundle("HX-Pxy", exports)
 	if bundle.NodeCount() != 2 || bundle.Exports[1].Nodes[0].Name != "shared-name (2)" {
 		t.Fatalf("bundle names = %+v", bundle.Exports)
 	}

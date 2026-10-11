@@ -19,7 +19,7 @@ Clash / OutlookRegister 本机 Mihomo
   -> HTTPS/WSS 域名
   -> Cloudflare 橙云
   -> VPS:443 雷池
-  -> HX-ProxyGroup Edge Relay
+  -> HX-Pxy Edge Relay
   -> Mihomo 环回 WS Listener
   -> 住宅节点
 ```
@@ -83,7 +83,7 @@ Clash / OutlookRegister 本机 Mihomo
 > 来源与差异：本模式的协议语义（`/sub/raw` 返回 Base64 编码的 VLESS/Trojan 分享 URI、
 > 每次请求重新解析 Cloudflare 地址与随机 WS 路径）借鉴自研究仓库
 > [`ref/BPB-Worker-Panel`](https://github.com/bia-pain-bache/BPB-Worker-Panel)。
-> HX-ProxyGroup 只复用其面板链接的订阅输出约定，住宅集成模型（Provider/Channel/Session、
+> HX-Pxy 只复用其面板链接的订阅输出约定，住宅集成模型（Provider/Channel/Session、
 > 声明节点、control token、`dialer-proxy`、AEAD 加密信封）仍为本项目自身架构，未复制其源码。
 
 ### 2.6 并发集成标准：独占租约 + 分配版本护栏

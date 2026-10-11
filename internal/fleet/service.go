@@ -1,5 +1,5 @@
 // Package fleet maintains a dynamic fleet of Cloudflare Worker proxy endpoints
-// inside HX-ProxyGroup (20260823 user decision): give it CF accounts (API
+// inside HX-Pxy (20260823 user decision): give it CF accounts (API
 // tokens) and it deploys fleet_size workers per account, probes them on an
 // interval, recreates workers after max_consecutive_failures failed probes
 // (treated as a ban), and switches accounts when an account's API stops
@@ -15,12 +15,12 @@ import (
 	"sync"
 	"time"
 
-	"github.com/HengXin666/HX-ProxyGroup/internal/cfworker"
-	"github.com/HengXin666/HX-ProxyGroup/internal/listener"
-	"github.com/HengXin666/HX-ProxyGroup/internal/residential"
-	"github.com/HengXin666/HX-ProxyGroup/internal/secret"
-	"github.com/HengXin666/HX-ProxyGroup/internal/store"
-	"github.com/HengXin666/HX-ProxyGroup/internal/systemsettings"
+	"github.com/HengXin666/hx-pxy/internal/cfworker"
+	"github.com/HengXin666/hx-pxy/internal/listener"
+	"github.com/HengXin666/hx-pxy/internal/residential"
+	"github.com/HengXin666/hx-pxy/internal/secret"
+	"github.com/HengXin666/hx-pxy/internal/store"
+	"github.com/HengXin666/hx-pxy/internal/systemsettings"
 )
 
 // SettingsReader supplies the current fleet configuration.
@@ -231,7 +231,7 @@ func (s *Service) maintainAccount(ctx context.Context, account store.CFAccountRe
 	}
 	sortStrings(names)
 	// 20260823 user decision: aggregate this account's node providers under one
-	// CF channel (HX-Proxy → [CF-渠道] → [CF-Node1..N]) so the frontend shows
+	// CF channel (HX-Pxy → [CF-渠道] → [CF-Node1..N]) so the frontend shows
 	// the hierarchy. cf-worker channels bypass the session machinery; the link
 	// is management/export only.
 	if len(byName) > 0 {

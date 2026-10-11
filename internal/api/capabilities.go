@@ -4,11 +4,11 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/HengXin666/HX-ProxyGroup/internal/listener"
-	"github.com/HengXin666/HX-ProxyGroup/internal/nodeparse"
-	"github.com/HengXin666/HX-ProxyGroup/internal/proxygroup"
-	"github.com/HengXin666/HX-ProxyGroup/internal/residential"
-	"github.com/HengXin666/HX-ProxyGroup/internal/subscription"
+	"github.com/HengXin666/hx-pxy/internal/listener"
+	"github.com/HengXin666/hx-pxy/internal/nodeparse"
+	"github.com/HengXin666/hx-pxy/internal/proxygroup"
+	"github.com/HengXin666/hx-pxy/internal/residential"
+	"github.com/HengXin666/hx-pxy/internal/subscription"
 )
 
 // CapabilityCatalogPath is the machine-readable capability catalog. It lives in
@@ -211,7 +211,7 @@ func (s *Server) CapabilityCatalog() CapabilityCatalog {
 	return CapabilityCatalog{
 		Version:            capabilityCatalogVersion,
 		ApplicationVersion: version,
-		Overview:           "HX-ProxyGroup is a proxy control plane. It configures a separate Mihomo data plane and publishes node lists; it never carries proxy traffic itself. Every write below either describes desired state or reads it back.",
+		Overview:           "HX-Pxy is a proxy control plane. It configures a separate Mihomo data plane and publishes node lists; it never carries proxy traffic itself. Every write below either describes desired state or reads it back.",
 		Authentication: CapabilityAuth{
 			Scheme:  "bearer",
 			Headers: []string{"Authorization: Bearer <api-key>", "X-API-Key: <api-key>"},

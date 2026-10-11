@@ -12,8 +12,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/HengXin666/HX-ProxyGroup/internal/artifact"
-	"github.com/HengXin666/HX-ProxyGroup/internal/bundle"
+	"github.com/HengXin666/hx-pxy/internal/artifact"
+	"github.com/HengXin666/hx-pxy/internal/bundle"
 )
 
 func TestBackupAPIFlow(t *testing.T) {

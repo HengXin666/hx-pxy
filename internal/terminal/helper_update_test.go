@@ -31,7 +31,7 @@ func expectFrame(t *testing.T, connection net.Conn, want byte) []byte {
 // fixed-name update unit appears active; runError makes the updater fail.
 func newTestScheduler(t *testing.T, systemdActive bool, runError error) *updateScheduler {
 	t.Helper()
-	scheduler := newUpdateScheduler("/usr/local/sbin/hx-proxygroup-install", discardLogger())
+	scheduler := newUpdateScheduler("/usr/local/sbin/hx-pxy-install", discardLogger())
 	scheduler.validatePath = func(string) bool { return true }
 	scheduler.systemdActive = func(context.Context) bool { return systemdActive }
 	scheduler.runUpdater = func(context.Context) error { return runError }
@@ -181,7 +181,7 @@ func TestUpdateSchedulerRefusesInvalidUpdater(t *testing.T) {
 func TestUpdateSchedulerLogsScheduleFailure(t *testing.T) {
 	var buffer syncBuffer
 	logger := slog.New(slog.NewTextHandler(&buffer, nil))
-	scheduler := newUpdateScheduler("/usr/local/sbin/hx-proxygroup-install", logger)
+	scheduler := newUpdateScheduler("/usr/local/sbin/hx-pxy-install", logger)
 	scheduler.validatePath = func(string) bool { return true }
 	scheduler.systemdActive = func(context.Context) bool { return false }
 	scheduler.runUpdater = func(context.Context) error { return errors.New("systemd-run failed") }

@@ -39,35 +39,35 @@ type Config struct {
 	TerminalPrivilegedSocket string
 	// TerminalHistory persists shell command history between terminal sessions
 	// (bash ~/.bash_history, zsh ~/.zsh_history). Enabled by default for the
-	// sole administrator; set HX_PROXYGROUP_TERMINAL_HISTORY=0 to restore the
+	// sole administrator; set HX_PXY_TERMINAL_HISTORY=0 to restore the
 	// no-history lockdown.
 	TerminalHistory bool
 }
 
 func Default() Config {
-	dataDirectory := envOrDefault("HX_PROXYGROUP_DATA_DIR", "./data")
+	dataDirectory := envOrDefault("HX_PXY_DATA_DIR", "./data")
 	return Config{
-		ListenAddress:     envOrDefault("HX_PROXYGROUP_LISTEN", "127.0.0.1:19090"),
+		ListenAddress:     envOrDefault("HX_PXY_LISTEN", "127.0.0.1:19090"),
 		DataDirectory:     dataDirectory,
-		ApplicationConfig: envOrDefault("HX_PROXYGROUP_CONFIG", "./config.yaml"),
-		DatabasePath:      envOrDefault("HX_PROXYGROUP_DATABASE", filepath.Join(dataDirectory, "hx-proxygroup.db")),
-		MasterKeyPath:     envOrDefault("HX_PROXYGROUP_MASTER_KEY", filepath.Join(dataDirectory, "master.key")),
-		RuntimeConfigPath: envOrDefault("HX_PROXYGROUP_RUNTIME_CONFIG", filepath.Join(dataDirectory, "runtime", "active.yaml")),
-		SnapshotsPath:     envOrDefault("HX_PROXYGROUP_SNAPSHOTS", filepath.Join(dataDirectory, "snapshots")),
-		WebRoot:           envOrDefault("HX_PROXYGROUP_WEB_ROOT", ""),
-		MihomoBinary:      envOrDefault("HX_PROXYGROUP_MIHOMO", "mihomo"),
-		MihomoExternal:    envOrDefault("HX_PROXYGROUP_MIHOMO_EXTERNAL", "") == "1",
+		ApplicationConfig: envOrDefault("HX_PXY_CONFIG", "./config.yaml"),
+		DatabasePath:      envOrDefault("HX_PXY_DATABASE", filepath.Join(dataDirectory, "hx-pxy.db")),
+		MasterKeyPath:     envOrDefault("HX_PXY_MASTER_KEY", filepath.Join(dataDirectory, "master.key")),
+		RuntimeConfigPath: envOrDefault("HX_PXY_RUNTIME_CONFIG", filepath.Join(dataDirectory, "runtime", "active.yaml")),
+		SnapshotsPath:     envOrDefault("HX_PXY_SNAPSHOTS", filepath.Join(dataDirectory, "snapshots")),
+		WebRoot:           envOrDefault("HX_PXY_WEB_ROOT", ""),
+		MihomoBinary:      envOrDefault("HX_PXY_MIHOMO", "mihomo"),
+		MihomoExternal:    envOrDefault("HX_PXY_MIHOMO_EXTERNAL", "") == "1",
 		MihomoEgressInterface: envOrDefault(
-			"HX_PROXYGROUP_MIHOMO_EGRESS_INTERFACE",
+			"HX_PXY_MIHOMO_EGRESS_INTERFACE",
 			"auto",
 		),
-		MihomoMaxProcs:           envIntOrDefault("HX_PROXYGROUP_MIHOMO_MAX_PROCS", min(runtime.NumCPU(), 4)),
-		MihomoLogMaxBytes:        int64(envIntOrDefault("HX_PROXYGROUP_MIHOMO_LOG_MAX_BYTES", 8<<20)),
-		MihomoLogBackups:         envIntOrDefault("HX_PROXYGROUP_MIHOMO_LOG_BACKUPS", 2),
-		TerminalEnabled:          envOrDefault("HX_PROXYGROUP_TERMINAL", "1") != "0",
-		TerminalShell:            envOrDefault("HX_PROXYGROUP_TERMINAL_SHELL", ""),
-		TerminalPrivilegedSocket: envOrDefault("HX_PROXYGROUP_TERMINAL_SOCKET", ""),
-		TerminalHistory:          envOrDefault("HX_PROXYGROUP_TERMINAL_HISTORY", "1") != "0",
+		MihomoMaxProcs:           envIntOrDefault("HX_PXY_MIHOMO_MAX_PROCS", min(runtime.NumCPU(), 4)),
+		MihomoLogMaxBytes:        int64(envIntOrDefault("HX_PXY_MIHOMO_LOG_MAX_BYTES", 8<<20)),
+		MihomoLogBackups:         envIntOrDefault("HX_PXY_MIHOMO_LOG_BACKUPS", 2),
+		TerminalEnabled:          envOrDefault("HX_PXY_TERMINAL", "1") != "0",
+		TerminalShell:            envOrDefault("HX_PXY_TERMINAL_SHELL", ""),
+		TerminalPrivilegedSocket: envOrDefault("HX_PXY_TERMINAL_SOCKET", ""),
+		TerminalHistory:          envOrDefault("HX_PXY_TERMINAL_HISTORY", "1") != "0",
 	}
 }
 

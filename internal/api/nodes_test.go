@@ -14,9 +14,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/HengXin666/HX-ProxyGroup/internal/artifact"
-	"github.com/HengXin666/HX-ProxyGroup/internal/bundle"
-	"github.com/HengXin666/HX-ProxyGroup/internal/node"
+	"github.com/HengXin666/hx-pxy/internal/artifact"
+	"github.com/HengXin666/hx-pxy/internal/bundle"
+	"github.com/HengXin666/hx-pxy/internal/node"
 )
 
 type fakeNodeService struct {

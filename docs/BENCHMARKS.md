@@ -52,7 +52,7 @@ go test ./internal/store ./internal/dataplane/mihomo
 
 | 进程 / 文件 | 实测值 | 补充信息 |
 | --- | ---: | --- |
-| `hx-proxygroupd` RSS | 20,344 KiB（19.9 MiB） | VSZ 1,939,264 KiB，10 threads |
+| `hx-pxyd` RSS | 20,344 KiB（19.9 MiB） | VSZ 1,939,264 KiB，10 threads |
 | Mihomo RSS | 44,168 KiB（43.1 MiB） | v1.19.29，VSZ 1,832,844 KiB，8 threads |
 | 双进程 RSS 合计 | 64,512 KiB（63.0 MiB） | 空闲基线，不是峰值 |
 | 控制面 CPU | 0 tick / 15 秒 | 采样时钟 100 Hz，分辨率约 0.07% 单核 |
@@ -64,10 +64,10 @@ go test ./internal/store ./internal/dataplane/mihomo
 核心复现命令：
 
 ```bash
-go build -trimpath -ldflags='-s -w' -o /tmp/hx-proxygroupd ./cmd/hx-proxygroupd
+go build -trimpath -ldflags='-s -w' -o /tmp/hx-pxyd ./cmd/hx-pxyd
 ps -p <control-pid>,<mihomo-pid> -o pid=,rss=,vsz=,%cpu=,etimes=,nlwp=,comm=
 getconf CLK_TCK
-stat -c '%n %s bytes' /tmp/hx-proxygroupd /usr/bin/mihomo
+stat -c '%n %s bytes' /tmp/hx-pxyd /usr/bin/mihomo
 du -sb web/dist
 ```
 

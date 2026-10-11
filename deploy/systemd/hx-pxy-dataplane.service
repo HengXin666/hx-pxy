@@ -1,6 +1,6 @@
 [Unit]
-Description=HX-ProxyGroup Mihomo Data Plane
-Documentation=https://github.com/HengXin666/HX-ProxyGroup
+Description=HX-Pxy Mihomo Data Plane
+Documentation=https://github.com/HengXin666/hx-pxy
 Wants=network-online.target
 After=network-online.target
 StartLimitIntervalSec=300
@@ -8,12 +8,12 @@ StartLimitBurst=20
 
 [Service]
 Type=simple
-User=hx-proxygroup
-Group=hx-proxygroup
-WorkingDirectory=/var/lib/hx-proxygroup/runtime
+User=hx-pxy
+Group=hx-pxy
+WorkingDirectory=/var/lib/hx-pxy/runtime
 Environment=GOMAXPROCS=4
-ExecStartPre=/usr/local/lib/hx-proxygroup/current/mihomo -t -d /var/lib/hx-proxygroup/runtime -f /var/lib/hx-proxygroup/runtime/active.yaml
-ExecStart=/usr/local/lib/hx-proxygroup/current/mihomo -d /var/lib/hx-proxygroup/runtime -f /var/lib/hx-proxygroup/runtime/active.yaml
+ExecStartPre=/usr/local/lib/hx-pxy/current/mihomo -t -d /var/lib/hx-pxy/runtime -f /var/lib/hx-pxy/runtime/active.yaml
+ExecStart=/usr/local/lib/hx-pxy/current/mihomo -d /var/lib/hx-pxy/runtime -f /var/lib/hx-pxy/runtime/active.yaml
 Restart=on-failure
 RestartSec=3s
 TimeoutStartSec=30s
@@ -42,7 +42,7 @@ SystemCallArchitectures=native
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
 CapabilityBoundingSet=
 AmbientCapabilities=
-ReadWritePaths=/var/lib/hx-proxygroup/runtime
+ReadWritePaths=/var/lib/hx-pxy/runtime
 
 [Install]
 WantedBy=multi-user.target

@@ -8,13 +8,13 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/HengXin666/HX-ProxyGroup/internal/listener"
-	"github.com/HengXin666/HX-ProxyGroup/internal/nodeparse"
-	"github.com/HengXin666/HX-ProxyGroup/internal/proxygroup"
-	"github.com/HengXin666/HX-ProxyGroup/internal/proxyservice"
-	"github.com/HengXin666/HX-ProxyGroup/internal/quickstart"
-	"github.com/HengXin666/HX-ProxyGroup/internal/residential"
-	"github.com/HengXin666/HX-ProxyGroup/internal/subscription"
+	"github.com/HengXin666/hx-pxy/internal/listener"
+	"github.com/HengXin666/hx-pxy/internal/nodeparse"
+	"github.com/HengXin666/hx-pxy/internal/proxygroup"
+	"github.com/HengXin666/hx-pxy/internal/proxyservice"
+	"github.com/HengXin666/hx-pxy/internal/quickstart"
+	"github.com/HengXin666/hx-pxy/internal/residential"
+	"github.com/HengXin666/hx-pxy/internal/subscription"
 )
 
 // stubProxyGroupService and stubProxyServiceService only need to exist so the
@@ -36,6 +36,9 @@ func (stubProxyGroupService) Update(context.Context, string, proxygroup.UpdateRe
 }
 
 func (stubProxyGroupService) Delete(context.Context, string, int) error { return nil }
+func (stubProxyGroupService) Members(context.Context, string) (proxygroup.MembersView, error) {
+	return proxygroup.MembersView{}, nil
+}
 
 type stubSubscriptionService struct{}
 

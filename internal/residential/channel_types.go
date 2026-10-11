@@ -3,7 +3,7 @@ package residential
 import (
 	"time"
 
-	"github.com/HengXin666/HX-ProxyGroup/internal/listener"
+	"github.com/HengXin666/hx-pxy/internal/listener"
 )
 
 // Channel is the administrator-facing view of one residential entry point.

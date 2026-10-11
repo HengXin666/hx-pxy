@@ -40,7 +40,7 @@ work_dir="$(mktemp -d)"
 trap 'rm -rf -- "${work_dir}"' EXIT
 stage="${work_dir}/stage"
 install -d -m 0755 "${stage}/bin" "${stage}/web" "${stage}/deploy/systemd" "${OUTPUT_DIR}"
-install -m 0755 "${CONTROL_BINARY}" "${stage}/bin/hx-proxygroupd"
+install -m 0755 "${CONTROL_BINARY}" "${stage}/bin/hx-pxyd"
 install -m 0755 "${MIHOMO_BINARY}" "${stage}/bin/mihomo"
 install -m 0755 "${ROOT_DIR}/install.sh" "${stage}/install.sh"
 install -m 0644 "${ROOT_DIR}/LICENSE" "${stage}/LICENSE"
@@ -53,7 +53,7 @@ install -m 0644 "${CFWORKER_DIR}/worker.js" "${stage}/cfworker/worker.js"
 install -m 0755 "${CFWORKER_DIR}/obfuscate.sh" "${stage}/cfworker/obfuscate.sh"
 cp -a "${ROOT_DIR}/deploy/systemd/." "${stage}/deploy/systemd/"
 
-bundle_name="hx-proxygroup_${VERSION}_linux_${ARCH}.tar.gz"
+bundle_name="hx-pxy_${VERSION}_linux_${ARCH}.tar.gz"
 tar --sort=name --mtime='@0' --owner=0 --group=0 --numeric-owner -C "${stage}" -czf "${OUTPUT_DIR}/${bundle_name}" .
 checksum="$(sha256sum "${OUTPUT_DIR}/${bundle_name}" | awk '{print $1}')"
 checksum_stage="${work_dir}/SHA256SUMS"

@@ -9,7 +9,7 @@ import (
 	"net/url"
 	"strings"
 
-	"github.com/HengXin666/HX-ProxyGroup/internal/store"
+	"github.com/HengXin666/hx-pxy/internal/store"
 )
 
 const (
@@ -86,6 +86,8 @@ type Settings struct {
 	// SharedInbound collapses N proxy services onto one Mixed port and one
 	// WebSocket port family so clients no longer need one process per group.
 	SharedInbound SharedInboundSettings `json:"shared_inbound"`
+	// Guard carries the operator's write-surface guards; see GuardSettings.
+	Guard GuardSettings `json:"guard"`
 }
 
 // FleetSettings gates the built-in CF worker fleet maintainer.
@@ -112,6 +114,53 @@ type ProvisionSettings struct {
 	Enabled bool   `json:"enabled"`
 	Token   string `json:"token,omitempty"`
 }
+
+// GuardSettings carries the operator's write-surface guards. They exist to stop
+// unattended callers from growing the control plane's object graph.
+//
+// Why this is a guard and not a rule in the group service: the mistake being
+// prevented is not a malformed request, it is a *modelling* choice that a human
+// makes once and a script then repeats forever. The group service cannot tell
+// "this caller wants one node" from "this caller wants a group that happens to
+// select one node", and it should not try — the caller's identity is the only
+// thing that separates an operator clicking a button from a loop creating one
+// group per node. That identity lives in the credential, so the guard lives on
+// the request path next to the authentication that resolves it.
+//
+// A single-member group is the shape this guard exists to prevent: a listener
+// can name a node directly (see CreateRequest.NodeID in internal/listener), so
+// materialising a group as a handle for one node adds an object that means
+// nothing and accumulates. Measured before this guard existed: 61 groups for 28
+// distinct nodes, one node having been wrapped in a group five times.
+type GuardSettings struct {
+	// DenyAPIGroupCreate blocks the group-creating write surface for API-key
+	// callers: POST /api/v1/proxy-groups, POST /api/v1/proxy-services and
+	// POST /api/v1/quickstart. A browser session is unaffected, because the
+	// guard constrains *who* writes, not *what* may be written: the front end
+	// remains free to create a multi-node group, and any caller may still edit
+	// or delete an existing one.
+	//
+	// Every other write stays open to machine credentials on purpose. This is
+	// not a general "read-only API key" switch: refreshing a subscription,
+	// probing a node or rotating a listener is exactly what unattended callers
+	// are for, and turning those off would break them to prevent a modelling
+	// error they cannot even commit under this guard.
+	//
+	// A pointer, so that "the caller did not mention this field" is
+	// distinguishable from "the caller wants it false". PUT /api/v1/settings
+	// replaces the whole document, and a client that predates this field — or a
+	// script that only wants to change the log level — decodes a missing key as
+	// the zero value. With a plain bool that silently switched the guard off:
+	// measured 2026-10-01, saving settings without this key cleared it while the
+	// operator believed it was on. A safety gate must not be resettable by an
+	// unrelated save, so an omitted field means "keep the stored value"; see
+	// Service.Update for the merge, which is the only place that may act on nil.
+	DenyAPIGroupCreate *bool `json:"deny_api_group_create,omitempty"`
+}
+
+// boolPointer is the smallest helper that lets a tri-state bool be expressed in
+// a struct that is also the API DTO. Only the guard fields need it.
+func boolPointer(value bool) *bool { return &value }
 
 func Default() Settings {
 	return Settings{
@@ -146,6 +195,11 @@ func Default() Settings {
 			LogLevel:          "warning",
 		},
 		SharedInbound: DefaultSharedInbound(),
+		// Default off: an upgraded installation must keep behaving exactly as
+		// it did until an operator turns the guard on. Turning it on by default
+		// would break every existing script on the next restart, with the
+		// failure surfacing far from the change that caused it.
+		Guard: GuardSettings{DenyAPIGroupCreate: boolPointer(false)},
 		Fleet: FleetSettings{
 			Enabled:                false,
 			FleetSize:              10,
@@ -305,12 +359,22 @@ func (s *Service) Get(ctx context.Context) (Settings, error) {
 }
 
 func (s *Service) Update(ctx context.Context, settings Settings) (Settings, error) {
-	normalize(&settings)
-	if err := Validate(settings); err != nil {
-		return Settings{}, err
-	}
 	previous, err := Load(ctx, s.repository)
 	if err != nil {
+		return Settings{}, err
+	}
+	// PUT replaces the whole document, so a field the caller omitted arrives as
+	// its zero value. For the guard fields that is not a statement about the
+	// value — it is an absent statement, and treating it as "off" let any
+	// unrelated save (change the log level; save from a client that predates
+	// the field) silently disarm a switch the operator had turned on. Measured
+	// 2026-10-01. Absent therefore means "unchanged", and this merge is the only
+	// code allowed to read the nil case; everywhere else the value is concrete.
+	if settings.Guard.DenyAPIGroupCreate == nil {
+		settings.Guard.DenyAPIGroupCreate = boolPointer(previous.Guard.DenyAPIGroupCreate != nil && *previous.Guard.DenyAPIGroupCreate)
+	}
+	normalize(&settings)
+	if err := Validate(settings); err != nil {
 		return Settings{}, err
 	}
 	if err := Save(ctx, s.repository, settings); err != nil {

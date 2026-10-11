@@ -33,15 +33,26 @@ await page.getByRole("button", { name: "取消" }).click()
 
 await page.goto(`${baseURL}/#/routing`, { waitUntil: "networkidle" })
 await page.getByRole("heading", { name: "代理服务" }).waitFor()
-if (await page.evaluate(() => document.documentElement.scrollHeight > window.innerHeight)) throw new Error("proxy service page must not create document-level vertical scrolling")
+// The create form is a dialog now, so the page is one full-width column at every
+// width. The list may scroll inside its own box, but the page must never scroll
+// sideways: the service row has a hard minimum width (name + badges + address +
+// strategy + actions).
+if (await page.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth)) {
+  throw new Error("proxy service page overflows horizontally")
+}
+if (await page.locator("main form").count() !== 0) {
+  throw new Error("proxy service page must not keep the create form inline")
+}
+await page.getByRole("button", { name: "新建代理服务" }).click()
+await page.getByRole("dialog").waitFor()
 await page.getByLabel("服务名称").fill("本机订阅验证")
 // The shared inbound is the default for new installs: every service reuses the
 // one Mixed port, so the per-service port field is intentionally read-only and
 // the form only asks for the login credential.
 const sharedInboundEnabled = await page.getByLabel("本地端口").isDisabled()
 if (sharedInboundEnabled) {
-  await page.getByRole("textbox", { name: "用户名" }).fill("ui-review-user")
-  await page.getByRole("button", { name: "创建并启动" }).click()
+  await page.getByRole("dialog").getByRole("textbox", { name: "用户名" }).fill("ui-review-user")
+  await page.getByRole("dialog").getByRole("button", { name: "创建并启动" }).click()
   // The shared inbound keeps one aggregate listener per family alongside the
   // per-service rows, so the new service name can legitimately appear twice
   // (its own row and the aggregate's). Assert the row exists, not that it is
@@ -50,7 +61,7 @@ if (sharedInboundEnabled) {
 } else {
   await page.getByLabel("本地端口").fill("17891")
   await page.getByLabel("公网主机名 / IP（可选）").fill("proxy.example.com")
-  await page.getByRole("button", { name: "创建并启动" }).click()
+  await page.getByRole("dialog").getByRole("button", { name: "创建并启动" }).click()
   await page.getByText("本机订阅验证", { exact: true }).first().waitFor()
 }
 

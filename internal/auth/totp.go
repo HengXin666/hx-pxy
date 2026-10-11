@@ -15,12 +15,12 @@ import (
 	"strings"
 	"time"
 
-	"github.com/HengXin666/HX-ProxyGroup/internal/store"
+	"github.com/HengXin666/hx-pxy/internal/store"
 )
 
 const (
-	twoFactorAssociatedData = "hx-proxygroup/admin-totp/v1"
-	twoFactorIssuer         = "HX-ProxyGroup"
+	twoFactorAssociatedData = "hx-pxy/admin-totp/v1"
+	twoFactorIssuer         = "HX-Pxy"
 	twoFactorPeriod         = 30 * time.Second
 	twoFactorDigits         = 6
 	twoFactorSecretBytes    = 20

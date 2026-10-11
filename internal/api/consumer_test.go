@@ -11,7 +11,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/HengXin666/HX-ProxyGroup/internal/listener"
+	"github.com/HengXin666/hx-pxy/internal/listener"
 )
 
 // consumerNodeService is a listener service that publishes one exports-ready
@@ -214,7 +214,7 @@ func TestConsumerNodesResidentialTokenUsesChannelExports(t *testing.T) {
 // mounted the public listing at /api/v1/nodes took the whole daemon down at
 // startup. Neither route's own test caught it, because each registered only the
 // service it cares about — this one registers both, exactly as
-// cmd/hx-proxygroupd does.
+// cmd/hx-pxyd does.
 func TestConsumerNodesCoexistsWithAdminNodeRoutes(t *testing.T) {
 	t.Parallel()
 

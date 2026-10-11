@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/HengXin666/HX-ProxyGroup/internal/listener"
+	"github.com/HengXin666/hx-pxy/internal/listener"
 )
 
 // declaredChannel provisions a sticky channel with N declared nodes so lease

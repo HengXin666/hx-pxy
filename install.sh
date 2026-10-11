@@ -1,18 +1,18 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-readonly CONTROL_SERVICE="hx-proxygroup.service"
-readonly DATAPLANE_SERVICE="hx-proxygroup-dataplane.service"
-readonly TERMINAL_SERVICE="hx-proxygroup-terminal.service"
-readonly SERVICE_USER="hx-proxygroup"
-readonly SERVICE_GROUP="hx-proxygroup"
-readonly REPOSITORY="HengXin666/HX-ProxyGroup"
+readonly CONTROL_SERVICE="hx-pxy.service"
+readonly DATAPLANE_SERVICE="hx-pxy-dataplane.service"
+readonly TERMINAL_SERVICE="hx-pxy-terminal.service"
+readonly SERVICE_USER="hx-pxy"
+readonly SERVICE_GROUP="hx-pxy"
+readonly REPOSITORY="HengXin666/hx-pxy"
 
-INSTALL_ROOT="${HX_INSTALL_ROOT:-/usr/local/lib/hx-proxygroup}"
-INSTALLER_PATH="${HX_INSTALLER_PATH:-/usr/local/sbin/hx-proxygroup-install}"
-CONFIG_DIR="${HX_CONFIG_DIR:-/etc/hx-proxygroup}"
-DATA_DIR="${HX_DATA_DIR:-/var/lib/hx-proxygroup}"
-LOG_DIR="${HX_LOG_DIR:-/var/log/hx-proxygroup}"
+INSTALL_ROOT="${HX_INSTALL_ROOT:-/usr/local/lib/hx-pxy}"
+INSTALLER_PATH="${HX_INSTALLER_PATH:-/usr/local/sbin/hx-pxy-install}"
+CONFIG_DIR="${HX_CONFIG_DIR:-/etc/hx-pxy}"
+DATA_DIR="${HX_DATA_DIR:-/var/lib/hx-pxy}"
+LOG_DIR="${HX_LOG_DIR:-/var/log/hx-pxy}"
 UNIT_DIR="${HX_UNIT_DIR:-/etc/systemd/system}"
 RELEASE_BASE="${HX_RELEASE_BASE:-https://github.com/${REPOSITORY}/releases}"
 
@@ -28,23 +28,23 @@ CONFIRM_PURGE="false"
 START_SERVICES="true"
 WORK_DIR=""
 
-log() { printf '[hx-proxygroup] %s\n' "$*"; }
-warn() { printf '[hx-proxygroup] warning: %s\n' "$*" >&2; }
-fail() { printf '[hx-proxygroup] error: %s\n' "$*" >&2; exit 1; }
+log() { printf '[hx-pxy] %s\n' "$*"; }
+warn() { printf '[hx-pxy] warning: %s\n' "$*" >&2; }
+fail() { printf '[hx-pxy] error: %s\n' "$*" >&2; exit 1; }
 
 usage() {
     cat <<'USAGE'
 Usage:
   sudo bash install.sh install   [--version VERSION] [--offline-dir DIR]
-  sudo hx-proxygroup-install upgrade [--version VERSION]
-  sudo hx-proxygroup-install repair|status|uninstall
-  sudo hx-proxygroup-install backup [--output FILE]
-  sudo hx-proxygroup-install purge --confirm-purge
+  sudo hx-pxy-install upgrade [--version VERSION]
+  sudo hx-pxy-install repair|status|uninstall
+  sudo hx-pxy-install backup [--output FILE]
+  sudo hx-pxy-install purge --confirm-purge
 
 Options:
   --version VERSION     Exact release tag, or latest (default).
   --offline-dir DIR     Directory containing a release bundle and SHA256SUMS.
-  --binary PATH         Local hx-proxygroupd for a source/development install.
+  --binary PATH         Local hx-pxyd for a source/development install.
   --mihomo PATH         Local Mihomo binary for a source/development install.
   --web-dir DIR         Existing web/dist directory for a local install.
   --output FILE         Disaster-backup destination for the backup command.
@@ -52,8 +52,8 @@ Options:
   --confirm-purge       Confirm deletion of configuration and persistent data.
   -h, --help            Show this help.
 
-Release bundles are named hx-proxygroup_<tag>_linux_<amd64|arm64>.tar.gz and
-contain bin/hx-proxygroupd, bin/mihomo, web/, deploy/systemd/, install.sh, and LICENSE.
+Release bundles are named hx-pxy_<tag>_linux_<amd64|arm64>.tar.gz and
+contain bin/hx-pxyd, bin/mihomo, web/, deploy/systemd/, install.sh, and LICENSE.
 The production unit keeps the control plane unprivileged and uses a local root
 PTY helper for the administrator terminal after login and TOTP verification.
 USAGE
@@ -111,7 +111,7 @@ nologin_shell() {
 
 ensure_account_and_directories() {
     getent group "${SERVICE_GROUP}" >/dev/null || groupadd --system "${SERVICE_GROUP}"
-    id -u "${SERVICE_USER}" >/dev/null 2>&1 || useradd --system --gid "${SERVICE_GROUP}" --home-dir "${DATA_DIR}" --shell "$(nologin_shell)" --comment "HX-ProxyGroup service account" "${SERVICE_USER}"
+    id -u "${SERVICE_USER}" >/dev/null 2>&1 || useradd --system --gid "${SERVICE_GROUP}" --home-dir "${DATA_DIR}" --shell "$(nologin_shell)" --comment "HX-Pxy service account" "${SERVICE_USER}"
     install -d -m 0755 -o root -g root "${INSTALL_ROOT}" "${INSTALL_ROOT}/versions"
     install -d -m 0750 -o root -g "${SERVICE_GROUP}" "${CONFIG_DIR}"
     install -d -m 0700 -o "${SERVICE_USER}" -g "${SERVICE_GROUP}" "${DATA_DIR}" "${DATA_DIR}/runtime" "${DATA_DIR}/snapshots" "${DATA_DIR}/artifacts" "${DATA_DIR}/backups"
@@ -163,7 +163,7 @@ prepare_release_stage() {
         if [[ -n "${OFFLINE_DIR}" && -r "${OFFLINE_DIR}/VERSION" ]]; then VERSION="$(tr -d '[:space:]' <"${OFFLINE_DIR}/VERSION")"; else resolve_latest_version; fi
     fi
     validate_version
-    bundle_name="hx-proxygroup_${VERSION}_linux_${arch}.tar.gz"
+    bundle_name="hx-pxy_${VERSION}_linux_${arch}.tar.gz"
     if [[ -n "${OFFLINE_DIR}" ]]; then
         bundle="${OFFLINE_DIR}/${bundle_name}"; checksums="${OFFLINE_DIR}/SHA256SUMS"
         [[ -f "${bundle}" && -f "${checksums}" ]] || fail "offline bundle or SHA256SUMS is missing"
@@ -182,8 +182,8 @@ prepare_local_stage() {
     local stage="$1" backend="${BINARY_SOURCE}" mihomo="${MIHOMO_SOURCE}" web="${WEB_SOURCE}"
     if [[ -z "${backend}" ]]; then
         require_command go
-        backend="${stage}/hx-proxygroupd.build"
-        (cd "${SCRIPT_DIR}" && CGO_ENABLED=0 go build -trimpath -ldflags "-s -w -X main.version=${VERSION}" -o "${backend}" ./cmd/hx-proxygroupd)
+        backend="${stage}/hx-pxyd.build"
+        (cd "${SCRIPT_DIR}" && CGO_ENABLED=0 go build -trimpath -ldflags "-s -w -X main.version=${VERSION}" -o "${backend}" ./cmd/hx-pxyd)
     fi
     if [[ -z "${mihomo}" ]]; then mihomo="$(command -v mihomo || true)"; fi
     [[ -x "${backend}" ]] || fail "local control-plane binary is missing or not executable"
@@ -195,7 +195,7 @@ prepare_local_stage() {
     fi
     [[ -f "${web}/index.html" ]] || fail "web directory does not contain index.html"
     install -d -m 0755 "${stage}/bin" "${stage}/web" "${stage}/deploy/systemd"
-    install -m 0755 "${backend}" "${stage}/bin/hx-proxygroupd"
+    install -m 0755 "${backend}" "${stage}/bin/hx-pxyd"
     install -m 0755 "${mihomo}" "${stage}/bin/mihomo"
     cp -a "${web}/." "${stage}/web/"
     cp -a "${SCRIPT_DIR}/deploy/systemd/." "${stage}/deploy/systemd/"
@@ -205,7 +205,7 @@ prepare_local_stage() {
 
 validate_stage() {
     local stage="$1"
-    [[ -x "${stage}/bin/hx-proxygroupd" ]] || fail "bundle is missing bin/hx-proxygroupd"
+    [[ -x "${stage}/bin/hx-pxyd" ]] || fail "bundle is missing bin/hx-pxyd"
     [[ -x "${stage}/bin/mihomo" ]] || fail "bundle is missing bin/mihomo"
     [[ -f "${stage}/web/index.html" ]] || fail "bundle is missing web/index.html"
     [[ -f "${stage}/deploy/systemd/${CONTROL_SERVICE}" && -f "${stage}/deploy/systemd/${DATAPLANE_SERVICE}" && -f "${stage}/deploy/systemd/${TERMINAL_SERVICE}" ]] || fail "bundle is missing systemd units"
@@ -216,7 +216,7 @@ validate_stage() {
 install_version() {
     local stage="$1" version_dir="${INSTALL_ROOT}/versions/${VERSION}"
     install -d -m 0755 -o root -g root "${version_dir}" "${version_dir}/web" "${version_dir}/deploy/systemd"
-    install -m 0755 -o root -g root "${stage}/bin/hx-proxygroupd" "${version_dir}/hx-proxygroupd"
+    install -m 0755 -o root -g root "${stage}/bin/hx-pxyd" "${version_dir}/hx-pxyd"
     install -m 0755 -o root -g root "${stage}/bin/mihomo" "${version_dir}/mihomo"
     cp -a "${stage}/web/." "${version_dir}/web/"
     cp -a "${stage}/deploy/systemd/." "${version_dir}/deploy/systemd/"
@@ -309,13 +309,13 @@ install_or_upgrade() {
         fail "installation failed readiness checks"
     fi
     printf '%s\n' "${VERSION}" >"${INSTALL_ROOT}/CURRENT_VERSION"
-    log "${VERSION} is ready; future updates: sudo hx-proxygroup-install upgrade"
+    log "${VERSION} is ready; future updates: sudo hx-pxy-install upgrade"
 }
 
 repair_installation() {
     require_root; load_os_release; check_platform; ensure_account_and_directories
     [[ "${START_SERVICES}" == "false" ]] || require_command curl
-    [[ -x "${INSTALL_ROOT}/current/hx-proxygroupd" && -x "${INSTALL_ROOT}/current/mihomo" ]] || fail "current version is missing; run install"
+    [[ -x "${INSTALL_ROOT}/current/hx-pxyd" && -x "${INSTALL_ROOT}/current/mihomo" ]] || fail "current version is missing; run install"
     local source="${INSTALL_ROOT}/current"
     if [[ -f "${source}/deploy/systemd/${CONTROL_SERVICE}" ]]; then
         install -m 0644 "${source}/deploy/systemd/${CONTROL_SERVICE}" "${UNIT_DIR}/${CONTROL_SERVICE}"
@@ -334,7 +334,7 @@ repair_installation() {
 backup_installation() {
     require_root; require_command tar
     local destination="${OUTPUT_PATH}"
-    [[ -n "${destination}" ]] || destination="${DATA_DIR}/backups/hx-proxygroup-disaster-$(date -u +%Y%m%dT%H%M%SZ).tar.gz"
+    [[ -n "${destination}" ]] || destination="${DATA_DIR}/backups/hx-pxy-disaster-$(date -u +%Y%m%dT%H%M%SZ).tar.gz"
     install -d -m 0700 -o "${SERVICE_USER}" -g "${SERVICE_GROUP}" "$(dirname -- "${destination}")"
     local was_active="false" temporary
     systemctl is-active --quiet "${CONTROL_SERVICE}" && was_active="true"

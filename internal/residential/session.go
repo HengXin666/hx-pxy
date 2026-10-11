@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/HengXin666/HX-ProxyGroup/internal/store"
+	"github.com/HengXin666/hx-pxy/internal/store"
 )
 
 // SessionPoolLifetime returns the vendor lifetime represented by one rendered

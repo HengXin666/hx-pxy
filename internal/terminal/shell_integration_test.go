@@ -153,7 +153,7 @@ func TestShellIntegrationCanBeDisabled(t *testing.T) {
 		t.Skip("bash is not available")
 	}
 	home := t.TempDir()
-	environment := []string{"HOME=" + home, "PATH=/usr/bin:/bin", "HX_PROXYGROUP_SHELL_INTEGRATION=0"}
+	environment := []string{"HOME=" + home, "PATH=/usr/bin:/bin", "HX_PXY_SHELL_INTEGRATION=0"}
 	ptyFile, command, err := startShell(bash, environment, false, home, t.TempDir())
 	if err != nil {
 		t.Fatal(err)

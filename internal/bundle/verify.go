@@ -103,7 +103,7 @@ func (s *Service) Verify(ctx context.Context, id string) (VerifyResult, error) {
 	if manifest.SchemaVersion != 1 {
 		return VerifyResult{}, fmt.Errorf("unsupported manifest version %d", manifest.SchemaVersion)
 	}
-	if manifest.Application != "HX-ProxyGroup" || manifest.Kind != record.Kind {
+	if manifest.Application != "HX-Pxy" || manifest.Kind != record.Kind {
 		return VerifyResult{}, errors.New("archive manifest identity does not match catalog metadata")
 	}
 	if manifest.IncludesSecrets != record.IncludesSecrets {

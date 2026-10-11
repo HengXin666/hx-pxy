@@ -75,8 +75,8 @@ await page.screenshot({ path: "../docs/screenshots/nodes-filters-medium.png", fu
 await page.setViewportSize({ width: 1440, height: 960 })
 
 await page.goto(`${baseURL}/#/about`, { waitUntil: "networkidle" })
-await page.getByRole("heading", { name: "关于 HX-ProxyGroup" }).waitFor()
-await page.getByText("sudo hx-proxygroup-install upgrade", { exact: true }).waitFor()
+await page.getByRole("heading", { name: "关于 HX-Pxy" }).waitFor()
+await page.getByText("sudo hx-pxy-install upgrade", { exact: true }).waitFor()
 await page.waitForTimeout(220)
 await assertNoPageOverflow("about desktop")
 await page.screenshot({ path: "../docs/screenshots/about-desktop.png", fullPage: true })

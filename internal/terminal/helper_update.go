@@ -149,7 +149,7 @@ func validUpdaterPath(path string) bool {
 func updateUnitActive(ctx context.Context) bool {
 	checkContext, cancel := context.WithTimeout(ctx, updateActiveCheckTimeout)
 	defer cancel()
-	command := exec.CommandContext(checkContext, "systemctl", "is-active", "--quiet", "hx-proxygroup-update.service")
+	command := exec.CommandContext(checkContext, "systemctl", "is-active", "--quiet", "hx-pxy-update.service")
 	command.Env = []string{"PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"}
 	return command.Run() == nil
 }
@@ -164,7 +164,7 @@ func scheduleSystemdUpdate(ctx context.Context, updater string) error {
 	command := exec.CommandContext(
 		runContext,
 		"systemd-run",
-		"--unit=hx-proxygroup-update",
+		"--unit=hx-pxy-update",
 		"--collect",
 		"--property=Type=exec",
 		updater,

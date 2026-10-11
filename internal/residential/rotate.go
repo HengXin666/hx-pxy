@@ -8,7 +8,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/HengXin666/HX-ProxyGroup/internal/store"
+	"github.com/HengXin666/hx-pxy/internal/store"
 )
 
 // defaultRotateInterval is the minimum spacing between two rotations of one
