@@ -67,6 +67,8 @@ jobs:
         working-directory: web
       - run: npm run build
         working-directory: web
+      # Bundle and binary names are a contract with scripts/package-release.sh
+      # 见 .agents/notes/implemented/architecture/2026-10-13-upgrade-adopts-pre-rename-installation.md
       - name: Build control plane
         env:
           GOARCH: ${{ matrix.arch }}
@@ -74,7 +76,7 @@ jobs:
         run: |
           CGO_ENABLED=0 go build -trimpath \
             -ldflags "-s -w -X main.version=${RELEASE_VERSION}" \
-            -o "build/hx-proxygroupd-${GOARCH}" ./cmd/hx-proxygroupd
+            -o "build/hx-pxyd-${GOARCH}" ./cmd/hx-pxyd
       - name: Download pinned Mihomo
         env:
           GH_TOKEN: ${{ github.token }}
@@ -96,14 +98,14 @@ jobs:
           scripts/package-release.sh \
             --version "${RELEASE_VERSION}" \
             --arch "${TARGET_ARCH}" \
-            --control "build/hx-proxygroupd-${TARGET_ARCH}" \
+            --control "build/hx-pxyd-${TARGET_ARCH}" \
             --mihomo "build/mihomo-${TARGET_ARCH}" \
             --web-dir web/dist \
             --output-dir release
       - uses: actions/upload-artifact@v4
         with:
           name: release-${{ matrix.arch }}
-          path: release/hx-proxygroup_${{ github.ref_name }}_linux_${{ matrix.arch }}.tar.gz
+          path: release/hx-pxy_${{ github.ref_name }}_linux_${{ matrix.arch }}.tar.gz
           if-no-files-found: error
 
   publish:
@@ -121,16 +123,16 @@ jobs:
           RELEASE_VERSION: ${{ github.ref_name }}
         run: |
           cd release
-          sha256sum hx-proxygroup_*.tar.gz > SHA256SUMS
+          sha256sum hx-pxy_*.tar.gz > SHA256SUMS
           printf '%s\n' "${RELEASE_VERSION}" > VERSION
       - name: Publish GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release create "${GITHUB_REF_NAME}" \
-            release/hx-proxygroup_*.tar.gz \
+            release/hx-pxy_*.tar.gz \
             release/SHA256SUMS \
             release/VERSION \
             --verify-tag \
             --generate-notes \
-            --title "HX-ProxyGroup ${GITHUB_REF_NAME}"
+            --title "HX-Pxy ${GITHUB_REF_NAME}"

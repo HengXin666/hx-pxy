@@ -28,6 +28,82 @@ CONFIRM_PURGE="false"
 START_SERVICES="true"
 WORK_DIR=""
 
+# Pre-rename identity (HX-ProxyGroup, tag v0.12.0 and earlier). An installation
+# made by that release keeps its data under these paths and is served by these
+# units; upgrade has to adopt it instead of starting from an empty /var/lib/hx-pxy.
+readonly LEGACY_INSTALL_ROOT="/usr/local/lib/hx-proxygroup"
+readonly LEGACY_INSTALLER_PATH="/usr/local/sbin/hx-proxygroup-install"
+readonly LEGACY_CONFIG_DIR="/etc/hx-proxygroup"
+readonly LEGACY_DATA_DIR="/var/lib/hx-proxygroup"
+readonly LEGACY_LOG_DIR="/var/log/hx-proxygroup"
+readonly LEGACY_SERVICE_USER="hx-proxygroup"
+readonly LEGACY_SERVICE_GROUP="hx-proxygroup"
+readonly LEGACY_CONTROL_SERVICE="hx-proxygroup.service"
+readonly LEGACY_DATAPLANE_SERVICE="hx-proxygroup-dataplane.service"
+readonly LEGACY_TERMINAL_SERVICE="hx-proxygroup-terminal.service"
+
+# adopt_legacy_installation moves a pre-rename deployment onto the current layout.
+# 见 .agents/notes/implemented/architecture/2026-10-13-upgrade-adopts-pre-rename-installation.md
+#
+# It is a one-way move of live data, so it runs only when the new layout is
+# untouched and the old one is not: /var/lib/hx-pxy absent plus
+# /var/lib/hx-proxygroup present. Anything else is left alone rather than guessed
+# at. The pre-rename units are stopped first -- both generations bind
+# 127.0.0.1:19090, so leaving the old control plane up would make the new one fail
+# its readiness check and roll back. The old units are disabled and removed only
+# after the move succeeded; a failed move restarts them and changes nothing else.
+adopt_legacy_installation() {
+    [[ ! -e "${DATA_DIR}" && ! -L "${DATA_DIR}" && -d "${LEGACY_DATA_DIR}" ]] || return 0
+    require_root
+    log "found a pre-rename installation in ${LEGACY_DATA_DIR}; adopting it"
+    local was_active="false"
+    if systemctl is-active --quiet "${LEGACY_CONTROL_SERVICE}"; then was_active="true"; fi
+    systemctl disable --now "${LEGACY_CONTROL_SERVICE}" "${LEGACY_DATAPLANE_SERVICE}" "${LEGACY_TERMINAL_SERVICE}" >/dev/null 2>&1 || true
+    if ! mv -- "${LEGACY_DATA_DIR}" "${DATA_DIR}"; then
+        warn "could not move ${LEGACY_DATA_DIR} to ${DATA_DIR}"
+        [[ "${was_active}" == "false" ]] || systemctl start "${LEGACY_CONTROL_SERVICE}" "${LEGACY_DATAPLANE_SERVICE}" || true
+        fail "adopting the pre-rename data directory failed; nothing else was changed"
+    fi
+    if [[ -d "${LEGACY_CONFIG_DIR}" && ! -e "${CONFIG_DIR}" ]]; then mv -- "${LEGACY_CONFIG_DIR}" "${CONFIG_DIR}" || warn "could not move ${LEGACY_CONFIG_DIR}"; fi
+    if [[ -d "${LEGACY_LOG_DIR}" && ! -e "${LOG_DIR}" ]]; then mv -- "${LEGACY_LOG_DIR}" "${LOG_DIR}" || warn "could not move ${LEGACY_LOG_DIR}"; fi
+    if [[ -d "${LEGACY_INSTALL_ROOT}" && ! -e "${INSTALL_ROOT}" ]]; then mv -- "${LEGACY_INSTALL_ROOT}" "${INSTALL_ROOT}" || warn "could not move ${LEGACY_INSTALL_ROOT}"; fi
+    # The pre-rename database is renamed in place as well: the new default
+    # database path then finds its data instead of creating an empty database.
+    local legacy_database="${DATA_DIR}/hx-proxygroup.db" suffix
+    if [[ -f "${legacy_database}" && ! -e "${DATA_DIR}/hx-pxy.db" ]]; then
+        for suffix in -wal -shm; do
+            [[ ! -f "${legacy_database}${suffix}" ]] || mv -- "${legacy_database}${suffix}" "${DATA_DIR}/hx-pxy.db${suffix}"
+        done
+        mv -- "${legacy_database}" "${DATA_DIR}/hx-pxy.db"
+    fi
+    # The units reference the account and group by name, so they are renamed in
+    # place rather than recreated -- a new account would get a new uid and the
+    # adopted data would belong to nobody. If a rename fails, the files are
+    # chowned to whichever name still exists instead of being left unattributed.
+    local owner_user="${SERVICE_USER}" owner_group="${SERVICE_GROUP}"
+    if getent group "${SERVICE_GROUP}" >/dev/null; then
+        owner_group="${SERVICE_GROUP}"
+    elif getent group "${LEGACY_SERVICE_GROUP}" >/dev/null; then
+        if groupmod --new-name "${SERVICE_GROUP}" "${LEGACY_SERVICE_GROUP}" 2>/dev/null; then owner_group="${SERVICE_GROUP}"; else
+            owner_group="${LEGACY_SERVICE_GROUP}"
+            warn "could not rename group ${LEGACY_SERVICE_GROUP}; adopted files keep their current group"
+        fi
+    fi
+    if id -u "${SERVICE_USER}" >/dev/null 2>&1; then
+        owner_user="${SERVICE_USER}"
+    elif id -u "${LEGACY_SERVICE_USER}" >/dev/null 2>&1; then
+        if usermod --login "${SERVICE_USER}" "${LEGACY_SERVICE_USER}" 2>/dev/null; then owner_user="${SERVICE_USER}"; else
+            owner_user="${LEGACY_SERVICE_USER}"
+            warn "could not rename account ${LEGACY_SERVICE_USER}; adopted files keep their current owner"
+        fi
+    fi
+    [[ "${owner_user}" != "${SERVICE_USER}" ]] || usermod --home "${DATA_DIR}" "${SERVICE_USER}" 2>/dev/null || true
+    chown -R "${owner_user}:${owner_group}" "${DATA_DIR}" 2>/dev/null || true
+    rm -f -- "${UNIT_DIR}/${LEGACY_CONTROL_SERVICE}" "${UNIT_DIR}/${LEGACY_DATAPLANE_SERVICE}" "${UNIT_DIR}/${LEGACY_TERMINAL_SERVICE}" "${LEGACY_INSTALLER_PATH}"
+    systemctl daemon-reload
+    log "pre-rename installation adopted; data, configuration and versions were preserved"
+}
+
 log() { printf '[hx-pxy] %s\n' "$*"; }
 warn() { printf '[hx-pxy] warning: %s\n' "$*" >&2; }
 fail() { printf '[hx-pxy] error: %s\n' "$*" >&2; exit 1; }
@@ -285,7 +361,9 @@ restore_previous_units() {
 }
 
 install_or_upgrade() {
-    require_root; load_os_release; check_platform; ensure_account_and_directories
+    require_root; load_os_release; check_platform
+    adopt_legacy_installation
+    ensure_account_and_directories
     [[ "${START_SERVICES}" == "false" ]] || require_command curl
     WORK_DIR="$(mktemp -d)"; trap '[[ -z "${WORK_DIR}" ]] || rm -rf -- "${WORK_DIR}"' EXIT
     local stage="${WORK_DIR}/stage" old_target=""

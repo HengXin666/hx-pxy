@@ -172,6 +172,60 @@ func TestPackageReleaseBundleContract(t *testing.T) {
 	}
 }
 
+// 发布链路与升级路径都是"只在真实事件里执行"的代码: 前者只在打 tag 时跑, 后者只在
+// 已安装的机器上跑。它们不会在 go build / go test 里响, 所以由测试读文件来钉住契约。
+// 见 .agents/notes/implemented/architecture/2026-10-13-upgrade-adopts-pre-rename-installation.md
+func TestReleaseWorkflowPublishesRenamedBundle(t *testing.T) {
+	t.Parallel()
+	content, err := os.ReadFile(".github/workflows/release.yml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	workflow := string(content)
+	for _, expected := range []string{
+		"./cmd/hx-pxyd",
+		"build/hx-pxyd-${GOARCH}",
+		"release/hx-pxy_${{ github.ref_name }}_linux_${{ matrix.arch }}.tar.gz",
+		"sha256sum hx-pxy_*.tar.gz",
+	} {
+		if !strings.Contains(workflow, expected) {
+			t.Errorf("release workflow is missing %q", expected)
+		}
+	}
+	if strings.Contains(workflow, "hx-proxygroup") {
+		t.Error("release workflow still references the pre-rename bundle or binary name")
+	}
+}
+
+func TestInstallScriptAdoptsPreRenameInstallation(t *testing.T) {
+	t.Parallel()
+	content, err := os.ReadFile("install.sh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	script := string(content)
+	for _, expected := range []string{
+		`LEGACY_DATA_DIR="/var/lib/hx-proxygroup"`,
+		`LEGACY_CONTROL_SERVICE="hx-proxygroup.service"`,
+		"adopt_legacy_installation",
+		"hx-proxygroup.db",
+	} {
+		if !strings.Contains(script, expected) {
+			t.Errorf("install script is missing %q", expected)
+		}
+	}
+	// The adoption has to run before the new data directory is created, otherwise
+	// its "new layout absent, old layout present" precondition can never hold.
+	adoption := strings.Index(script, "    adopt_legacy_installation\n")
+	directories := strings.Index(script, "    ensure_account_and_directories\n")
+	if adoption < 0 || directories < 0 {
+		t.Fatalf("install_or_upgrade is missing the adoption or directory step (adoption=%d, directories=%d)", adoption, directories)
+	}
+	if adoption > directories {
+		t.Fatal("legacy adoption must run before ensure_account_and_directories")
+	}
+}
+
 func writeExecutable(t *testing.T, root, name string) string {
 	t.Helper()
 	path := filepath.Join(root, name)

@@ -327,6 +327,8 @@ Session 的 2FA 验证；root helper 只接受固定的无参数升级请求，�
 
 安装器在切换版本前校验新 Mihomo 与当前配置；三个服务 readiness 失败时原子恢复上一版 `current` 链接并重启旧版本。升级成功后安装器自身也会更新。
 
+从改名前的版本（`v0.12.0` 及更早，当时叫 HX-ProxyGroup）升上来时，安装器会先接管旧部署：停止旧的 `hx-proxygroup*` 单元，把 `/var/lib/hx-proxygroup` 连同数据库、配置、日志与安装根搬到新路径，服务账号一并改名，然后才安装新版本。数据不会重建，也不需要先卸载。
+
 | 命令 | 用途 |
 | --- | --- |
 | `sudo hx-pxy-install upgrade` | 获取并升级到最新固定 Release |
