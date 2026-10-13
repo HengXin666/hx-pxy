@@ -18,6 +18,8 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/HengXin666/hx-pxy/internal/systemsettings"
 )
 
 func TestRunScriptSyntaxAndHelp(t *testing.T) {
@@ -505,17 +507,68 @@ func TestRunScriptStartsFrontendAndProxiesBackend(t *testing.T) {
 		t.Fatal("created proxy group id is empty")
 	}
 
+	// The shared inbound is the default entry point, and a member does not own
+	// the socket: its bind address and port are replaced by the family's, and it
+	// is selected by the username minted with its credential. So the only way to
+	// reach a published service is the way a real consumer does it — read the
+	// node list and dial what it says. Dialing the port named in the create
+	// request would assert an endpoint nothing listens on.
 	proxyListener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
-		t.Fatalf("reserve proxy listener port: %v", err)
+		t.Fatalf("reserve shared inbound port: %v", err)
 	}
-	proxyPort := proxyListener.Addr().(*net.TCPAddr).Port
+	sharedPort := proxyListener.Addr().(*net.TCPAddr).Port
 	if err := proxyListener.Close(); err != nil {
-		t.Fatalf("release proxy listener port: %v", err)
+		t.Fatalf("release shared inbound port: %v", err)
 	}
+	// 见 .agents/notes/implemented/architecture/2026-10-13-upgrade-adopts-pre-rename-installation.md
+	// Pin the aggregate Mixed entry point to a port this test owns, so it cannot
+	// collide with a data plane another test or the host already runs. This runs
+	// after the first group exists because the settings update reconciles the
+	// aggregate listeners, which needs a group to anchor to.
+	client.Timeout = 10 * time.Second
+	settingsResponse, err := client.Get(frontendURL + "/api/v1/settings")
+	if err != nil {
+		t.Fatalf("read settings through frontend proxy: %v", err)
+	}
+	var settings systemsettings.Settings
+	if decodeErr := json.NewDecoder(settingsResponse.Body).Decode(&settings); decodeErr != nil {
+		settingsResponse.Body.Close()
+		t.Fatalf("decode settings: %v", decodeErr)
+	}
+	settingsResponse.Body.Close()
+	if settingsResponse.StatusCode != http.StatusOK {
+		t.Fatalf("read settings status = %d", settingsResponse.StatusCode)
+	}
+	settings.SharedInbound.Mode = systemsettings.SharedInboundShared
+	settings.SharedInbound.MixedBindAddress = "127.0.0.1"
+	settings.SharedInbound.MixedPort = sharedPort
+	settingsBody, err := json.Marshal(settings)
+	if err != nil {
+		t.Fatalf("encode settings: %v", err)
+	}
+	settingsRequest, err := http.NewRequest(http.MethodPut, frontendURL+"/api/v1/settings", bytes.NewReader(settingsBody))
+	if err != nil {
+		t.Fatal(err)
+	}
+	settingsRequest.Header.Set("Content-Type", "application/json")
+	settingsUpdate, err := client.Do(settingsRequest)
+	if err != nil {
+		t.Fatalf("update settings through frontend proxy: %v", err)
+	}
+	settingsUpdateBody, _ := io.ReadAll(settingsUpdate.Body)
+	settingsUpdate.Body.Close()
+	if settingsUpdate.StatusCode != http.StatusOK {
+		t.Fatalf("update settings status = %d: %s", settingsUpdate.StatusCode, settingsUpdateBody)
+	}
+	client.Timeout = 2 * time.Second
+
+	// A port is still required by the create contract even though the family
+	// owns the socket and replaces it; passing the reserved one keeps the
+	// request valid and lets the endpoint assertion below catch a mismatch.
 	listenerPayload := fmt.Sprintf(
 		`{"name":"run-mixed","kind":"mixed","bind_address":"127.0.0.1","port":%d,"proxy_group_id":%q}`,
-		proxyPort,
+		sharedPort,
 		createdGroup.ID,
 	)
 	listenerRequest, err := http.NewRequest(
@@ -531,16 +584,76 @@ func TestRunScriptStartsFrontendAndProxiesBackend(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create listener through frontend proxy: %v", err)
 	}
+	var createdListener struct {
+		ID          string `json:"id"`
+		SharePath   string `json:"share_path"`
+		BindAddress string `json:"bind_address"`
+		Port        int    `json:"port"`
+	}
+	if decodeErr := json.NewDecoder(listenerResponse.Body).Decode(&createdListener); decodeErr != nil {
+		listenerResponse.Body.Close()
+		t.Fatalf("decode listener: %v", decodeErr)
+	}
+	listenerResponseBody, _ := io.ReadAll(listenerResponse.Body)
 	listenerResponse.Body.Close()
 	if listenerResponse.StatusCode != http.StatusCreated {
-		t.Fatalf("create listener status = %d", listenerResponse.StatusCode)
+		t.Fatalf("create listener status = %d: %s", listenerResponse.StatusCode, listenerResponseBody)
+	}
+	if createdListener.SharePath == "" {
+		t.Fatal("created listener has no share_path")
+	}
+	// A member joined the family, so its stored endpoint is the family's, not the
+	// one it was created with.
+	if createdListener.BindAddress != "127.0.0.1" || createdListener.Port != sharedPort {
+		t.Fatalf("member endpoint = %s:%d, want the shared 127.0.0.1:%d", createdListener.BindAddress, createdListener.Port, sharedPort)
+	}
+
+	shareToken := strings.TrimPrefix(createdListener.SharePath, "/sub/")
+	consumerResponse, err := client.Get(frontendURL + "/nodes/" + shareToken)
+	if err != nil {
+		t.Fatalf("read consumer node list: %v", err)
+	}
+	var consumerPayload struct {
+		Nodes []struct {
+			Name              string `json:"name"`
+			Protocol          string `json:"protocol"`
+			Host              string `json:"host"`
+			Port              int    `json:"port"`
+			BrowserCompatible bool   `json:"browser_compatible"`
+			Auth              *struct {
+				Username string `json:"username"`
+				Password string `json:"password"`
+			} `json:"auth"`
+		} `json:"nodes"`
+	}
+	if decodeErr := json.NewDecoder(consumerResponse.Body).Decode(&consumerPayload); decodeErr != nil {
+		consumerResponse.Body.Close()
+		t.Fatalf("decode consumer node list: %v", decodeErr)
+	}
+	consumerResponse.Body.Close()
+	if consumerResponse.StatusCode != http.StatusOK {
+		t.Fatalf("consumer node list status = %d", consumerResponse.StatusCode)
+	}
+	if len(consumerPayload.Nodes) == 0 {
+		t.Fatal("consumer node list is empty")
+	}
+	dialNode := consumerPayload.Nodes[0]
+	if !dialNode.BrowserCompatible {
+		t.Fatalf("consumer node %q is not browser-compatible, so it cannot be dialed as an HTTP proxy", dialNode.Name)
+	}
+	if dialNode.Auth == nil || dialNode.Auth.Username == "" || dialNode.Auth.Password == "" {
+		t.Fatal("shared-inbound member was published without a credential")
+	}
+	if dialNode.Host != "127.0.0.1" || dialNode.Port != sharedPort {
+		t.Fatalf("consumer node endpoint = %s:%d, want the shared 127.0.0.1:%d", dialNode.Host, dialNode.Port, sharedPort)
 	}
 
 	origin := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		_, _ = writer.Write([]byte("run-script-mihomo-proxy"))
 	}))
 	defer origin.Close()
-	proxyURL, err := url.Parse(fmt.Sprintf("http://127.0.0.1:%d", proxyPort))
+	proxyURL, err := url.Parse(fmt.Sprintf("http://%s:%s@%s:%d",
+		url.QueryEscape(dialNode.Auth.Username), url.QueryEscape(dialNode.Auth.Password), dialNode.Host, dialNode.Port))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -550,10 +663,21 @@ func TestRunScriptStartsFrontendAndProxiesBackend(t *testing.T) {
 			Proxy: http.ProxyURL(proxyURL),
 		},
 	}
-	proxiedResponse, err := proxyClient.Get(origin.URL)
-	if err != nil {
-		t.Fatalf("request through run.sh Mihomo listener: %v", err)
+	// The aggregate listener is applied with the rest of the configuration, so
+	// the first dial can land before Mihomo has bound the port.
+	var proxiedResponse *http.Response
+	dialDeadline := time.Now().Add(30 * time.Second)
+	for {
+		proxiedResponse, err = proxyClient.Get(origin.URL)
+		if err == nil {
+			break
+		}
+		if time.Now().After(dialDeadline) {
+			t.Fatalf("request through the shared Mihomo listener: %v", err)
+		}
+		time.Sleep(200 * time.Millisecond)
 	}
+
 	proxiedBody, err := io.ReadAll(proxiedResponse.Body)
 	proxiedResponse.Body.Close()
 	if err != nil {
@@ -562,7 +686,6 @@ func TestRunScriptStartsFrontendAndProxiesBackend(t *testing.T) {
 	if string(proxiedBody) != "run-script-mihomo-proxy" {
 		t.Fatalf("proxied response = %q", proxiedBody)
 	}
-
 	if err := command.Process.Signal(syscall.SIGTERM); err != nil {
 		_ = command.Process.Kill()
 		<-waitResult

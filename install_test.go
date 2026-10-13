@@ -226,6 +226,130 @@ func TestInstallScriptAdoptsPreRenameInstallation(t *testing.T) {
 	}
 }
 
+// 迁移脚本是"只在别人的机器上跑一次"的代码: 它不参与编译, 也不在 CI 的日常路径上。
+// 因此它的行为由测试直接驱动脚本里的函数来钉住, 而不是靠人工演练。
+// 见 .agents/notes/implemented/architecture/2026-10-13-upgrade-adopts-pre-rename-installation.md
+func TestMigrationScriptMovesPreRenameLayout(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	legacyData := filepath.Join(root, "legacy-data")
+	legacyConfig := filepath.Join(root, "legacy-config")
+	legacyLog := filepath.Join(root, "legacy-log")
+	legacyRoot := filepath.Join(root, "legacy-install")
+	newData := filepath.Join(root, "new-data")
+	newConfig := filepath.Join(root, "new-config")
+	newLog := filepath.Join(root, "new-log")
+	newRoot := filepath.Join(root, "new-install")
+	for _, directory := range []string{legacyData, legacyConfig, legacyLog, legacyRoot} {
+		if err := os.MkdirAll(directory, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// A WAL-mode database keeps committed data in -wal until checkpoint, so the
+	// sidecar has to travel with the main file.
+	for name, content := range map[string]string{
+		"hx-proxygroup.db":     "main",
+		"hx-proxygroup.db-wal": "wal",
+		"hx-proxygroup.db-shm": "shm",
+	} {
+		if err := os.WriteFile(filepath.Join(legacyData, name), []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(legacyConfig, "config.yaml"), []byte("mode: rule\n"), 0o640); err != nil {
+		t.Fatal(err)
+	}
+
+	// Dry run first: it must report the plan without touching anything.
+	dryRun := exec.Command("bash", "-c", `source scripts/migrate-from-hx-proxygroup.sh; DRY_RUN=true; migrate_layout`)
+	dryRun.Env = append(os.Environ(),
+		"HX_LEGACY_DATA_DIR="+legacyData, "HX_DATA_DIR="+newData,
+		"HX_LEGACY_CONFIG_DIR="+legacyConfig, "HX_CONFIG_DIR="+newConfig,
+		"HX_LEGACY_LOG_DIR="+legacyLog, "HX_LOG_DIR="+newLog,
+		"HX_LEGACY_INSTALL_ROOT="+legacyRoot, "HX_INSTALL_ROOT="+newRoot,
+	)
+	if output, err := dryRun.CombinedOutput(); err != nil {
+		t.Fatalf("dry run failed: %v\n%s", err, output)
+	}
+	if _, err := os.Stat(newData); !os.IsNotExist(err) {
+		t.Fatalf("dry run created %s (Stat error = %v)", newData, err)
+	}
+	if _, err := os.Stat(filepath.Join(legacyData, "hx-proxygroup.db")); err != nil {
+		t.Fatalf("dry run moved the database: %v", err)
+	}
+
+	// Real run: the trees move and the database is renamed in place.
+	real := exec.Command("bash", "-c", `source scripts/migrate-from-hx-proxygroup.sh; migrate_layout`)
+	real.Env = dryRun.Env
+	if output, err := real.CombinedOutput(); err != nil {
+		t.Fatalf("migration failed: %v\n%s", err, output)
+	}
+	if _, err := os.Stat(legacyData); !os.IsNotExist(err) {
+		t.Fatalf("legacy data directory survived the migration (Stat error = %v)", err)
+	}
+	for name, want := range map[string]string{
+		"hx-pxy.db":     "main",
+		"hx-pxy.db-wal": "wal",
+		"hx-pxy.db-shm": "shm",
+	} {
+		content, err := os.ReadFile(filepath.Join(newData, name))
+		if err != nil {
+			t.Fatalf("read %s: %v", name, err)
+		}
+		if string(content) != want {
+			t.Errorf("%s = %q, want %q", name, content, want)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(newConfig, "config.yaml")); err != nil {
+		t.Errorf("configuration did not move: %v", err)
+	}
+	if _, err := os.Stat(newLog); err != nil {
+		t.Errorf("log directory did not move: %v", err)
+	}
+	if _, err := os.Stat(newRoot); err != nil {
+		t.Errorf("install root did not move: %v", err)
+	}
+
+	// A second run must be a no-op rather than a merge into a live layout.
+	second := exec.Command("bash", "-c", `source scripts/migrate-from-hx-proxygroup.sh; migrate_layout`)
+	second.Env = dryRun.Env
+	if output, err := second.CombinedOutput(); err != nil {
+		t.Fatalf("re-running the migration failed: %v\n%s", err, output)
+	}
+}
+
+// 安装器的接管与独立脚本是同一条决策的两条实现。它们必须对"旧布局长什么样"
+// 有同一个答案, 否则升级路径与手工迁移会搬不同的东西。
+func TestMigrationScriptAndInstallerAgreeOnLegacyLayout(t *testing.T) {
+	t.Parallel()
+	script, err := os.ReadFile("scripts/migrate-from-hx-proxygroup.sh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	installer, err := os.ReadFile("install.sh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, legacy := range []string{
+		"hx-proxygroup.service",
+		"hx-proxygroup-dataplane.service",
+		"hx-proxygroup-terminal.service",
+		"hx-proxygroup.db",
+		"/var/lib/hx-proxygroup",
+		"/etc/hx-proxygroup",
+		"/usr/local/lib/hx-proxygroup",
+		"/usr/local/sbin/hx-proxygroup-install",
+		"hx-proxygroup",
+	} {
+		if !strings.Contains(string(script), legacy) {
+			t.Errorf("migration script does not mention legacy identifier %q", legacy)
+		}
+		if !strings.Contains(string(installer), legacy) {
+			t.Errorf("install.sh does not mention legacy identifier %q", legacy)
+		}
+	}
+}
+
 func writeExecutable(t *testing.T, root, name string) string {
 	t.Helper()
 	path := filepath.Join(root, name)

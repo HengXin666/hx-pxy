@@ -26,11 +26,14 @@ Status: implemented
 
 `mv` 失败时重启旧单元并终止, 不留在半接管状态。
 
+**手工迁移**: `scripts/migrate-from-hx-proxygroup.sh` 把同一套搬迁动作独立出来, 供"不想让安装器替我决定"或安装器版本过旧时使用。它与安装器接管共用同一组旧路径常量, 因此两者对"旧布局长什么样"有同一个答案。脚本默认 `--dry-run`, 真正的写入只有 `--yes` 之后才发生; 它只搬文件、改账号名、停旧单元, 不下载也不安装任何新版本, 所以任何一步失败都能按它打印的路径手工退回。
+
 ## Alternatives considered
 
 - **什么都不做, 让管理员手工搬目录或先 `uninstall` 再 `install`。** 最强理由: 改名是一次性事件, 受影响的部署很少, 而一段只在旧布局存在时才运行的迁移代码会永久留在安装器里, 成为没人敢删的死代码; 手工 `mv` 加 `systemctl disable` 只要几分钟, 且管理员最清楚自己的机器。否决: `sudo hx-pxy-install upgrade` 的契约就是"一条命令升到最新", README 与关于页的一键更新都按这个契约调用它; 在这条路径上留下一个会**看起来成功**的分叉, 正是改名那篇 note 判定不可接受的失败形态。而且 `uninstall` 只保留数据、不搬目录, 手工步骤的每一步都有静默搞错的余地。
 - **复用控制面里已有的 `migrateLegacyDatabasePath`, 不写 bash。** 最强理由: 那段接管逻辑已经存在且有单测覆盖, 再写一遍是重复实现, 两处迟早漂移。否决: 它只处理**同一个目录内**的文件改名, 而升级要跨目录、跨服务账号、跨 systemd 单元; 更关键的是它运行的前提是新实例已经能启动并读到 `/var/lib/hx-pxy`, 而那个目录此刻还不存在 —— 顺序上它到不了。
 - **两代并存: 保留旧单元与旧路径, 让新旧都能跑。** 最强理由: 兼容期最平滑, 出问题时旧单元还能手动启回来。否决: 两代控制面绑同一个端口, 物理上无法共存; 保留旧单元只会把"到底哪个在跑"变成新的排障项。接管是一次性动作, 就做成一次性的。
+- **只做安装器接管, 不给独立脚本。** 最强理由: 一条路径就没有漂移, 少一份需要长期维护的 bash; 接管本来就在 `install.sh` 里, 用户跑 `install` 就够。否决: 接管排在 `install_or_upgrade` 里, 意味着**必须先拿到新版的 `install.sh`**; 而卡在旧版本的机器上, 唯一能下载的安装器就是它自己那份。独立脚本让"先搬布局、再装新版"成为可能, 代价是两条实现要一起改 —— 由 `TestMigrationScriptAndInstallerAgreeOnLegacyLayout` 用同一组旧标识符钉住。
 
 ## Consequences
 
@@ -46,4 +49,8 @@ Status: implemented
 - `TestPackageReleaseBundleContract` 钉住 `package-release.sh` 产出的包名与 `SHA256SUMS` 内容; 新增的 `TestReleaseWorkflowPublishesRenamedBundle` 钉住 `release.yml` 的编译目标、上传路径与发布路径跟它一致 —— 只有这两条合起来才能发现"发布链路没跟着改名走"。
 - 新增 `TestInstallScriptAdoptsPreRenameInstallation` 钉住旧路径常量、`adopt_legacy_installation` 的存在, 以及它必须排在 `ensure_account_and_directories` 之前。
 - `bash -n install.sh` 与 `go test ./...` 通过; `node .agents/skills/hx-agent-notes/scripts/verify-all.ts` 全绿。
-- 真实接管(从 v0.12.0 的 systemd 布局升上来)需要一台装着旧版本的机器, 本机没有安装实例, 未验证。
+- 新增 `TestMigrationScriptMovesPreRenameLayout`: 在临时目录里造出旧布局, 先 `--dry-run` 断言"什么都没动", 再真跑一次断言数据/配置/日志/安装根与 `-wal`/`-shm` 侧车全部就位, 最后重跑一次断言它是幂等的 no-op。
+- 新增 `TestMigrationScriptAndInstallerAgreeOnLegacyLayout`: 两个实现必须提到同一组旧标识符(三个旧单元、旧数据库名、四个旧路径、旧账号名)。
+- `TestRunScriptStartsFrontendAndProxiesBackend` 改为走**出厂默认**的共享入口: 把聚合 Mixed 端口钉到测试自己占的端口, 然后按真实消费方的做法读 `/nodes/<share-token>` 拿到主机、端口与凭据再拨号, 并断言成员行存的端点就是家族端点。此前它假设"创建时填的端口就是实际监听端口", 而共享入口成为默认后这句话不再成立 —— 该测试在 v0.12.0 之后就没有再进过 CI(Release 只在 tag 上触发), 所以一直没人发现。
+- `bash -n install.sh`、`bash -n scripts/migrate-from-hx-proxygroup.sh` 与 `go test ./...` 通过; `node .agents/skills/hx-agent-notes/scripts/verify-all.ts` 全绿。
+- 真实接管(从 v0.12.0 的 systemd 布局升上来)需要一台装着旧版本的机器, 本机没有安装实例, 未验证; 脚本的系统动作(`systemctl` / `groupmod` / `usermod`)因此只被文件系统层的测试覆盖, 未在真机上演练。
