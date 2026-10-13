@@ -42,27 +42,79 @@ readonly LEGACY_CONTROL_SERVICE="hx-proxygroup.service"
 readonly LEGACY_DATAPLANE_SERVICE="hx-proxygroup-dataplane.service"
 readonly LEGACY_TERMINAL_SERVICE="hx-proxygroup-terminal.service"
 
-# adopt_legacy_installation moves a pre-rename deployment onto the current layout.
+# stop_legacy_units stops and removes the pre-rename units, and it is idempotent.
+#
+# This is deliberately separate from the layout move and runs on every install.
+# Both generations bind 127.0.0.1:19090, so a legacy control plane that is still
+# up makes every new start fail with "address already in use" -- and because the
+# new data directory is created by the very first install attempt, gating the
+# stop on "the new layout does not exist yet" means a re-run never stops it
+# again. That is a permanent port conflict produced by a transient failure.
+stop_legacy_units() {
+    local unit stopped="false"
+    for unit in "${LEGACY_CONTROL_SERVICE}" "${LEGACY_DATAPLANE_SERVICE}" "${LEGACY_TERMINAL_SERVICE}"; do
+        if command -v systemctl >/dev/null 2>&1 && systemctl is-active --quiet "${unit}" 2>/dev/null; then
+            stopped="true"
+        fi
+        if command -v systemctl >/dev/null 2>&1; then
+            systemctl disable --now "${unit}" >/dev/null 2>&1 || true
+        fi
+        [[ ! -f "${UNIT_DIR}/${unit}" ]] || rm -f -- "${UNIT_DIR}/${unit}"
+    done
+    [[ ! -f "${LEGACY_INSTALLER_PATH}" ]] || rm -f -- "${LEGACY_INSTALLER_PATH}"
+    if [[ "${stopped}" == "true" ]]; then
+        log "stopped the pre-rename services; they cannot coexist on port 19090"
+    fi
+    command -v systemctl >/dev/null 2>&1 && { systemctl daemon-reload || true; }
+    return 0
+}
+
+# legacy_layout_pending reports whether the pre-rename data still has to be moved.
+#
+# The gate is "the new database does not exist yet", not "the new directory does
+# not exist yet": the first install attempt creates the directory before it can
+# fail, so keying on the directory would strand the old data forever after one
+# failed run. A database that is already there means a previous run completed,
+# and moving over it would destroy live data.
+legacy_layout_pending() {
+    [[ -d "${LEGACY_DATA_DIR}" ]] || return 1
+    [[ ! -e "${DATA_DIR}/hx-pxy.db" && ! -e "${DATA_DIR}/hx-proxygroup.db" ]] || return 1
+    return 0
+}
+
+# adopt_legacy_installation stops the pre-rename services and moves their data
+# onto the current layout.
+#
 # 见 .agents/notes/implemented/architecture/2026-10-13-upgrade-adopts-pre-rename-installation.md
 #
-# It is a one-way move of live data, so it runs only when the new layout is
-# untouched and the old one is not: /var/lib/hx-pxy absent plus
-# /var/lib/hx-proxygroup present. Anything else is left alone rather than guessed
-# at. The pre-rename units are stopped first -- both generations bind
-# 127.0.0.1:19090, so leaving the old control plane up would make the new one fail
-# its readiness check and roll back. The old units are disabled and removed only
-# after the move succeeded; a failed move restarts them and changes nothing else.
+# Stopping is unconditional and idempotent; moving is one-shot and only runs
+# while the new database is still absent. A failed move restarts nothing -- the
+# data is moved first and the units were already stopped, so the operator sees a
+# clean error instead of a half-migrated machine.
 adopt_legacy_installation() {
-    [[ ! -e "${DATA_DIR}" && ! -L "${DATA_DIR}" && -d "${LEGACY_DATA_DIR}" ]] || return 0
+    stop_legacy_units
+    legacy_layout_pending || return 0
     require_root
     log "found a pre-rename installation in ${LEGACY_DATA_DIR}; adopting it"
-    local was_active="false"
-    if systemctl is-active --quiet "${LEGACY_CONTROL_SERVICE}"; then was_active="true"; fi
-    systemctl disable --now "${LEGACY_CONTROL_SERVICE}" "${LEGACY_DATAPLANE_SERVICE}" "${LEGACY_TERMINAL_SERVICE}" >/dev/null 2>&1 || true
-    if ! mv -- "${LEGACY_DATA_DIR}" "${DATA_DIR}"; then
-        warn "could not move ${LEGACY_DATA_DIR} to ${DATA_DIR}"
-        [[ "${was_active}" == "false" ]] || systemctl start "${LEGACY_CONTROL_SERVICE}" "${LEGACY_DATAPLANE_SERVICE}" || true
-        fail "adopting the pre-rename data directory failed; nothing else was changed"
+    if [[ ! -e "${DATA_DIR}" ]]; then
+        if ! mv -- "${LEGACY_DATA_DIR}" "${DATA_DIR}"; then
+            fail "adopting the pre-rename data directory failed; nothing else was changed"
+        fi
+    else
+        # The directory already exists (an earlier attempt created it) but holds
+        # no database, so its contents are merged rather than replaced.
+        local entry
+        shopt -s dotglob nullglob
+        local entries=("${LEGACY_DATA_DIR}"/*)
+        shopt -u dotglob nullglob
+        for entry in "${entries[@]}"; do
+            if [[ -e "${DATA_DIR}/$(basename -- "${entry}")" ]]; then
+                warn "kept existing ${DATA_DIR}/$(basename -- "${entry}") instead of the pre-rename copy"
+                continue
+            fi
+            mv -- "${entry}" "${DATA_DIR}/"
+        done
+        rmdir -- "${LEGACY_DATA_DIR}" 2>/dev/null || true
     fi
     if [[ -d "${LEGACY_CONFIG_DIR}" && ! -e "${CONFIG_DIR}" ]]; then mv -- "${LEGACY_CONFIG_DIR}" "${CONFIG_DIR}" || warn "could not move ${LEGACY_CONFIG_DIR}"; fi
     if [[ -d "${LEGACY_LOG_DIR}" && ! -e "${LOG_DIR}" ]]; then mv -- "${LEGACY_LOG_DIR}" "${LOG_DIR}" || warn "could not move ${LEGACY_LOG_DIR}"; fi
@@ -99,8 +151,6 @@ adopt_legacy_installation() {
     fi
     [[ "${owner_user}" != "${SERVICE_USER}" ]] || usermod --home "${DATA_DIR}" "${SERVICE_USER}" 2>/dev/null || true
     chown -R "${owner_user}:${owner_group}" "${DATA_DIR}" 2>/dev/null || true
-    rm -f -- "${UNIT_DIR}/${LEGACY_CONTROL_SERVICE}" "${UNIT_DIR}/${LEGACY_DATAPLANE_SERVICE}" "${UNIT_DIR}/${LEGACY_TERMINAL_SERVICE}" "${LEGACY_INSTALLER_PATH}"
-    systemctl daemon-reload
     log "pre-rename installation adopted; data, configuration and versions were preserved"
 }
 
@@ -326,6 +376,42 @@ wait_until_ready() {
     return 1
 }
 
+# diagnose_control_plane_failure prints why the control plane could not start.
+#
+# "installation failed readiness checks" is true and useless: the cause is
+# almost always one line in the unit's own log, and an operator who has to go
+# find it by hand is being asked to debug the installer. The port holder is
+# named explicitly because that is the failure this project actually hits --
+# a pre-rename unit, a leftover manual run, or a second copy of the control
+# plane all present as the same "address already in use".
+diagnose_control_plane_failure() {
+    local journal
+    journal="$(journalctl -u "${CONTROL_SERVICE}" -n 40 --no-pager 2>/dev/null || true)"
+    if [[ "${journal}" == *"address already in use"* ]]; then
+        warn "the control plane could not bind 127.0.0.1:19090: something else is already listening there"
+        local holder=""
+        if command -v ss >/dev/null 2>&1; then
+            holder="$(ss -ltnp 2>/dev/null | awk '$4 ~ /:19090$/ {print}' || true)"
+        elif command -v lsof >/dev/null 2>&1; then
+            holder="$(lsof -nP -iTCP:19090 -sTCP:LISTEN 2>/dev/null || true)"
+        fi
+        if [[ -n "${holder}" ]]; then
+            printf '%s\n' "${holder}" >&2
+        else
+            warn "could not identify the process holding 19090; inspect it with: ss -ltnp | grep 19090"
+        fi
+        for unit in "${LEGACY_CONTROL_SERVICE}" hx-pxy.service; do
+            if command -v systemctl >/dev/null 2>&1 && systemctl is-active --quiet "${unit}" 2>/dev/null; then
+                warn "${unit} is active and is a likely holder; stop it with: systemctl stop ${unit}"
+            fi
+        done
+        return 0
+    fi
+    if [[ -n "${journal}" ]]; then
+        printf '%s\n' "${journal}" >&2
+    fi
+}
+
 restart_services() {
     systemctl daemon-reload
     systemctl enable "${DATAPLANE_SERVICE}" "${CONTROL_SERVICE}" >/dev/null
@@ -377,12 +463,19 @@ install_or_upgrade() {
     if [[ "${START_SERVICES}" == "false" ]]; then systemctl daemon-reload; log "installed ${VERSION}; service start skipped"; return; fi
     if ! restart_services; then
         systemctl status "${DATAPLANE_SERVICE}" "${TERMINAL_SERVICE}" "${CONTROL_SERVICE}" --no-pager || true
-        journalctl -u "${DATAPLANE_SERVICE}" -u "${TERMINAL_SERVICE}" -u "${CONTROL_SERVICE}" -n 80 --no-pager || true
-        if [[ -n "${old_target}" && -d "${old_target}" ]]; then
+        diagnose_control_plane_failure
+        # Rolling back is only meaningful when there is a *different* version to
+        # fall back to. When old_target is the version just installed (a first
+        # install, or a re-run of the same tag), "restoring" it re-runs the
+        # identical failing start and prints a recovery message that cannot come
+        # true -- which is how a port conflict gets reported as an upgrade problem.
+        if [[ -n "${old_target}" && -d "${old_target}" && "${old_target}" != "${INSTALL_ROOT}/versions/${VERSION}" ]]; then
             warn "upgrade failed; restoring ${old_target}"
             switch_current "${old_target}"
             restore_previous_units
             restart_services || warn "previous version did not recover automatically"
+        else
+            warn "no earlier version to fall back to; the installed ${VERSION} is left in place"
         fi
         fail "installation failed readiness checks"
     fi

@@ -83,7 +83,11 @@ Listener 全没了, 而表面症状只是"登录不进"。
     `--`(npm / yarn 需要, pnpm / bun 不能加)。
   - `controllerSocketPath` 给所有 Manager 返回**同一个固定路径**。同进程里可以有多个
     Manager(测试即是), unix socket 路径就是它的身份, 共用一条路径会让第二个 Manager
-    `bind: address already in use`。改为按 runtimeDirectory 摘要派生短目录。
+    `bind: address already in use`。改为按 runtimeDirectory 摘要派生短目录 —— **2026-10-14 起
+    这条摘要短目录只在直接路径超过 `sun_path` 上限时才使用, 且 systemd 托管的数据面永不使用**:
+    它按 `HOME` 取值, 而写配置的进程与常驻服务不一定有同样的 `HOME`, 于是配置与拨号会指向
+    两条路径; 原因与现场见
+    2026-10-14-controller-socket-path-must-match-the-data-plane.md。
 - 旧名残留仅剩历史文档中的记录 (knowledge 目录下的既有笔记)、`cmd/hx-pxyd/main.go` 里的
   `legacyDatabaseName` 常量与 `README`/`install.sh` 中说明改名的文字, 均属预期。
 - `web/dist` 已被重建, 产物内无旧名。

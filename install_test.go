@@ -350,6 +350,61 @@ func TestMigrationScriptAndInstallerAgreeOnLegacyLayout(t *testing.T) {
 	}
 }
 
+// 安装器的接管必须对"重跑"是安全的。第一次尝试会在失败之前建出新的数据目录,
+// 因此把"停旧单元"挂在"新目录不存在"上, 会让重跑永远不再停旧单元 —— 而两代控制面都绑
+// 19090, 于是一次瞬时失败变成永久端口冲突。2026-10-13 的生产机就是这样坏的。
+func TestInstallerStopsLegacyUnitsOnEveryRun(t *testing.T) {
+	t.Parallel()
+	content, err := os.ReadFile("install.sh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	script := string(content)
+	if !strings.Contains(script, "stop_legacy_units() {") {
+		t.Fatal("install.sh 没有独立且幂等的 stop_legacy_units")
+	}
+	if !strings.Contains(script, "legacy_layout_pending() {") {
+		t.Fatal("install.sh 没有把搬迁与停单元分开")
+	}
+	// 搬迁的门槛是"新数据库还不存在", 不是"新目录不存在"。
+	if !strings.Contains(script, `[[ ! -e "${DATA_DIR}/hx-pxy.db" && ! -e "${DATA_DIR}/hx-proxygroup.db" ]] || return 1`) {
+		t.Fatal("搬迁没有被正确地挡在新数据库之外")
+	}
+	adopt := strings.Index(script, "adopt_legacy_installation() {")
+	if adopt < 0 {
+		t.Fatal("install.sh 没有 adopt_legacy_installation")
+	}
+	body := script[adopt:]
+	stop := strings.Index(body, "    stop_legacy_units\n")
+	gate := strings.Index(body, "    legacy_layout_pending || return 0\n")
+	if stop < 0 || gate < 0 {
+		t.Fatalf("adopt_legacy_installation 必须先停旧单元再判断是否搬迁 (stop=%d, gate=%d)", stop, gate)
+	}
+	if stop > gate {
+		t.Fatal("adopt_legacy_installation 在停旧单元之前就判断了搬迁")
+	}
+}
+
+// 首次安装失败时, 安装器打印的 "restoring <刚装的那个版本>" 是一句不可能兑现的话:
+// 它把同一个失败的启动再跑一遍。回滚必须只在确实存在"另一个版本"时发生。
+func TestInstallerOnlyRollsBackToADifferentVersion(t *testing.T) {
+	t.Parallel()
+	content, err := os.ReadFile("install.sh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	script := string(content)
+	if !strings.Contains(script, `"${old_target}" != "${INSTALL_ROOT}/versions/${VERSION}"`) {
+		t.Fatal("install.sh 在 old_target 就是刚装的版本时仍然回滚")
+	}
+	if !strings.Contains(script, "diagnose_control_plane_failure") {
+		t.Fatal("install.sh 没有在控制面起不来时给出诊断")
+	}
+	if !strings.Contains(script, "address already in use") {
+		t.Fatal("诊断没有点名端口冲突这种失败")
+	}
+}
+
 func writeExecutable(t *testing.T, root, name string) string {
 	t.Helper()
 	path := filepath.Join(root, name)

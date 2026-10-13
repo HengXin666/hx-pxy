@@ -76,23 +76,44 @@ type Manager struct {
 
 type ManagerOption func(*Manager) error
 
+// maxUnixSocketPath 是内核 `sun_path` 的上限: 108 字节, 含结尾 NUL ⇒ 可用 107。
+const maxUnixSocketPath = 107
+
 // controllerSocketPath 返回 mihomo 控制 socket 的路径。
 //
-// ## 为什么不能直接用 runtimeDirectory
-// unix socket 路径受内核 `sun_path` 长度限制 (108 字节, 含结尾 NUL ⇒ 可用 107)。
-// 项目搬到更深的目录后, runtimeDirectory + "/mihomo.sock" 达到 109 字符, 于是
-// 所有 dataplane 写操作都以 `connect: invalid argument` 失败。
+// 见 .agents/notes/implemented/architecture/2026-10-14-controller-socket-path-must-match-the-data-plane.md
 //
-// ## 取值策略
-// 用 HOME 下的短目录 `<home>/.hx-pxy-runtime/<runtimeDirectory 的摘要>`。摘要而不是
-// 固定名是必需的: 同一个进程里可以有多个 Manager (测试就是如此, 每个用自己的 t.TempDir
-// 作 runtimeDirectory), 而 unix socket 路径就是它的身份 —— 共用一条路径会让第二个
-// Manager 直接 `bind: address already in use`, 或者更糟: 覆盖掉第一个正在用的 socket。
-// 该目录无法建立时**退回原路径** —— 短路径尚未就绪也不会让服务起不来, 只是写操作会
-// 像修之前那样失败 (可观测, 好过直接崩)。
-func controllerSocketPath(runtimeDirectory string) string {
-	// 真实目录 (不是软链) —— socket 只需要一个目录落脚, 不需要与别的文件同处。
-	// HOME 为空时 (极端环境) 退回原路径: 那时行为与修之前一致, 不引入新失败模式。
+// 这条路径有一个不可让步的要求: **写进 active.yaml 的那条, 必须就是控制面拨号的那条**。
+// mihomo 只按配置里的 `external-controller-unix` 建 socket, 控制面只按这个返回值拨,
+// 两边算法只要差一个输入 (比如 HOME 有没有被设置), 数据面就"开着但控制面认定它没运行"。
+//
+// 因此取值分两步, 且第一步与 HOME 无关:
+//
+//  1. 直接路径 `runtimeDirectory/mihomo.sock` —— 长度够用就用它。它是 data plane 自己
+//     `-d` 的目录, 两边天然一致, 也不依赖任何环境变量。
+//  2. 只有直接路径**超过内核上限**时才挪到 HOME 下的短目录
+//     (`<home>/.hx-pxy-runtime/<runtimeDirectory 的摘要>`)。摘要而不是固定名是必需的:
+//     同一个进程里可以有多个 Manager (测试就是如此, 每个用自己的 t.TempDir 作
+//     runtimeDirectory), 而 unix socket 路径就是它的身份 —— 共用一条路径会让第二个
+//     Manager 直接 `bind: address already in use`, 或者更糟: 覆盖掉第一个正在用的 socket。
+//
+// systemd 托管的数据面 (externalProcess) **永远**用直接路径, 即使超长也不挪: 它的 unit
+// 是 ProtectSystem=strict + ReadWritePaths=<runtimeDirectory>, 在 runtimeDirectory 之外
+// mihomo 根本建不了 socket。挪过去只会让失败从"路径太长"变成"起不来", 更难查。
+func (m *Manager) controllerSocketPath() string {
+	direct := filepath.Join(m.runtimeDir, "mihomo.sock")
+	if m.externalProcess || len(direct) <= maxUnixSocketPath {
+		return direct
+	}
+	return shortControllerSocketPath(m.runtimeDir)
+}
+
+// shortControllerSocketPath 把过长的 socket 路径挪到 HOME 下的短目录。
+//
+// HOME 为空时退回原路径: 那时行为与修之前一致, 不引入新的失败模式。该目录无法建立时
+// 同样退回原路径 —— 短路径尚未就绪不会让服务起不来, 只是写操作像修之前那样失败
+// (可观测, 好过直接崩)。
+func shortControllerSocketPath(runtimeDirectory string) string {
 	home := os.Getenv("HOME")
 	if home == "" {
 		return filepath.Join(runtimeDirectory, "mihomo.sock")
@@ -169,26 +190,11 @@ func NewManager(
 		candidate:  activePath + ".candidate",
 		previous:   activePath + ".previous",
 		logPath:    filepath.Join(runtimeDirectory, "mihomo.log"),
-		// ⚠️ 2026-09-28 修正: unix socket 路径有内核长度上限 (108 字节含结尾 NUL)。
-		//
-		// 项目从 gpt-json-to-token/hx-pxy 搬到 HX-Jungle/toolbox/hx-pxy 后,
-		// runtimeDirectory 变长 18 字符, socket 全路径达到 **109 > 107**, 于是:
-		//
-		//   dial unix .../mihomo.sock: connect: invalid argument
-		//   -> subscription refreshed but dataplane apply failed
-		//
-		// 后果: 任何写操作 (改组/加订阅/改 listener) 都失败, 配置永远无法下发 ——
-		// 面板看着正常, 但数据面重画不了。这是路径搬迁引入的硬故障, 不是配置错误。
-		//
-		// 修法: socket 走一个**固定短路径** (在 HOME 下, 由启动脚本保证存在)。
-		// 为什么不用软链缩短 runtimeDirectory: `--data-dir` 同时决定 DB 与 snapshots
-		// 的位置, 换它要迁数据 (风险大)。只把 socket 这一个文件挪出来, 影响面最小。
-		// 为什么 HOME 而不是 /: 根目录无写权限 (实测 `ln -s` 到 / 报"权限不够")。
-		controllerSocket: controllerSocketPath(runtimeDirectory),
-		logger:           logger,
-		maxProcs:         min(runtime.NumCPU(), 4),
-		logMaxBytes:      8 << 20,
-		logBackups:       2,
+
+		logger:      logger,
+		maxProcs:    min(runtime.NumCPU(), 4),
+		logMaxBytes: 8 << 20,
+		logBackups:  2,
 	}
 	for _, option := range options {
 		if option == nil {
@@ -198,6 +204,10 @@ func NewManager(
 			return nil, err
 		}
 	}
+	// socket 路径依赖 externalProcess, 所以必须在 options 之后才算: 先算会让
+	// systemd 托管的数据面拿到 HOME 短路径, 而 unit 的沙箱只允许它在 runtimeDirectory
+	// 下建 socket —— 那正是 2026-10-13 生产升级后"数据面在跑、控制面认定它没运行"的原因。
+	manager.controllerSocket = manager.controllerSocketPath()
 	manager.compiler.setControllerSocket(manager.controllerSocket)
 	manager.resolveBinary(binary)
 	manager.status = Status{
