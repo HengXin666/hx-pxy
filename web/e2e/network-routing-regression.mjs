@@ -14,9 +14,9 @@ for (const width of [1440, 390]) {
  const gate = new Promise(resolve => { releaseNodes = resolve })
  let nodeFinished = false
  const operations = []
- const settings = { tun: { enabled:false, proxy_group_id:"" }, quality:{check_interval_seconds:600,timeout_seconds:5,batch_size:10,probe_concurrency:2,test_url:"https://example.com",health_targets:[]},dns:{enabled:true,ipv6:false,enhanced_mode:"normal",default_nameserver:[],nameserver:["1.1.1.1"],fallback:[]}, performance:{tcp_concurrent:true, unified_delay:true,keep_alive_idle_seconds:30,keep_alive_interval_seconds:30,find_process_mode:"off",log_level:"info"},shared_inbound:{mode:"per_service",mixed_bind_address:"127.0.0.1",mixed_port:7890,ws_port:7891},guard:{deny_api_group_create:false},log_retention_days:30 }
+ const settings = { tun: { enabled:false, proxy_group_id:"" }, quality:{check_interval_seconds:600,timeout_seconds:5,batch_size:10,probe_concurrency:2,test_url:"https://example.com",health_targets:[]},dns:{enabled:true,ipv6:false,enhanced_mode:"normal",default_nameserver:[],nameserver:["1.1.1.1"],fallback:[]}, performance:{tcp_concurrent:true, unified_delay:true,keep_alive_idle_seconds:30,keep_alive_interval_seconds:30,find_process_mode:"off",log_level:"info"},shared_inbound:{mode:"shared",mixed_bind_address:"0.0.0.0",mixed_port:17890,ws_port:7891},guard:{deny_api_group_create:false},log_retention_days:30 }
  const group = {id:"group-test",name:"Test Exit",enabled:true,version:1,strategy:"select",source_spec:{include_direct:true,node_ids:[],group_ids:[],subscription_ids:[]},empty_behavior:"direct"}
- const listener = {id:"listener-test",name:"Test Docker Entry",kind:"mixed",bind_address:"0.0.0.0",port:17890,enabled:true,version:1,proxy_group_id:group.id,public_endpoint:{host:"public.example.com"},transport:{},auth:{configured:false}}
+ const listener = {id:"listener-test",name:"Test Docker Entry",kind:"mixed",bind_address:"0.0.0.0",port:19999,shared_inbound:"standard",enabled:true,version:1,proxy_group_id:group.id,public_endpoint:{host:"public.example.com"},transport:{},auth_configured:true,share_path:"/sub/test-fixture-token"}
  await page.route("**/api/v1/**", async route => {
   const path = new URL(route.request().url()).pathname
   let body = {items:[]}
@@ -33,6 +33,7 @@ for (const width of [1440, 390]) {
   else if (path.endsWith("/connections")) body={total:1,sampled_at:new Date().toISOString(),items:[{id:"c",origin:"docker",source_ip:"172.17.0.2",source_port:"40000",destination:"1.1.1.1",destination_port:"443",network:"tcp",inbound:"Mixed",upload:10,download:20}]}
   await route.fulfill({status:200,contentType:"application/json",body:JSON.stringify(body)})
  })
+ await page.route("**/sub/test-fixture-token?format=uri", route => route.fulfill({status:200,contentType:"text/plain",body:"http://fixture:fixture-password@public.example.com:17890/#test\nsocks5://fixture:fixture-password@public.example.com:17890/#test\n"}))
  await page.goto(base+"/#/routing",{waitUntil:"domcontentloaded"})
  await page.getByText("Test Docker Entry",{exact:true}).waitFor({timeout:10000}).catch(async error => { console.error(errors, await page.locator("body").innerText()); throw error })
  assert.equal(nodeFinished,false,"service rows must not wait for node inventory")
@@ -40,9 +41,29 @@ for (const width of [1440, 390]) {
  releaseNodes()
  await page.getByRole("combobox").filter({hasText:"服务操作"}).click()
  await page.getByRole("option",{name:"复制 Docker 使用地址",exact:true}).click()
- await page.waitForFunction(() => window.__copied === "172.17.0.1:17890")
+ await page.waitForFunction(() => window.__copied === "http://fixture:fixture-password@172.17.0.1:17890")
+ await page.getByRole("dialog").getByRole("button",{name:"关闭",exact:true}).click()
+ // Permission-denied / insecure-origin clipboard still leaves a usable manual copy.
+ await page.evaluate(() => { navigator.clipboard.writeText = async () => { throw new Error("denied") } })
+ await page.getByRole("combobox").filter({hasText:"服务操作"}).click()
+ await page.getByRole("option",{name:"复制 Docker 使用地址",exact:true}).click()
+ await page.getByText(/浏览器未允许自动复制/).waitFor()
+ assert.equal(await page.getByRole("textbox",{name:"Docker 代理 URI"}).inputValue(), "http://fixture:fixture-password@172.17.0.1:17890")
+ await page.getByRole("button",{name:"复制认证代理 URI",exact:true}).click()
+ await page.getByText(/复制未获授权/).waitFor()
+ await page.screenshot({path:`../docs/screenshots/docker-access-${width}.png`})
+ await page.getByRole("dialog").getByRole("button",{name:"关闭",exact:true}).click()
+ // Editing a shared member derives the carrier port, never the stale member port.
+ await page.getByRole("combobox").filter({hasText:"服务操作"}).click()
+ await page.getByRole("option",{name:"编辑服务",exact:true}).click()
+ await page.getByText("实时编辑服务",{exact:true}).waitFor()
+ assert.equal(await page.locator("label").filter({hasText:/^端口/}).locator("input").count(),0)
+ assert.match(await page.locator("label").filter({hasText:/^端口/}).innerText(),/17890/)
+ assert.equal(await page.locator("label").filter({hasText:/^公网端口/}).locator("input").count(),0)
+ await page.getByRole("button",{name:"取消",exact:true}).click()
  await page.getByRole("button",{name:"新建代理服务",exact:true}).click()
  const dialog = page.getByRole("dialog")
+ assert.equal(await dialog.locator("label").filter({hasText:/端口/}).locator("input").count(),0)
  await dialog.getByRole("button",{name:"住宅代理",exact:true}).click()
  await dialog.getByRole("link",{name:"配置住宅供应商账号、密码与渠道"}).waitFor()
  await page.screenshot({path:`../docs/screenshots/residential-create-${width}.png`})
@@ -50,8 +71,24 @@ for (const width of [1440, 390]) {
  await page.getByRole("button",{name:"活跃连接 展开"}).click()
  await page.getByText("172.17.0.2:40000",{exact:true}).waitFor()
  assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth+1),false,"routing horizontal overflow")
+ // WS gets actual client landing instructions, never a fake plain proxy URI.
+ listener.kind = "vless"
+ listener.bind_address = "127.0.0.1"
+ listener.shared_inbound = "websocket"
+ listener.transport = {type:"ws",ws_path:"/__hx-proxy__/shared"}
+ await page.reload({waitUntil:"domcontentloaded"})
+ await page.getByText("Test Docker Entry",{exact:true}).waitFor()
+ await page.getByRole("combobox").filter({hasText:"服务操作"}).click()
+ await page.getByRole("option",{name:"复制 Docker 使用地址",exact:true}).click()
+ await page.getByRole("textbox",{name:"Mihomo 订阅 URL"}).waitFor()
+ assert.equal(await page.getByRole("textbox",{name:"Docker 代理 URI"}).count(),0)
+ await page.getByText(/mixed-port: 7890/).waitFor()
+ await page.screenshot({path:`../docs/screenshots/docker-ws-access-${width}.png`})
+ await page.getByRole("dialog").getByRole("button",{name:"关闭",exact:true}).click()
  await page.goto(base+"/#/settings",{waitUntil:"domcontentloaded"})
  await page.getByRole("tab",{name:"运行",exact:true}).click()
+ assert.equal(await page.locator("label").filter({hasText:/端口/}).locator("input").count(),0)
+ assert.equal(await page.locator("label").filter({hasText:/端口/}).locator("output").count(),4)
  const tun = page.getByRole("checkbox",{name:"启用当前环境 TUN（保存并应用后生效）"})
  assert.equal(await tun.isChecked(),false)
  await page.getByText(/other-tun/).waitFor()

@@ -55,13 +55,11 @@ export function CreateProxyServiceForm({ nodes, subscriptions, residentialChanne
   const [limit, setLimit] = useState(5)
   const [maxLatency, setMaxLatency] = useState(2000)
   const [kind, setKind] = useState<"mixed" | "http" | "socks" | "vless" | "vmess" | "trojan">("mixed")
-  const [bindAddress, setBindAddress] = useState("0.0.0.0")
-  const [port, setPort] = useState(7890)
+  const [bindAddress, setBindAddress] = useState(sharedInbound?.mixed_bind_address || "0.0.0.0")
   const [authEnabled, setAuthEnabled] = useState(true)
   const [username, setUsername] = useState("hx-user")
   const [password, setPassword] = useState<string>(crypto.randomUUID())
   const [publicHost, setPublicHost] = useState("")
-  const [publicPort, setPublicPort] = useState("")
   const [publicTLS, setPublicTLS] = useState(false)
   const [wsPath, setWSPath] = useState("/__hx-proxy__/hx-pxy")
   const [submitting, setSubmitting] = useState(false)
@@ -90,6 +88,11 @@ export function CreateProxyServiceForm({ nodes, subscriptions, residentialChanne
     return true
   }).slice(0, knobs.limit ? limit : undefined).length, [knobs.limit, knobs.maxLatency, knobs.regions, limit, maxLatency, nodes, selectedNodes.length, selectedRegions, selectedSubscriptions, sourceMode])
 
+  // See .agents/notes/implemented/bug-fix/2026-10-15-fixed-ingress-port-controls.md.
+  const advanced = kind === "vless" || kind === "vmess" || kind === "trojan"
+  const port = advanced ? (sharedInbound?.ws_port || 7891) : (sharedInbound?.mixed_port || 7890)
+  const publicPort = advanced ? (sharedInbound?.ws_public_port || 443) : (sharedInbound?.mixed_public_port || port)
+
   async function submit(event: FormEvent) {
     event.preventDefault()
     const nonLoopback = bindAddress.trim() !== "" && !["127.0.0.1", "::1", "localhost"].includes(bindAddress.trim())
@@ -105,7 +108,7 @@ export function CreateProxyServiceForm({ nodes, subscriptions, residentialChanne
         name: `${name.trim()} 入口`, kind, bind_address: bindAddress.trim(), port,
         auth: authEnabled ? { username: username.trim(), password } : undefined,
         transport: advanced ? { type: "ws", ws_path: wsPath.trim() } : undefined,
-        public_endpoint: publicHost.trim() ? { host: publicHost.trim(), port: advanced ? 443 : (Number(publicPort) || port), tls: advanced || publicTLS } : undefined,
+        public_endpoint: publicHost.trim() ? { host: publicHost.trim(), port: publicPort, tls: advanced || publicTLS } : undefined,
       }
       if (sourceMode === "residential") {
         // 复用渠道已建的代理组: **不下发** name/strategy/source_spec。组不是这次
@@ -146,7 +149,6 @@ export function CreateProxyServiceForm({ nodes, subscriptions, residentialChanne
 
   const validSource = sourceMode === "direct"
     || (sourceMode === "rule" ? selectedSubscriptions.length > 0 : sourceMode === "manual" ? selectedNodes.length > 0 : selectedChannel !== undefined)
-  const advanced = kind === "vless" || kind === "vmess" || kind === "trojan"
   const nonLoopback = bindAddress.trim() !== "" && !["127.0.0.1", "::1", "localhost"].includes(bindAddress.trim())
   function changeKind(next: typeof kind) {
     setKind(next)
@@ -156,6 +158,8 @@ export function CreateProxyServiceForm({ nodes, subscriptions, residentialChanne
       setAuthEnabled(true)
       if (!username) setUsername("hx-user")
       if ((next === "vless" || next === "vmess") && !password) setPassword(crypto.randomUUID())
+    } else {
+      setBindAddress(sharedInbound?.mixed_bind_address || "0.0.0.0")
     }
   }
   function changeSourceMode(next: "direct" | "rule" | "manual" | "residential") {
@@ -170,7 +174,7 @@ export function CreateProxyServiceForm({ nodes, subscriptions, residentialChanne
         <form onSubmit={submit}>
           <DialogHeader>
             <DialogTitle>新建代理服务</DialogTitle>
-            <DialogDescription>入口 IP、端口、登录账号与聚合规则一次创建；创建后立即编译并下发到 Mihomo。</DialogDescription>
+            <DialogDescription>固定入口、登录账号与聚合规则一次创建；创建后立即编译并下发到 Mihomo。</DialogDescription>
           </DialogHeader>
           <div className="space-y-4 px-5 py-4">
             <Field label="服务名称"><Input value={name} onChange={(event) => setName(event.target.value)} placeholder="例如：日本低延迟出口" maxLength={128} autoFocus required /></Field>
@@ -208,9 +212,9 @@ export function CreateProxyServiceForm({ nodes, subscriptions, residentialChanne
               <div className="space-y-3">
                 <Field label="入口协议"><ChipSet values={listenerKinds} current={kind} onChange={changeKind} /></Field>
                 {shared ? <div className="flex items-start gap-2 rounded-md border border-info-border bg-info-muted px-3 py-2 text-xs text-info-foreground"><Cable className="mt-0.5 size-3.5 shrink-0" /><span>共享入口模式：本服务将复用现有入口（{advanced ? `VLESS / VMess / Trojan 内部端口 ${sharedInbound?.ws_port || 7891}` : `Mixed 端口 ${sharedInbound?.mixed_port || 7890}`}），按用户名自动分流，不会再占用新的端口。</span></div> : null}
-                <div className="grid gap-3 sm:grid-cols-[1fr_110px]"><Field label="绑定 IP"><Input value={bindAddress} onChange={(event) => setBindAddress(event.target.value)} disabled={advanced || shared} required />{!advanced && nonLoopback && !authEnabled && <span className="block text-xs text-destructive">非环回监听地址（如 0.0.0.0）必须启用用户名密码认证</span>}{!advanced && nonLoopback && authEnabled && <span className="block text-xs text-muted-foreground">监听 0.0.0.0 供内网 / Docker 容器访问，公网由防火墙保护</span>}</Field><Field label="本地端口"><Input type="number" min={1} max={65535} value={port} onChange={(event) => setPort(Number(event.target.value))} disabled={shared} required /></Field></div>
+                <div className="grid gap-3 sm:grid-cols-[1fr_110px]"><Field label="绑定 IP"><Input value={bindAddress} onChange={(event) => setBindAddress(event.target.value)} disabled={advanced || shared} required />{!advanced && nonLoopback && !authEnabled && <span className="block text-xs text-destructive">非环回监听地址（如 0.0.0.0）必须启用用户名密码认证</span>}{!advanced && nonLoopback && authEnabled && <span className="block text-xs text-muted-foreground">监听 0.0.0.0 供内网 / Docker 容器访问，公网由防火墙保护</span>}</Field><Field label="本地端口"><output className="block py-2 font-mono text-xs">{port}（固定）</output></Field></div>
                 {advanced && <div className="grid gap-3 sm:grid-cols-[1fr_1fr]"><Field label="Cloudflare 域名"><Input value={publicHost} onChange={(event) => setPublicHost(event.target.value)} placeholder="proxy.example.com" required /></Field><Field label="WebSocket Path（固定前缀 /__hx-proxy__/）"><Input value={wsPath} onChange={(event) => setWSPath(event.target.value)} placeholder="/__hx-proxy__/hx-pxy" required /></Field></div>}
-                {!advanced && <div className="grid gap-3 sm:grid-cols-[1fr_110px]"><Field label="公网主机名 / IP（可选）"><Input value={publicHost} onChange={(event) => setPublicHost(event.target.value)} placeholder="VPS 公网地址" /></Field><Field label="公网端口"><Input type="number" min={1} max={65535} value={publicPort} onChange={(event) => setPublicPort(event.target.value)} placeholder={String(port)} /></Field></div>}
+                {!advanced && <div className="grid gap-3 sm:grid-cols-[1fr_110px]"><Field label="公网主机名 / IP（可选）"><Input value={publicHost} onChange={(event) => setPublicHost(event.target.value)} placeholder="VPS 公网地址" /></Field><Field label="公网端口"><output className="block py-2 font-mono text-xs">{publicPort}（固定）</output></Field></div>}
                 {!advanced && publicHost.trim() && <label className="flex items-center gap-2 rounded-md border bg-muted/60 px-3 py-2 text-xs"><Checkbox checked={publicTLS} onCheckedChange={(value) => setPublicTLS(value === true)} />公网 HTTP 端点使用 TLS</label>}
                 {!advanced && <>
                   <label className="flex items-center gap-2 rounded-md border bg-muted/60 px-3 py-2 text-xs"><Checkbox checked={authEnabled || shared} disabled={shared} onCheckedChange={(value) => setAuthEnabled(value === true)} />启用账号认证</label>

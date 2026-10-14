@@ -180,6 +180,11 @@ func (s *Service) loadTwoFactorSecret(ctx context.Context, requireSecretBox bool
 	}
 	plaintext, err := s.twoFactorBox.Open(record.SecretEncrypted, []byte(twoFactorAssociatedData))
 	if err != nil {
+		// AAD is a storage contract, not branding. Keep both deployed formats.
+		// See .agents/notes/implemented/bug-fix/2026-10-15-totp-upgrade-compatibility.md.
+		plaintext, err = s.twoFactorBox.Open(record.SecretEncrypted, []byte("hx-proxygroup/admin-totp/v1"))
+	}
+	if err != nil {
 		return store.AdminTwoFactorRecord{}, "", fmt.Errorf("decrypt two-factor secret: %w", err)
 	}
 	return record, string(plaintext), nil

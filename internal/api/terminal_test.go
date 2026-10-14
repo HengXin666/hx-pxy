@@ -60,6 +60,18 @@ func TestTerminalWebSocketRejectsCrossOriginAndTracksStepUpRevocation(t *testing
 	if err := authService.EnableTwoFactor(context.Background(), twoFactorCode); err != nil {
 		t.Fatal(err)
 	}
+	// Simulate an enabled authenticator carried across the product rename.
+	record, err := database.GetAdminTwoFactor(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	record.SecretEncrypted, err = box.Seal([]byte(twoFactorSetup.Secret), []byte("hx-proxygroup/admin-totp/v1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := database.UpsertAdminTwoFactor(context.Background(), record); err != nil {
+		t.Fatal(err)
+	}
 	authSession, err := authService.Login(context.Background(), "127.0.0.1", "admin", "correct horse battery")
 	if err != nil {
 		t.Fatal(err)
@@ -86,8 +98,14 @@ func TestTerminalWebSocketRejectsCrossOriginAndTracksStepUpRevocation(t *testing
 	} else if response == nil || response.StatusCode != http.StatusForbidden {
 		t.Fatalf("unverified two-factor response = %#v, err = %v", response, err)
 	}
-	if err := authService.VerifyTwoFactor(context.Background(), authSession.Token, "127.0.0.1", twoFactorCode); err != nil {
-		t.Fatal(err)
+	verifyResponse := postJSON(t, testServer.Client(), testServer.URL+"/api/v1/auth/2fa/verify", map[string]string{"code": twoFactorCode}, map[string]string{
+		"Cookie":       sessionCookieName + "=" + authSession.Token,
+		"X-CSRF-Token": authSession.CSRFToken,
+		"Origin":       testServer.URL,
+	})
+	verifyResponse.Body.Close()
+	if verifyResponse.StatusCode != http.StatusOK {
+		t.Fatalf("legacy TOTP HTTP verification = %d", verifyResponse.StatusCode)
 	}
 
 	headers.Set("Origin", "https://attacker.invalid")

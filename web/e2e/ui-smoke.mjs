@@ -43,13 +43,17 @@ if (await page.evaluate(() => document.documentElement.scrollWidth > document.do
 if (await page.locator("main form").count() !== 0) {
   throw new Error("proxy service page must not keep the create form inline")
 }
-await page.getByRole("button", { name: "新建代理服务" }).click()
+await page.getByRole("button", { name: "新建代理服务" }).first().click()
 await page.getByRole("dialog").waitFor()
 await page.getByLabel("服务名称").fill("本机订阅验证")
 // The shared inbound is the default for new installs: every service reuses the
 // one Mixed port, so the per-service port field is intentionally read-only and
 // the form only asks for the login credential.
-const sharedInboundEnabled = await page.getByLabel("本地端口").isDisabled()
+const sharedInboundEnabled = await page.evaluate(async () => (await (await fetch("/api/v1/settings")).json()).shared_inbound.mode === "shared")
+const fixedPort = Number((await page.getByLabel("本地端口").textContent()).match(/\d+/)?.[0])
+if (await page.getByLabel("本地端口").evaluate(element => element.tagName) !== "OUTPUT" || !fixedPort) {
+  throw new Error("ingress port must be a fixed deployment value, not an editable input")
+}
 if (sharedInboundEnabled) {
   await page.getByRole("dialog").getByRole("textbox", { name: "用户名" }).fill("ui-review-user")
   await page.getByRole("dialog").getByRole("button", { name: "创建并启动" }).click()
@@ -57,12 +61,11 @@ if (sharedInboundEnabled) {
   // per-service rows, so the new service name can legitimately appear twice
   // (its own row and the aggregate's). Assert the row exists, not that it is
   // unique.
-  await page.getByText("本机订阅验证", { exact: true }).first().waitFor()
+  await page.getByText("本机订阅验证 入口", { exact: true }).first().waitFor()
 } else {
-  await page.getByLabel("本地端口").fill("17891")
   await page.getByLabel("公网主机名 / IP（可选）").fill("proxy.example.com")
   await page.getByRole("dialog").getByRole("button", { name: "创建并启动" }).click()
-  await page.getByText("本机订阅验证", { exact: true }).first().waitFor()
+  await page.getByText("本机订阅验证 入口", { exact: true }).first().waitFor()
 }
 
 const listener = await page.evaluate(async () => {
@@ -87,19 +90,19 @@ const results = await page.evaluate(async (sharePath) => {
 if (results.clash.status !== 200 || results.clash.format !== "clash" || !results.clash.body.includes("proxies:")) throw new Error("Clash localhost subscription failed")
 // Shared mode advertises the aggregate entry point; per-service mode advertises
 // the configured public endpoint. Both must reach the subscription body.
-const expectedEndpoint = sharedInboundEnabled ? "127.0.0.1:" : "proxy.example.com:17891"
+const expectedEndpoint = sharedInboundEnabled ? "127.0.0.1:" : `proxy.example.com:${fixedPort}`
 if (results.v2rayn.status !== 200 || results.v2rayn.format !== "v2rayn" || !Buffer.from(results.v2rayn.body, "base64").toString().includes(expectedEndpoint)) throw new Error(`v2rayN subscription did not advertise ${expectedEndpoint}`)
 if (results.shadowrocket.status !== 200 || results.shadowrocket.format !== "v2rayn" || !Buffer.from(results.shadowrocket.body, "base64").toString().includes(expectedEndpoint)) throw new Error(`Shadowrocket subscription did not advertise ${expectedEndpoint}`)
 if (results.singbox.status !== 200 || results.singbox.format !== "sing-box" || JSON.parse(results.singbox.body).outbounds.length === 0) throw new Error("sing-box localhost subscription failed")
 
-await page.getByText("本机订阅验证", { exact: true }).first().click()
+await page.getByText("本机订阅验证 入口", { exact: true }).first().click()
 await page.getByText("DIRECT（当前服务器出口）").waitFor()
 await page.getByRole("tab", { name: "动态编辑" }).click()
 const editPanel = page.getByRole("tabpanel", { name: "动态编辑" })
 await editPanel.getByText("实时编辑服务").waitFor()
 await editPanel.getByLabel("服务名称").fill("本机代理服务已编辑")
 await editPanel.getByRole("button", { name: "保存并应用" }).click()
-await page.getByText("本机代理服务已编辑", { exact: true }).first().waitFor()
+await page.getByText("本机代理服务已编辑 入口", { exact: true }).first().waitFor()
 
 const serviceAction = page.getByRole("combobox").filter({ hasText: "服务操作" })
 await serviceAction.click()
@@ -162,7 +165,7 @@ if (await aliasNameInput.inputValue() !== "AI 服务") throw new Error("site ali
 await page.screenshot({ path: "../docs/screenshots/site-aliases-dark-desktop.png", fullPage: true })
 
 await page.goto(`${baseURL}/#/routing`, { waitUntil: "networkidle" })
-await page.getByText("本机代理服务已编辑", { exact: true }).first().click()
+await page.getByText("本机代理服务已编辑 入口", { exact: true }).first().click()
 await page.getByRole("tab", { name: "路由策略" }).click()
 await page.getByLabel("AI 服务 路由动作").click()
 await page.getByRole("option", { name: "直连 DIRECT" }).click()
@@ -181,7 +184,7 @@ await page.waitForTimeout(250)
 await page.screenshot({ path: "../docs/screenshots/settings-dark-mobile.png", fullPage: true })
 await page.goto(`${baseURL}/#/routing`, { waitUntil: "networkidle" })
 await page.getByRole("heading", { name: "代理服务" }).waitFor()
-await page.getByText("本机代理服务已编辑", { exact: true }).first().click()
+await page.getByText("本机代理服务已编辑 入口", { exact: true }).first().click()
 await page.getByText("DIRECT（当前服务器出口）").waitFor()
 await page.screenshot({ path: "../docs/screenshots/proxy-services-expanded-mobile.png", fullPage: true })
 await page.goto(`${baseURL}/#/`, { waitUntil: "networkidle" })

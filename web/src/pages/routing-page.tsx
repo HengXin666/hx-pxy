@@ -15,7 +15,7 @@ import { matchesRegion, regionLabel, strategyLabel } from "@/lib/proxy-groups"
 import { serviceShape, shapeMeta, type ServiceShape } from "@/lib/service-shape"
 import type { DataPlaneStatus, ListenerRecord, NetworkAddresses, NodeRecord, ProxyGroup, ResidentialChannel, RoutingAction, RoutingRulesConfig, RoutingRuleSet, SharedInboundSettings, Subscription } from "@/lib/types"
 import { cn, formatDate } from "@/lib/utils"
-import { dockerEndpoint } from "@/lib/docker-endpoint"
+import { DockerAccessDialog } from "@/components/docker-access-dialog"
 
 interface RoutingPageProps {
   onNotice: (message: string, tone?: "success" | "error") => void
@@ -201,7 +201,7 @@ export function RoutingPage({ onNotice }: RoutingPageProps) {
           {listeners.length === 0 ? <EmptyState onCreate={() => setShowCreate(true)} /> : <div className="min-h-48 divide-y overflow-y-auto 2xl:min-h-0 2xl:flex-1">{listeners.map((listener) => {
             const group = groups.find((item) => item.id === listener.proxy_group_id)
             const residential = residentialChannels.find((channel) => channel.listener_id === listener.id)
-            return <ServiceRow key={listener.id} listener={listener} group={group} groups={groups} routingRules={routingRules} nodes={serviceNodes.get(listener.id) ?? []} subscriptions={subscriptions} allNodes={nodes} residential={residential} dockerHost={dockerHost} expanded={expanded.has(listener.id)} editing={editing === listener.id} onToggle={() => setExpanded((current) => { const next = new Set(current); if (next.has(listener.id)) next.delete(listener.id); else next.add(listener.id); return next })} onEdit={() => { setExpanded((current) => new Set(current).add(listener.id)); setEditing(listener.id) }} onCloseEdit={() => setEditing(null)} onRoutingChanged={setRoutingRules} onChanged={async () => { setEditing(null); await load() }} onDelete={() => setDeleteTarget({ listener, group })} onNotice={onNotice} />
+            return <ServiceRow key={listener.id} listener={listener} group={group} groups={groups} routingRules={routingRules} nodes={serviceNodes.get(listener.id) ?? []} subscriptions={subscriptions} allNodes={nodes} residential={residential} dockerHost={dockerHost} sharedInbound={sharedInbound} expanded={expanded.has(listener.id)} editing={editing === listener.id} onToggle={() => setExpanded((current) => { const next = new Set(current); if (next.has(listener.id)) next.delete(listener.id); else next.add(listener.id); return next })} onEdit={() => { setExpanded((current) => new Set(current).add(listener.id)); setEditing(listener.id) }} onCloseEdit={() => setEditing(null)} onRoutingChanged={setRoutingRules} onChanged={async () => { setEditing(null); await load() }} onDelete={() => setDeleteTarget({ listener, group })} onNotice={onNotice} />
           })}</div>}
         </section>
       </div>
@@ -292,8 +292,9 @@ function isPublicBindAddress(value: string): boolean {
   return value !== "127.0.0.1" && value !== "::1" && value !== "0.0.0.0" && value !== "::" && !value.startsWith("127.")
 }
 
-function ServiceRow({ listener, group, groups, routingRules, nodes, subscriptions, allNodes, residential, dockerHost, expanded, editing, onToggle, onEdit, onCloseEdit, onRoutingChanged, onChanged, onDelete, onNotice }: { listener: ListenerRecord; group?: ProxyGroup; groups: ProxyGroup[]; routingRules: RoutingRulesConfig; nodes: NodeRecord[]; subscriptions: Subscription[]; allNodes: NodeRecord[]; residential?: ResidentialChannel; dockerHost: string; expanded: boolean; editing: boolean; onToggle: () => void; onEdit: () => void; onCloseEdit: () => void; onRoutingChanged: (config: RoutingRulesConfig) => void; onChanged: () => Promise<void>; onDelete: () => void; onNotice: RoutingPageProps["onNotice"] }) {
+function ServiceRow({ listener, group, groups, routingRules, nodes, subscriptions, allNodes, residential, dockerHost, sharedInbound, expanded, editing, onToggle, onEdit, onCloseEdit, onRoutingChanged, onChanged, onDelete, onNotice }: { listener: ListenerRecord; group?: ProxyGroup; groups: ProxyGroup[]; routingRules: RoutingRulesConfig; nodes: NodeRecord[]; subscriptions: Subscription[]; allNodes: NodeRecord[]; residential?: ResidentialChannel; dockerHost: string; sharedInbound: SharedInboundSettings | null; expanded: boolean; editing: boolean; onToggle: () => void; onEdit: () => void; onCloseEdit: () => void; onRoutingChanged: (config: RoutingRulesConfig) => void; onChanged: () => Promise<void>; onDelete: () => void; onNotice: RoutingPageProps["onNotice"] }) {
   const [action, setAction] = useState("")
+  const [dockerOpen, setDockerOpen] = useState(false)
   const [detailTab, setDetailTab] = useState("members")
   const spec = group?.source_spec
   // The row's shape is derived from the declared source class, so a pool, a
@@ -319,21 +320,6 @@ function ServiceRow({ listener, group, groups, routingRules, nodes, subscription
     const address = endpointAddress(listener, publicEndpoint) || `${listener.bind_address}:${listener.port}`
     const ok = await copyText(address)
     onNotice(ok ? "入口地址已复制" : "复制失败，请手动复制", ok ? "success" : "error")
-  }
-
-  // A container's 127.0.0.1 is the container itself and the configured public
-  // endpoint is usually an edge domain, so "copy for docker" must be the host
-  // address on the docker bridge. It is offered next to the plain endpoint copy
-  // rather than replacing it: which one is right depends on where the client
-  // runs, and the page cannot know.
-  async function copyDockerAddress() {
-    const address = dockerEndpoint(listener, dockerHost)
-    if (!address) {
-      onNotice("该入口不能作为容器直连代理：请使用带认证的非环回 HTTP / SOCKS / Mixed 入口；WS 入口需客户端内核落地", "error")
-      return
-    }
-    const ok = await copyText(address)
-    onNotice(ok ? `Docker 候选地址已复制：${address}（还需配置入口认证，连通性取决于容器网络和防火墙）` : "复制失败，请手动复制", ok ? "success" : "error")
   }
 
   async function copyResidentialURL(kind: "clash" | "control") {
@@ -372,7 +358,7 @@ function ServiceRow({ listener, group, groups, routingRules, nodes, subscription
     if (value === "residential-clash") void copyResidentialURL("clash")
     else if (value === "residential-control") void copyResidentialURL("control")
     else if (value === "address") void copyEndpoint()
-    else if (value === "docker") void copyDockerAddress()
+    else if (value === "docker") setDockerOpen(true)
     else if (value === "auth-uri") void copyConnectionURI()
     else if (value === "edit") { setDetailTab("edit"); onEdit() }
     else if (value === "delete") onDelete()
@@ -419,6 +405,7 @@ function ServiceRow({ listener, group, groups, routingRules, nodes, subscription
         <Select value={action} onValueChange={runAction}><SelectTrigger onClick={(event) => event.stopPropagation()} className="h-8"><Link2 className="mr-1 size-3.5" /><SelectValue placeholder="服务操作" /></SelectTrigger><SelectContent><SelectItem value="edit">编辑服务</SelectItem>{!residential && listener.share_path && <><SelectItem value="clash:Clash / Mihomo">复制 Clash / Mihomo 订阅</SelectItem><SelectItem value="v2rayn:v2rayN / v2rayNG">复制 v2rayN / v2rayNG 订阅</SelectItem><SelectItem value="v2rayn:Shadowrocket">复制 Shadowrocket 订阅</SelectItem><SelectItem value="sing-box:sing-box / NekoBox">复制 sing-box / NekoBox 订阅</SelectItem><SelectItem value="auth-uri">复制认证连接 URI</SelectItem></>}{residential ? <><SelectItem value="residential-clash">复制 Clash / Mihomo 订阅</SelectItem><SelectItem value="residential-control">复制自动化控制 URL</SelectItem></> : <><SelectItem value="address">复制入口地址</SelectItem></>}<SelectItem value="docker">复制 Docker 使用地址</SelectItem><SelectItem value="delete" className="text-destructive">删除服务</SelectItem></SelectContent></Select>
       </div>
     </div>
+    {dockerOpen && <DockerAccessDialog listener={listener} gateway={dockerHost} sharedInbound={sharedInbound} subscriptionURL={residential?.subscription_url} onClose={() => setDockerOpen(false)} />}
     {expanded && <div className="border-t bg-muted/70 px-3 py-3 sm:px-4">
       <Tabs value={editing ? "edit" : detailTab} onValueChange={(value) => { setDetailTab(value); if (value === "edit") onEdit(); else if (editing) onCloseEdit() }}>
         <TabsList className="max-w-full overflow-x-auto">
@@ -447,7 +434,7 @@ function ServiceRow({ listener, group, groups, routingRules, nodes, subscription
         <TabsContent value="traffic"><TrafficPanel listenerId={listener.id} groupId={group?.id} nodes={nodes} /></TabsContent>
         <TabsContent value="routes">{group && <GroupRoutingPanel group={group} groups={groups} config={routingRules} onSaved={onRoutingChanged} onNotice={onNotice} />}</TabsContent>
         <TabsContent value="logs"><LiveLogsPanel listenerId={listener.id} /></TabsContent>
-        <TabsContent value="edit">{group && <div className="overflow-hidden rounded-md border bg-card"><EditProxyServiceForm listener={listener} group={group} nodes={allNodes} subscriptions={subscriptions} onSaved={onChanged} onCancel={() => { setDetailTab("members"); onCloseEdit() }} onNotice={onNotice} /></div>}</TabsContent>
+        <TabsContent value="edit">{group && <div className="overflow-hidden rounded-md border bg-card"><EditProxyServiceForm listener={listener} sharedInbound={sharedInbound} group={group} nodes={allNodes} subscriptions={subscriptions} onSaved={onChanged} onCancel={() => { setDetailTab("members"); onCloseEdit() }} onNotice={onNotice} /></div>}</TabsContent>
       </Tabs>
     </div>}
     </div>

@@ -54,9 +54,26 @@ main 表本身被其他代理改写、基于防火墙重定向或无原生 IPv6 
 
 ## Docker 地址与诊断
 
-服务行可复制 Docker 使用地址：普通 HTTP/SOCKS/Mixed 入口使用网桥候选 IP，
-不会退回公网域名；环回监听及 WS/TLS 入口不伪造可用地址。需要可达的监听绑定、正确认证
-和允许访问的防火墙。自定义网桥、隔离网络、rootless Docker 未必能访问 docker0。
+服务行的「复制 Docker 使用地址」打开使用说明：普通 HTTP/SOCKS/Mixed 入口使用宿主网桥
+候选 IP 和实际共享入口端口，复制**包含认证的完整 URI**，不会退回 Cloudflare 公网域名。
+`0.0.0.0` 只是绑定范围，不是客户端连接地址；共享入口必须用认证用户名选择代理服务。
+浏览器拒绝剪贴板权限或使用非安全 HTTP 页面时，可在弹窗中选中文本手动复制。
+
+- HTTP/Mixed：把同一个 `http://用户名:密码@网桥IP:固定端口` 填入 `HTTP_PROXY` 和
+  `HTTPS_PROXY`。HTTPS 目标通过 CONNECT 访问，不能把源站入口改成 `https://`。
+- SOCKS：把 `socks5h://用户名:密码@网桥IP:固定端口` 填入支持 SOCKS 的应用的 `ALL_PROXY`。
+- WS：弹窗提供 Mihomo 订阅 URL 与客户端落地说明。将订阅导入容器内或 sidecar 的 Mihomo，
+  客户端配置 `mixed-port: 7890`。共享网络命名空间时应用使用 `http://127.0.0.1:7890`；
+  不同容器使用私有 Docker 网络的 `http://mihomo:7890`，此时客户端需 `allow-lan: true`。
+  这是客户端自己的端口，不改变服务端固定入口。订阅、控制 URL 和 WS 路径都不是 HTTP 代理。
+
+认证 URI 和订阅 URL 都是敏感凭据，不要放进公开截图、日志或仓库。需要可达的监听绑定和
+允许访问的防火墙；环回入口不能供独立网络命名空间中的容器直连。自定义网桥、隔离网络、
+rootless Docker 未必能访问 docker0，候选地址不等于已验证连通。
+
+全局运行设置、代理服务新建和编辑页只展示固定入口端口，不提供端口输入框。已有部署的端口
+保留，WS 通过公网固定端口和 URL Path 路由，普通 HTTP/SOCKS 通过认证用户名路由。
+SMTP 和住宅供应商网关属于远端地址配置，不是 HX 入口端口。
 
 - `GET /api/v1/system/network`：候选 IPv4 地址，不保证可达。
 - `GET /api/v1/system/network/inspect`：接口、当前 TUN、IPv4 转发状态。
