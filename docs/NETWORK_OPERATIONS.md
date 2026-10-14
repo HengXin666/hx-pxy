@@ -1,0 +1,92 @@
+# TUN、Docker 网络与出口隔离
+
+## 默认行为
+
+TUN 默认关闭。控制面只生成配置和调用受管 Mihomo，不转发 TUN 数据。
+「全局配置 → 运行」可探测当前接口、选择出口代理组、启用 TUN 并保存应用。
+DNS 必须开启；出口组必须存在且启用。站点规则优先，TUN 默认规则仅影响 TUN 入站。
+私有网段、环回、链路本地地址排除；不启用 auto-redirect、不自动修改 Docker 防火墙。
+应用会检查 `hx-pxy-tun` 是否 UP，失败走既有回滚；接口 UP 不等于互联网可达。
+
+## systemd 数据面权限（显式启用）
+
+生产安装默认仍无网络管理 capability。管理员决定启用后执行：
+
+```sh
+sudo install -d -m 0755 /etc/systemd/system/hx-pxy-dataplane.service.d
+sudo install -m 0644 /usr/local/lib/hx-pxy/current/deploy/systemd/hx-pxy-dataplane-tun.conf \
+  /etc/systemd/system/hx-pxy-dataplane.service.d/tun.conf
+sudo systemctl daemon-reload
+sudo systemctl restart hx-pxy-dataplane
+```
+
+此 drop-in 只给 Mihomo 开放 `/dev/net/tun`、AF_NETLINK、CAP_NET_ADMIN/CAP_NET_RAW；
+不会给控制面授权。内核需支持 TUN，容器部署还需要宿主显式传入设备和能力。
+页面显示的设备可见性来自控制面沙箱，不能代替数据面权限验证。
+回退：先在页面关闭 TUN 并应用，再移除上述 `tun.conf`、daemon-reload、重启数据面。
+远程操作前保留备用管理连接。不要在未验证路由的情况下同时开启多个 TUN。
+
+## 排除其他本地代理
+
+受管子进程与生产 Mihomo unit 均清除大小写 HTTP_PROXY/HTTPS_PROXY/ALL_PROXY/
+FTP_PROXY/NO_PROXY。此措施不改变控制面订阅抓取策略，也不能绕开内核的其他 TUN 路由。
+
+其他代理若捕获 Mihomo 的流量，应优先在其配置中排除专用 `hx-pxy` 服务 UID。
+若该代理不支持，可由宿主管理员审查 `ip rule`、`ip -6 rule`、main 表默认路由后，
+添加优先于其他 TUN、晚于 local 表的 UID 策略。以下为示例，**不是自动修复命令**：
+
+```sh
+id -u hx-pxy
+ip rule show
+ip -6 rule show
+ip route show table main
+ip -6 route show table main
+# 将 UID 和 PREF 替换为实际数值；先确认 PREF 未占用且先于其他代理规则。
+# sudo ip rule add pref PREF uidrange UID-UID lookup main
+# sudo ip -6 rule add pref PREF uidrange UID-UID lookup main
+# 撤销使用完全相同的选择器，将 add 替换为 del。
+```
+
+不要对桌面登录用户 UID 做全局绕过：它会让该用户的其他应用也绕过代理。
+main 表本身被其他代理改写、基于防火墙重定向或无原生 IPv6 出口时，上述方法不充分。
+验证应在专用服务用户身份下进行出站请求，并观察路由与其他代理连接列表；不能仅凭出口 IP
+或网卡绑定就宣称隔离成功。此版本不自动执行这些宿主策略修改。
+
+## Docker 地址与诊断
+
+服务行可复制 Docker 使用地址：普通 HTTP/SOCKS/Mixed 入口使用网桥候选 IP，
+不会退回公网域名；环回监听及 WS/TLS 入口不伪造可用地址。需要可达的监听绑定、正确认证
+和允许访问的防火墙。自定义网桥、隔离网络、rootless Docker 未必能访问 docker0。
+
+- `GET /api/v1/system/network`：候选 IPv4 地址，不保证可达。
+- `GET /api/v1/system/network/inspect`：接口、当前 TUN、IPv4 转发状态。
+- `POST /api/v1/system/network/operations`：`action` 为 `diagnose`、`enable-forwarding`、
+  `disable-forwarding`；可选 `container_id` 仅诊断使用，接受 12–64 位十六进制 ID。
+- 空容器 ID 诊断宿主路由和 Docker 网络；指定容器则读取内部 DNS、路由并解析 example.com。
+  无 shell/getent/nslookup 的镜像可能不能完成诊断，返回退出码和输出。
+- 修复需要 `confirm: true`，浏览器须启用并近期验证 2FA；管理 API key 可用于自动化。
+  所有操作限单个并发、命令 20 秒；修复只修改运行态 IPv4 转发，不持久化 sysctl，
+  不重启 Docker、不清空防火墙。关闭转发会影响全机容器，不能当作任意修复的通用回滚。
+
+## 活跃连接与日志
+
+`GET /api/v1/connections?origin=docker` 返回最多 500 条 Mihomo 当前采样，
+`origin` 可取 local/docker/external/unknown。总数是未筛选连接数，带 `sampled_at`。
+页面展开时每 3 秒读取，10 秒无新样本提示过期。不会保存逐连接历史；
+NAT、host 网络与反向代理会隐藏真实来源，external 包括其他 LAN 主机。
+
+生产 systemd 要求 >=245，三项 HX 服务使用专属 `hx-pxy` journal namespace：
+
+```sh
+journalctl --namespace=hx-pxy -u hx-pxy -n 100
+journalctl --namespace=hx-pxy -u hx-pxy-dataplane -f
+```
+
+该命名空间按 30 天保留、最长 1 天轮转，并有容量上限；容量不足时可能提前回收。
+配置在 `/etc/systemd/journald@hx-pxy.conf`。旧的共享 journal 不会被本产品全局 vacuum，
+避免删除其他服务的审计日志；旧记录仍遵从宿主原策略。非 systemd 部署的 stdout 保留由调用方管理。
+
+托管文件日志每次写入按大小或 24 小时轮转，后台每天清理过期 `mihomo.log*` 备份及
+可确认失活的旧短实例目录，当前文件和活跃 socket 受保护。`log_retention_days` 默认 30，
+仅控制文件清理，不修改 journald 策略。文件 mtime 与每日扫描是文件级保留，并非逐行精确到秒；
+持续重启会影响活动文件轮转年龄。数据库、密钥和配置不在清理匹配范围。

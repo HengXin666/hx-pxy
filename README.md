@@ -23,6 +23,13 @@
 > [!IMPORTANT]
 > HX-Pxy 是代理控制平面，不是新的代理协议内核。VMess、VLESS、Trojan、Hysteria、TUIC、SOCKS5、HTTP CONNECT 等协议仍由当前安装的 Mihomo 构建负责。普通 Listener 直接由 Mihomo 提供；Cloudflare / 雷池 WebSocket 拓扑可选经过 HX 的受限 Edge Relay，Relay 只做固定路径的连接转发，不解析或实现代理协议。
 
+## 网络运维与加载
+
+代理服务列表独立加载节点库存，常用列表有 5 秒会话内缓存；刷新与写操作会失效缓存。
+支持住宅频道复用入口、Docker 候选地址复制与按来源分类的当前连接采样。
+TUN 默认关闭，启用权限、Docker 诊断/修复与 30 天日志保留见 [网络运维说明](docs/NETWORK_OPERATIONS.md)。
+生产 systemd 安装要求 >=245；不会自动接管其他 TUN 或清空宿主防火墙。
+
 ## 为什么使用 HX-Pxy
 
 普通订阅客户端适合在单台终端上选节点；HX-Pxy 面向长期运行的服务器场景，把“订阅输入”转化为可恢复、可解释、可组合的 Desired State：

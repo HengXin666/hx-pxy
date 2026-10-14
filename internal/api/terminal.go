@@ -10,6 +10,7 @@ import (
 
 	"github.com/coder/websocket"
 
+	"github.com/HengXin666/hx-pxy/internal/hostnetwork"
 	"github.com/HengXin666/hx-pxy/internal/terminal"
 )
 
@@ -41,6 +42,7 @@ func WithTerminal(service TerminalService) Option {
 			return errors.New("terminal service is required")
 		}
 		server.terminal = service
+		server.networkOps = hostnetwork.NewService(service)
 		return nil
 	}
 }
@@ -145,15 +147,12 @@ func streamShellCwd(socketCtx context.Context, connection *websocket.Conn, shell
 	}
 }
 
-var (
-	terminalAuthRevalidateInterval = 30 * time.Second
-	// terminalHeartbeatInterval / terminalHeartbeatTimeout drive the server
-	// heartbeat: the server pings and requires the browser's automatic pong
-	// within the timeout. On lossy networks a silently dead peer is reaped in
-	// about interval+timeout instead of leaking its session slot indefinitely.
-	terminalHeartbeatInterval = 15 * time.Second
-	terminalHeartbeatTimeout  = 15 * time.Second
-)
+// terminalAuthRevalidateInterval is how often the database-backed
+// administrator session is re-checked while a socket is open.
+//
+// The heartbeat budget lives in terminal_heartbeat.go: it is a decision in its
+// own right (one lost ping must not end a session) and it has its own tests.
+var terminalAuthRevalidateInterval = 30 * time.Second
 
 // handleTerminalSocket bridges one WebSocket to one PTY session. Unlike the
 // rest of the API, the terminal requires a fully configured and
@@ -196,7 +195,11 @@ func (s *Server) handleTerminalSocket(writer http.ResponseWriter, request *http.
 		return
 	}
 	defer connection.Close(websocket.StatusInternalError, "terminal closed")
-	connection.SetReadLimit(64 << 10)
+	// See terminalReadLimit: a client input frame larger than this closes the
+	// whole socket with StatusMessageTooBig, so the limit is a safety bound
+	// above the client's 32 KiB chunking, not a frame size the client is
+	// expected to produce.
+	connection.SetReadLimit(terminalReadLimit)
 
 	socketCtx, cancel := context.WithCancel(request.Context())
 	defer cancel()
@@ -269,29 +272,26 @@ func (s *Server) handleTerminalSocket(writer http.ResponseWriter, request *http.
 
 	// Heartbeat the peer so a silently dead connection (packet loss, NAT drop)
 	// is detected promptly: the session slot is freed and a later reconnect is
-	// not blocked by the session cap. Browsers auto-respond to pings; when the
-	// pong is not received within the timeout the peer is treated as gone.
+	// not blocked by the session cap. Browsers auto-respond to pings; a single
+	// missed pong is NOT treated as death (runTerminalHeartbeat counts a streak
+	// first), otherwise one lost segment on a tunneled link would tear down a
+	// live session.
+	budget := s.heartbeatBudget()
 	heartbeatDone := make(chan struct{})
 	go func() {
 		defer close(heartbeatDone)
-		ticker := time.NewTicker(terminalHeartbeatInterval)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-socketCtx.Done():
-				return
-			case <-ticker.C:
-				pingCtx, pingCancel := context.WithTimeout(socketCtx, terminalHeartbeatTimeout)
-				pingErr := connection.Ping(pingCtx)
-				pingCancel()
-				if pingErr != nil {
-					shell.Close("connection heartbeat lost")
-					cancel()
-					_ = connection.Close(websocket.StatusGoingAway, "connection heartbeat lost")
-					return
-				}
-			}
-		}
+		runTerminalHeartbeat(
+			socketCtx,
+			budget.interval,
+			budget.timeout,
+			terminalConsecutivePingFailures,
+			terminalHeartbeatProbe(connection),
+			func() {
+				shell.Close("connection heartbeat lost")
+				cancel()
+				_ = connection.Close(websocket.StatusGoingAway, "connection heartbeat lost")
+			},
+		)
 	}()
 
 	// Revalidate the database-backed administrator session while the socket is

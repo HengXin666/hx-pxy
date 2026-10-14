@@ -24,6 +24,7 @@ const (
 
 type Repository interface {
 	ListNodes(context.Context, store.NodeFilter) ([]store.NodeRecord, error)
+	CountNodes(context.Context, store.NodeFilter) (int, error)
 	ListActiveNodeSources(context.Context, []string) ([]store.NodeSourceRecord, error)
 	GetNode(context.Context, string) (store.NodeRecord, error)
 	GetNodeConfig(context.Context, string) (store.NodeConfigRecord, error)
@@ -119,6 +120,14 @@ type Filter struct {
 	State    string
 	Limit    int
 	Offset   int
+	// SkipHealthChecks drops the per-node health-target samples from the
+	// result. They are the single most expensive part of a node page: attaching
+	// them for 1000 nodes costs ~240ms on a 2750-node inventory (105k quality
+	// rows), while the members list of a proxy service reads only the node's
+	// lifecycle state, latency and sources. Callers that do not render health
+	// targets must ask for the cheaper projection instead of paying for a field
+	// they discard — see .agents/notes/implemented/feature/2026-10-14-node-list-lean-projection.md.
+	SkipHealthChecks bool
 }
 
 type Service struct {
@@ -176,6 +185,12 @@ func (s *Service) List(ctx context.Context, filter Filter) ([]Node, error) {
 		}
 		items = append(items, item)
 	}
+	if filter.SkipHealthChecks {
+		for index := range items {
+			items[index].HealthChecks = []HealthCheck{}
+		}
+		return items, nil
+	}
 	settings, err := s.QualitySettings(ctx)
 	if err != nil {
 		return nil, err
@@ -184,6 +199,17 @@ func (s *Service) List(ctx context.Context, filter Filter) ([]Node, error) {
 		return nil, err
 	}
 	return items, nil
+}
+
+// Count returns how many nodes match the filter, ignoring pagination. It backs
+// the list API's total, which lets a client fetch the remaining pages
+// concurrently instead of walking offsets one round trip at a time.
+func (s *Service) Count(ctx context.Context, filter Filter) (int, error) {
+	return s.repository.CountNodes(ctx, store.NodeFilter{
+		Search:   strings.TrimSpace(filter.Search),
+		Protocol: strings.ToLower(strings.TrimSpace(filter.Protocol)),
+		State:    strings.ToLower(strings.TrimSpace(filter.State)),
+	})
 }
 
 // Disable removes a node from every compiled configuration until an

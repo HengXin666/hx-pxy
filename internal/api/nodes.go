@@ -44,22 +44,48 @@ func (s *Server) handleNodes(writer http.ResponseWriter, request *http.Request) 
 		s.writeAPIError(writer, request, http.StatusBadRequest, "invalid_request", err.Error())
 		return
 	}
-	items, err := s.nodes.List(request.Context(), node.Filter{
-		Search:   request.URL.Query().Get("search"),
-		Protocol: request.URL.Query().Get("protocol"),
-		State:    request.URL.Query().Get("state"),
-		Limit:    limit,
-		Offset:   offset,
-	})
+	// view=summary drops the per-node health-target samples. Callers that only
+	// need the inventory (member lists, pickers) must opt in: attaching health
+	// samples for a page of 1000 nodes costs ~240ms against a 2750-node
+	// inventory, and none of them render the field. The default stays the full
+	// projection so existing consumers cannot silently lose data.
+	view := strings.TrimSpace(request.URL.Query().Get("view"))
+	switch view {
+	case "", "full", "summary":
+	default:
+		s.writeAPIError(writer, request, http.StatusBadRequest, "invalid_request", "view must be full or summary")
+		return
+	}
+	filter := node.Filter{
+		Search:           request.URL.Query().Get("search"),
+		Protocol:         request.URL.Query().Get("protocol"),
+		State:            request.URL.Query().Get("state"),
+		Limit:            limit,
+		Offset:           offset,
+		SkipHealthChecks: view == "summary",
+	}
+	items, err := s.nodes.List(request.Context(), filter)
 	if err != nil {
 		s.handleError(writer, request, err)
 		return
 	}
-	writeJSON(writer, http.StatusOK, map[string]any{
+	response := map[string]any{
 		"items":  items,
 		"limit":  limit,
 		"offset": offset,
-	})
+	}
+	// with_total=1 answers the size of the filtered set so a client can fetch
+	// the remaining pages concurrently. It is opt-in because it costs an extra
+	// COUNT on a collection that can hold thousands of rows.
+	if request.URL.Query().Get("with_total") == "1" {
+		total, countErr := s.nodes.Count(request.Context(), filter)
+		if countErr != nil {
+			s.handleError(writer, request, countErr)
+			return
+		}
+		response["total"] = total
+	}
+	writeJSON(writer, http.StatusOK, response)
 }
 
 func (s *Server) streamNodeChecks(writer http.ResponseWriter, request *http.Request, ids []string) {

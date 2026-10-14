@@ -18,6 +18,9 @@ func requestRemoteExec(ctx context.Context, socketPath, command string, timeout 
 		return ExecResult{}, fmt.Errorf("connect privileged exec helper: %w", err)
 	}
 	defer connection.Close()
+	stop := context.AfterFunc(requestContext, func() { _ = connection.Close() })
+	defer stop()
+	_ = connection.SetDeadline(time.Now().Add(timeout + 10*time.Second))
 	payload, err := json.Marshal(execRequest{
 		Command:        command,
 		TimeoutSeconds: int(timeout.Seconds()),

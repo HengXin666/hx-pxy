@@ -121,3 +121,45 @@ func TestSettingsRejectPrivateProbeTarget(t *testing.T) {
 		t.Fatalf("error = %v, want ErrInvalid", err)
 	}
 }
+
+// TestSettingsLogRetentionDefaultsAndValidation 断言 log_retention_days 的三件事:
+// 缺省是 30 天 (用户 2026-10-14 的要求), 存过 0 的文档仍然是"禁用"而不是被默认值覆盖,
+// 越界值被 Validate 拒绝。
+func TestSettingsLogRetentionDefaultsAndValidation(t *testing.T) {
+	if Default().LogRetentionDays != 30 {
+		t.Fatalf("default log_retention_days = %d, want 30", Default().LogRetentionDays)
+	}
+	// 一个只写了它认识的字段的设置文档: 缺失的键不能把保留策略变成 0。
+	repository := &memoryRepository{values: map[string]string{MetadataKey: `{"performance":{"log_level":"warning"}}`}}
+	settings, err := Load(context.Background(), repository)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if settings.LogRetentionDays != 30 {
+		t.Fatalf("log_retention_days = %d for a document that omits it, want 30", settings.LogRetentionDays)
+	}
+	// 显式存 0 = 操作者关掉了清理, Load 不能把它"修"回 30。
+	repository = &memoryRepository{values: map[string]string{MetadataKey: `{"log_retention_days":0}`}}
+	settings, err = Load(context.Background(), repository)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if settings.LogRetentionDays != 0 {
+		t.Fatalf("stored log_retention_days = %d, want 0", settings.LogRetentionDays)
+	}
+
+	for _, days := range []int{-1, 3651} {
+		candidate := Default()
+		candidate.LogRetentionDays = days
+		if err := Validate(candidate); !errors.Is(err, ErrInvalid) {
+			t.Fatalf("log_retention_days = %d: error = %v, want ErrInvalid", days, err)
+		}
+	}
+	for _, days := range []int{0, 30, 3650} {
+		candidate := Default()
+		candidate.LogRetentionDays = days
+		if err := Validate(candidate); err != nil {
+			t.Fatalf("log_retention_days = %d should be valid: %v", days, err)
+		}
+	}
+}

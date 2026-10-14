@@ -15,6 +15,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -29,6 +30,42 @@ import (
 	"github.com/HengXin666/hx-pxy/internal/store"
 	"github.com/HengXin666/hx-pxy/internal/subscription"
 )
+
+func TestCommandEnvironmentStripsLocalProxyVariables(t *testing.T) {
+	// A local proxy exported into the control plane's environment must not reach
+	// the managed data plane: Mihomo is a Go program and honours
+	// HTTP_PROXY/ALL_PROXY for its own provider, rule-set and geo fetches, so an
+	// inherited proxy silently rewrites the data plane's egress.
+	for name, value := range map[string]string{
+		"http_proxy":  "http://127.0.0.1:7890",
+		"HTTP_PROXY":  "http://127.0.0.1:7890",
+		"https_proxy": "http://127.0.0.1:7890",
+		"HTTPS_PROXY": "http://127.0.0.1:7890",
+		"all_proxy":   "socks5://127.0.0.1:7890",
+		"ALL_PROXY":   "socks5://127.0.0.1:7890",
+		"no_proxy":    "example.com",
+		"NO_PROXY":    "example.com",
+		"ftp_proxy":   "http://127.0.0.1:7890",
+	} {
+		t.Setenv(name, value)
+	}
+	t.Setenv("HX_KEEP_ME", "1")
+
+	environment := (&Manager{maxProcs: 3}).commandEnvironment()
+
+	for _, value := range environment {
+		name, _, _ := strings.Cut(value, "=")
+		if _, isProxy := proxyEnvironmentNames[strings.ToLower(name)]; isProxy {
+			t.Fatalf("commandEnvironment() leaked %q", value)
+		}
+	}
+	if !slices.Contains(environment, "HX_KEEP_ME=1") {
+		t.Fatalf("commandEnvironment() dropped an unrelated variable: %v", environment)
+	}
+	if !slices.Contains(environment, "GOMAXPROCS=3") {
+		t.Fatalf("commandEnvironment() lost the GOMAXPROCS pin: %v", environment)
+	}
+}
 
 func TestValidateEndpointAvailabilityRejectsPortOwnedByAnotherProcess(t *testing.T) {
 	occupied, err := net.Listen("tcp", "127.0.0.1:0")

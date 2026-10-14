@@ -12,6 +12,7 @@ import { OpsPage } from "@/components/terminal/ops-page"
 import { Input } from "@/components/ui/input"
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { createOsc7Scanner, quoteForShell } from "@/lib/terminal-cwd"
+import { createInputFramer } from "@/lib/terminal-input"
 import { subscribeTheme } from "@/lib/theme"
 import { cn } from "@/lib/utils"
 
@@ -257,17 +258,21 @@ export function TerminalPage({
     // re-sends every keystroke, so a reconnect used to echo `d` as `dd`.
     inputDisposableRef.current?.dispose()
     inputDisposableRef.current = null
-    let pendingInput = ""
-    let inputTimer: number | null = null
-    const flushInput = () => {
-      if (inputTimer !== null) window.clearTimeout(inputTimer)
-      inputTimer = null
-      const socket = socketRef.current
-      if (pendingInput && socket && socket.readyState === WebSocket.OPEN) {
-        socket.send(JSON.stringify({ type: "input", data: pendingInput }))
-      }
-      pendingInput = ""
-    }
+    // Keystrokes are batched into short frames and every frame goes through
+    // chunkTerminalInput: a paste is one big onData callback, and a frame above
+    // the server's read limit makes coder/websocket close the whole socket with
+    // StatusMessageTooBig — which the page could only surface as an unstable
+    // terminal. See web/src/lib/terminal-input.ts.
+    const inputFramer = createInputFramer({
+      send: (frame) => {
+        const socket = socketRef.current
+        if (socket && socket.readyState === WebSocket.OPEN) {
+          socket.send(JSON.stringify({ type: "input", data: frame }))
+        }
+      },
+      schedule: (callback, delayMs) => window.setTimeout(callback, delayMs),
+      cancel: (handle) => window.clearTimeout(handle as number),
+    })
     if (!isReconnect) {
       terminal.reset()
     }
@@ -355,6 +360,9 @@ export function TerminalPage({
         keepAliveRef.current = null
       }
       socketRef.current = null
+      // Drop any half-batched keystrokes: the socket is gone, so flushing them
+      // would only re-send into a closed connection on the next render.
+      inputFramer.reset()
       osc7Ref.current?.reset()
       // Refresh 2FA/session state: when the server revoked the session (2FA
       // window lapsed, logout-all, ...) the UI must switch back to the unlock
@@ -396,15 +404,7 @@ export function TerminalPage({
     osc7Ref.current = createOsc7Scanner()
     const inputDisposable = terminal.onData((data) => {
       if (!socketRef.current || socketRef.current.readyState !== WebSocket.OPEN) return
-      // Collapse safe keystrokes into one frame (≤12ms) so weak round-trips do
-      // not make typing feel laggy.
-      pendingInput += data
-      const isControl = /[\x00-\x1f]/.test(data) || data === "\x7f"
-      if (isControl || pendingInput.length >= 1024) {
-        flushInput()
-      } else if (inputTimer === null) {
-        inputTimer = window.setTimeout(flushInput, 12)
-      }
+      inputFramer.push(data)
     })
 
     inputDisposableRef.current = inputDisposable

@@ -16,7 +16,7 @@ Status: implemented
 
 低于 `2xl` 走单列: 外壳不锁高, 页面自己滚动, 列表按内容长高, 并保留 `min-h-48` 兜底。`2xl` 之上外壳锁高, 列表才用 `2xl:flex-1 2xl:min-h-0` 在自身盒子内滚动。
 
-列表**独占整行**, 不再与任何常驻面板并排。创建表单是弹窗 (见 .agents/notes/implemented/simplification/2026-09-29-proxy-service-create-dialog.md), 打开时覆盖在页面上, 关闭时列表拿回全部宽度。于是宽度上只剩一个约束 —— 行内容对宽度的硬需求, 由 `truncate` + `shrink-0` 兜底, 不再需要靠"把断点抬高到某一列够用"来间接满足。
+列表**独占整行**, 不再与任何常驻面板并排。创建表单是弹窗 (见 .agents/notes/implemented/simplification/2026-09-29-proxy-service-create-dialog.md), 打开时覆盖在页面上, 关闭时列表拿回全部宽度。于是宽度上只剩一个约束 —— 行内容对宽度的硬需求, 桌面由 `truncate` + `shrink-0` 兜底，低于 lg 时名称独占一行、徽章换行，避免名称被压到零宽, 不再需要靠"把断点抬高到某一列够用"来间接满足。
 
 断点从 `xl` 抬到 `2xl` 是为了高度锁与列表高度一致, 不是为了腾宽度; 宽度问题已由"不再分列"解决。
 
@@ -48,3 +48,5 @@ Status: implemented
 - App 外壳里 routing 的 `overflow-hidden / h-full` 与页面断点一致地停在 `2xl`; 终端页仍用 `lg`, 互不影响。
 - 行的可点击区域与展开默认值见 .agents/notes/implemented/simplification/2026-09-29-routing-rows-start-collapsed.md。
 - 创建表单从常驻右栏改为弹窗, 见 .agents/notes/implemented/simplification/2026-09-29-proxy-service-create-dialog.md。
+
+web/e2e/network-routing-regression.mjs 验证 390px 手机宽度名称可见与无横向溢出。

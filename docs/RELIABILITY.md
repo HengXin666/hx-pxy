@@ -604,3 +604,11 @@ inactive -> pending -> firing -> acknowledged/silenced -> resolved
 - [x] 30 天统计清理和聚合测试通过。
 - [ ] CPU、RSS、连接数和吞吐基准报告已归档。
 - [ ] 至少完成一次控制面崩溃、数据面崩溃和整机重启演练。
+
+## 网络操作与日志保留
+
+网络修复限显式 IPv4 转发开关，要求确认、认证及浏览器 2FA，命令有超时且串行执行。
+TUN 权限 drop-in 不随安装自动启用；应用失败保留既有回滚机制。
+生产日志使用独立 journald namespace 保留 30 天，不全局清理共享 journal。
+文件日志按大小/年龄轮转并定时清理，保护当前实例和其他存活 socket。
+范围、部署与无法自动消除的其他 TUN 干扰见 [网络运维](NETWORK_OPERATIONS.md)。

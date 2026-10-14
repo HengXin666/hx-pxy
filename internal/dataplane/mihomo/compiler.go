@@ -41,6 +41,7 @@ type Endpoint struct {
 }
 
 type Compiled struct {
+	TUNDevice        string
 	YAML             []byte
 	Endpoints        []Endpoint
 	ProxyCount       int
@@ -284,8 +285,16 @@ func (c *Compiler) Compile(ctx context.Context) (Compiled, error) {
 	compiledRules = append(compiledRules, sharedInboundRules...)
 	compiledRules = append(compiledRules, routingrules.Compile(routeConfig, groups, listeners, listenerConfigName)...)
 	compiledRules = append(compiledRules, residentialFallbackRules...)
+	tun, tunRule, err := compileTUN(settings, groups)
+	if err != nil {
+		return Compiled{}, err
+	}
+	if tunRule != "" {
+		compiledRules = append(compiledRules, tunRule)
+	}
 	compiledRules = append(compiledRules, "MATCH,DIRECT")
 	document := map[string]any{
+		"tun":       tun,
 		"mode":      "rule",
 		"log-level": settings.Performance.LogLevel,
 		"ipv6":      settings.DNS.IPv6,
@@ -319,6 +328,12 @@ func (c *Compiler) Compile(ctx context.Context) (Compiled, error) {
 		return Compiled{}, fmt.Errorf("encode mihomo configuration: %w", err)
 	}
 	return Compiled{
+		TUNDevice: func() string {
+			if tunRule != "" {
+				return managedTUNDevice
+			}
+			return ""
+		}(),
 		YAML:             encoded,
 		Endpoints:        endpoints,
 		ProxyCount:       len(proxies),

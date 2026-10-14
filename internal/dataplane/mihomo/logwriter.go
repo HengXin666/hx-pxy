@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"time"
 )
 
 type rotatingLogWriter struct {
@@ -15,6 +16,7 @@ type rotatingLogWriter struct {
 	backups  int
 	file     *os.File
 	size     int64
+	openedAt time.Time
 }
 
 func newRotatingLogWriter(path string, maxBytes int64, backups int) (*rotatingLogWriter, error) {
@@ -76,7 +78,8 @@ func (w *rotatingLogWriter) Write(content []byte) (int, error) {
 	if int64(len(content)) > w.maxBytes {
 		content = content[len(content)-int(w.maxBytes):]
 	}
-	if w.size > 0 && w.size+int64(len(content)) > w.maxBytes {
+	// Age rotation prevents a low-volume active file accumulating months of logs.
+	if w.size > 0 && (w.size+int64(len(content)) > w.maxBytes || time.Since(w.openedAt) >= 24*time.Hour) {
 		if err := w.rotate(); err != nil {
 			return 0, err
 		}
@@ -115,6 +118,7 @@ func (w *rotatingLogWriter) open() error {
 	}
 	w.file = file
 	w.size = info.Size()
+	w.openedAt = info.ModTime()
 	return nil
 }
 

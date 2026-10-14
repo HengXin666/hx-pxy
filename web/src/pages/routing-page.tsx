@@ -1,7 +1,8 @@
-import { useCallback, useEffect, useMemo, useState } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { Activity, BookOpen, Cable, CheckCircle2, ChevronDown, ChevronRight, CircleAlert, Link2, ListTree, LoaderCircle, Network, Pencil, Plus, RefreshCw, Save, ScrollText, Server } from "lucide-react"
 
 import { ConfirmDialog } from "@/components/confirm-dialog"
+import { ActiveConnectionsPanel } from "@/components/active-connections"
 import { CreateProxyServiceForm } from "@/components/create-proxy-service-form"
 import { EditProxyServiceForm } from "@/components/edit-proxy-service-form"
 import { LiveLogsPanel, TrafficPanel } from "@/components/service-observability"
@@ -9,11 +10,12 @@ import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
-import { api } from "@/lib/api"
+import { api, invalidateQueries } from "@/lib/api"
 import { matchesRegion, regionLabel, strategyLabel } from "@/lib/proxy-groups"
 import { serviceShape, shapeMeta, type ServiceShape } from "@/lib/service-shape"
-import type { DataPlaneStatus, ListenerRecord, NodeRecord, ProxyGroup, ResidentialChannel, RoutingAction, RoutingRulesConfig, RoutingRuleSet, SharedInboundSettings, Subscription } from "@/lib/types"
+import type { DataPlaneStatus, ListenerRecord, NetworkAddresses, NodeRecord, ProxyGroup, ResidentialChannel, RoutingAction, RoutingRulesConfig, RoutingRuleSet, SharedInboundSettings, Subscription } from "@/lib/types"
 import { cn, formatDate } from "@/lib/utils"
+import { dockerEndpoint } from "@/lib/docker-endpoint"
 
 interface RoutingPageProps {
   onNotice: (message: string, tone?: "success" | "error") => void
@@ -30,6 +32,13 @@ export function RoutingPage({ onNotice }: RoutingPageProps) {
   // Shared-inbound settings decide whether a new service opens its own port or
   // joins the one-client entry points; the banner and the create form read it.
   const [sharedInbound, setSharedInbound] = useState<SharedInboundSettings | null>(null)
+  // Host addresses for "use this from a container". A container cannot dial the
+  // listener's loopback address (inside the container 127.0.0.1 is itself) nor
+  // the public Cloudflare domain, so the copy action needs the docker bridge
+  // gateway. See api.systemNetwork().
+  const [network, setNetwork] = useState<NetworkAddresses | null>(null)
+  const loadVersion = useRef(0)
+  const [membersLoading, setMembersLoading] = useState(true)
   const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState(false)
   const [deleteTarget, setDeleteTarget] = useState<{ listener: ListenerRecord; group?: ProxyGroup } | null>(null)
@@ -40,12 +49,22 @@ export function RoutingPage({ onNotice }: RoutingPageProps) {
   const [showCreate, setShowCreate] = useState(false)
 
   const load = useCallback(async () => {
+    const version = ++loadVersion.current
     setLoading(true)
+    setMembersLoading(true)
+    // Inventory and runtime health must not hold the service list hostage.
+    const members = api.listNodes(undefined, { health: false }).then((result) => {
+      if (version === loadVersion.current) setNodes(result.items.filter((item) => !["disabled", "retired"].includes(item.lifecycle_state)))
+    }).catch((error) => {
+      if (version === loadVersion.current) onNotice(error instanceof Error ? error.message : "节点加载失败", "error")
+    }).finally(() => { if (version === loadVersion.current) setMembersLoading(false) })
+    void api.dataPlaneStatus().then((result) => { if (version === loadVersion.current) setStatus(result) }).catch(() => {})
+    void api.systemNetwork().then((result) => { if (version === loadVersion.current) setNetwork(result) }).catch(() => {})
     try {
-      const [nodeResult, subscriptionResult, groupResult, listenerResult, statusResult, ruleResult, residentialResult, settingsResult] = await Promise.all([
-        api.listNodes(), api.listSubscriptions(), api.listProxyGroups(), api.listListeners(), api.dataPlaneStatus(), api.routingRules(), api.listResidentialChannels(), api.globalSettings(),
+      const [subscriptionResult, groupResult, listenerResult, ruleResult, residentialResult, settingsResult] = await Promise.all([
+        api.listSubscriptions(), api.listProxyGroups(), api.listListeners(), api.routingRules(), api.listResidentialChannels(), api.globalSettings(),
       ])
-      setNodes(nodeResult.items.filter((item) => !["disabled", "retired"].includes(item.lifecycle_state)))
+      if (version !== loadVersion.current) return
       setSubscriptions(subscriptionResult.items.filter((item) => item.enabled))
       setGroups(groupResult.items)
       // Members of a shared entry point keep their own row (their credential
@@ -58,17 +77,19 @@ export function RoutingPage({ onNotice }: RoutingPageProps) {
       // collapsed and a reload must not re-open them.
       // 见 .agents/notes/implemented/simplification/2026-09-29-routing-rows-start-collapsed.md
       setResidentialChannels(residentialResult.items)
-      setStatus(statusResult)
       setRoutingRules(ruleResult)
       setSharedInbound(settingsResult.shared_inbound ?? null)
+      // A missing address list only disables the Docker copy action; it must
+      // not fail the whole page load.
     } catch (error) {
       onNotice(error instanceof Error ? error.message : "加载代理服务失败", "error")
     } finally {
-      setLoading(false)
+      if (version === loadVersion.current) setLoading(false)
     }
+    await members
   }, [onNotice])
 
-  useEffect(() => { void load() }, [load])
+  useEffect(() => { void load(); return () => { loadVersion.current++ } }, [load])
 
   // Resolve each service's member list once per data load instead of on every
   // render; with thousands of nodes this filter chain is the page's hot path.
@@ -136,6 +157,10 @@ export function RoutingPage({ onNotice }: RoutingPageProps) {
     }
   }
 
+  // Prefer a bridge candidate over LAN; reachability still depends on the
+  // selected container network, listener binding and host firewall.
+  const dockerHost = network?.docker_gateway?.trim() || network?.lan_addresses?.[0] || ""
+
   return (
     <div className="space-y-4 2xl:flex 2xl:h-full 2xl:min-h-0 2xl:flex-col 2xl:gap-4 2xl:space-y-0">
       <div className="flex shrink-0 flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
@@ -144,13 +169,15 @@ export function RoutingPage({ onNotice }: RoutingPageProps) {
           <p className="mt-1 max-w-3xl text-sm leading-5 text-muted-foreground">每项服务同时定义入口 IP、端口、登录账号，以及它可以使用的跨订阅节点规则。</p>
         </div>
         <div className="grid w-full grid-cols-3 gap-2 sm:flex sm:w-auto sm:shrink-0">
-          <Button variant="outline" onClick={() => void load()} disabled={loading || busy}><RefreshCw className={loading ? "animate-spin" : ""} />刷新</Button>
+          <Button variant="outline" onClick={() => { invalidateQueries(); void load() }} disabled={loading || membersLoading || busy}><RefreshCw className={loading ? "animate-spin" : ""} />刷新</Button>
           <Button variant="outline" onClick={() => void apply()} disabled={busy}>{busy ? <LoaderCircle className="animate-spin" /> : <Server />}重新应用</Button>
-          <Button onClick={() => setShowCreate(true)}><Plus />新建代理服务</Button>
+          <Button disabled={membersLoading || loading} onClick={() => setShowCreate(true)}><Plus />新建代理服务</Button>
         </div>
       </div>
 
+      {membersLoading && <p role="status" className="text-xs text-muted-foreground">正在加载节点成员，服务入口已可查看…</p>}
       <div className="shrink-0"><DataPlaneBand status={status} loading={loading} /></div>
+      <ActiveConnectionsPanel />
 
       {sharedInbound?.mode === "shared" && (
         <div className="flex shrink-0 flex-wrap items-center gap-x-3 gap-y-1 rounded-md border border-info-border bg-info-muted px-3 py-2 text-xs text-info-foreground">
@@ -174,13 +201,13 @@ export function RoutingPage({ onNotice }: RoutingPageProps) {
           {listeners.length === 0 ? <EmptyState onCreate={() => setShowCreate(true)} /> : <div className="min-h-48 divide-y overflow-y-auto 2xl:min-h-0 2xl:flex-1">{listeners.map((listener) => {
             const group = groups.find((item) => item.id === listener.proxy_group_id)
             const residential = residentialChannels.find((channel) => channel.listener_id === listener.id)
-            return <ServiceRow key={listener.id} listener={listener} group={group} groups={groups} routingRules={routingRules} nodes={serviceNodes.get(listener.id) ?? []} subscriptions={subscriptions} allNodes={nodes} residential={residential} expanded={expanded.has(listener.id)} editing={editing === listener.id} onToggle={() => setExpanded((current) => { const next = new Set(current); if (next.has(listener.id)) next.delete(listener.id); else next.add(listener.id); return next })} onEdit={() => { setExpanded((current) => new Set(current).add(listener.id)); setEditing(listener.id) }} onCloseEdit={() => setEditing(null)} onRoutingChanged={setRoutingRules} onChanged={async () => { setEditing(null); await load() }} onDelete={() => setDeleteTarget({ listener, group })} onNotice={onNotice} />
+            return <ServiceRow key={listener.id} listener={listener} group={group} groups={groups} routingRules={routingRules} nodes={serviceNodes.get(listener.id) ?? []} subscriptions={subscriptions} allNodes={nodes} residential={residential} dockerHost={dockerHost} expanded={expanded.has(listener.id)} editing={editing === listener.id} onToggle={() => setExpanded((current) => { const next = new Set(current); if (next.has(listener.id)) next.delete(listener.id); else next.add(listener.id); return next })} onEdit={() => { setExpanded((current) => new Set(current).add(listener.id)); setEditing(listener.id) }} onCloseEdit={() => setEditing(null)} onRoutingChanged={setRoutingRules} onChanged={async () => { setEditing(null); await load() }} onDelete={() => setDeleteTarget({ listener, group })} onNotice={onNotice} />
           })}</div>}
         </section>
       </div>
 
       {showCreate && (
-        <CreateProxyServiceForm nodes={nodes} subscriptions={subscriptions} sharedInbound={sharedInbound} onCreated={load} onCancel={() => setShowCreate(false)} onNotice={onNotice} />
+        <CreateProxyServiceForm nodes={nodes} subscriptions={subscriptions} residentialChannels={residentialChannels} sharedInbound={sharedInbound} onCreated={load} onCancel={() => setShowCreate(false)} onNotice={onNotice} />
       )}
 
       <ConfirmDialog open={deleteTarget !== null} title="删除代理服务" description={deleteDescription(deleteTarget, listeners)} busy={busy} onCancel={() => setDeleteTarget(null)} onConfirm={() => void removeService()} />
@@ -265,7 +292,7 @@ function isPublicBindAddress(value: string): boolean {
   return value !== "127.0.0.1" && value !== "::1" && value !== "0.0.0.0" && value !== "::" && !value.startsWith("127.")
 }
 
-function ServiceRow({ listener, group, groups, routingRules, nodes, subscriptions, allNodes, residential, expanded, editing, onToggle, onEdit, onCloseEdit, onRoutingChanged, onChanged, onDelete, onNotice }: { listener: ListenerRecord; group?: ProxyGroup; groups: ProxyGroup[]; routingRules: RoutingRulesConfig; nodes: NodeRecord[]; subscriptions: Subscription[]; allNodes: NodeRecord[]; residential?: ResidentialChannel; expanded: boolean; editing: boolean; onToggle: () => void; onEdit: () => void; onCloseEdit: () => void; onRoutingChanged: (config: RoutingRulesConfig) => void; onChanged: () => Promise<void>; onDelete: () => void; onNotice: RoutingPageProps["onNotice"] }) {
+function ServiceRow({ listener, group, groups, routingRules, nodes, subscriptions, allNodes, residential, dockerHost, expanded, editing, onToggle, onEdit, onCloseEdit, onRoutingChanged, onChanged, onDelete, onNotice }: { listener: ListenerRecord; group?: ProxyGroup; groups: ProxyGroup[]; routingRules: RoutingRulesConfig; nodes: NodeRecord[]; subscriptions: Subscription[]; allNodes: NodeRecord[]; residential?: ResidentialChannel; dockerHost: string; expanded: boolean; editing: boolean; onToggle: () => void; onEdit: () => void; onCloseEdit: () => void; onRoutingChanged: (config: RoutingRulesConfig) => void; onChanged: () => Promise<void>; onDelete: () => void; onNotice: RoutingPageProps["onNotice"] }) {
   const [action, setAction] = useState("")
   const [detailTab, setDetailTab] = useState("members")
   const spec = group?.source_spec
@@ -292,6 +319,21 @@ function ServiceRow({ listener, group, groups, routingRules, nodes, subscription
     const address = endpointAddress(listener, publicEndpoint) || `${listener.bind_address}:${listener.port}`
     const ok = await copyText(address)
     onNotice(ok ? "入口地址已复制" : "复制失败，请手动复制", ok ? "success" : "error")
+  }
+
+  // A container's 127.0.0.1 is the container itself and the configured public
+  // endpoint is usually an edge domain, so "copy for docker" must be the host
+  // address on the docker bridge. It is offered next to the plain endpoint copy
+  // rather than replacing it: which one is right depends on where the client
+  // runs, and the page cannot know.
+  async function copyDockerAddress() {
+    const address = dockerEndpoint(listener, dockerHost)
+    if (!address) {
+      onNotice("该入口不能作为容器直连代理：请使用带认证的非环回 HTTP / SOCKS / Mixed 入口；WS 入口需客户端内核落地", "error")
+      return
+    }
+    const ok = await copyText(address)
+    onNotice(ok ? `Docker 候选地址已复制：${address}（还需配置入口认证，连通性取决于容器网络和防火墙）` : "复制失败，请手动复制", ok ? "success" : "error")
   }
 
   async function copyResidentialURL(kind: "clash" | "control") {
@@ -330,6 +372,7 @@ function ServiceRow({ listener, group, groups, routingRules, nodes, subscription
     if (value === "residential-clash") void copyResidentialURL("clash")
     else if (value === "residential-control") void copyResidentialURL("control")
     else if (value === "address") void copyEndpoint()
+    else if (value === "docker") void copyDockerAddress()
     else if (value === "auth-uri") void copyConnectionURI()
     else if (value === "edit") { setDetailTab("edit"); onEdit() }
     else if (value === "delete") onDelete()
@@ -350,10 +393,10 @@ function ServiceRow({ listener, group, groups, routingRules, nodes, subscription
         <Button variant="ghost" size="icon" className="size-7 shrink-0" onClick={(event) => { event.stopPropagation(); onToggle() }} aria-label={expanded ? "收起节点" : "展开节点"}>{expanded ? <ChevronDown /> : <ChevronRight />}</Button>
         <div className="flex size-8 shrink-0 items-center justify-center rounded-md border bg-card text-muted-foreground"><Cable className="size-4" /></div>
         <div className="min-w-0 flex-1">
-          {/* 徽章与地址都不换行: 换行会把整行撑高, 一个服务看起来像三行。 */}
-          <div className="flex min-w-0 items-center gap-1.5">
+          {/* Small screens reserve a full line for the name instead of letting badges shrink it to zero. */}
+          <div className="flex min-w-0 flex-wrap items-center gap-1.5 lg:flex-nowrap">
             {/* 标题必须是**这个服务**的名字, 不能借用组名。一个 listener 被钉到节点时, 它指向的组只是共享的 schema 锚组 (见 egressAnchorGroup): 借组名会让三个不同服务全都显示成同一个名字 (实测: ioa-vm / outlook / soloHK04 / hk-new-01 四行都显示「良心云」), 操作员无法分辨在删哪一个。 */}
-            <span className="truncate font-medium" title={residential?.name || listener.name}>{residential?.name || listener.name}</span>
+            <span className="basis-full truncate font-medium lg:basis-auto" title={residential?.name || listener.name}>{residential?.name || listener.name}</span>
             {/* 形态徽章来自 source_class, 不是名字: 池 / 订阅 / 住宅 / 指定节点在行上必须一眼可分。 */}
             <Badge variant={shapeInfo.variant} className="shrink-0" title={shapeInfo.detail}>{shapeInfo.label}</Badge>
             <Badge variant="outline" className="shrink-0">{listener.kind.toUpperCase()}</Badge>
@@ -373,7 +416,7 @@ function ServiceRow({ listener, group, groups, routingRules, nodes, subscription
       </div>
       <div className="min-w-0"><div className="flex items-center gap-1.5 text-xs font-medium"><Network className="size-3.5 shrink-0" />{strategyText}</div><div className="mt-1 truncate text-[11px] text-muted-foreground" title={sourceText}>{sourceText}</div></div>
       <div className="w-full lg:w-[190px]">
-        <Select value={action} onValueChange={runAction}><SelectTrigger onClick={(event) => event.stopPropagation()} className="h-8"><Link2 className="mr-1 size-3.5" /><SelectValue placeholder="服务操作" /></SelectTrigger><SelectContent><SelectItem value="edit">编辑服务</SelectItem>{!residential && listener.share_path && <><SelectItem value="clash:Clash / Mihomo">复制 Clash / Mihomo 订阅</SelectItem><SelectItem value="v2rayn:v2rayN / v2rayNG">复制 v2rayN / v2rayNG 订阅</SelectItem><SelectItem value="v2rayn:Shadowrocket">复制 Shadowrocket 订阅</SelectItem><SelectItem value="sing-box:sing-box / NekoBox">复制 sing-box / NekoBox 订阅</SelectItem><SelectItem value="auth-uri">复制认证连接 URI</SelectItem></>}{residential ? <><SelectItem value="residential-clash">复制 Clash / Mihomo 订阅</SelectItem><SelectItem value="residential-control">复制自动化控制 URL</SelectItem></> : <SelectItem value="address">复制入口地址</SelectItem>}<SelectItem value="delete" className="text-destructive">删除服务</SelectItem></SelectContent></Select>
+        <Select value={action} onValueChange={runAction}><SelectTrigger onClick={(event) => event.stopPropagation()} className="h-8"><Link2 className="mr-1 size-3.5" /><SelectValue placeholder="服务操作" /></SelectTrigger><SelectContent><SelectItem value="edit">编辑服务</SelectItem>{!residential && listener.share_path && <><SelectItem value="clash:Clash / Mihomo">复制 Clash / Mihomo 订阅</SelectItem><SelectItem value="v2rayn:v2rayN / v2rayNG">复制 v2rayN / v2rayNG 订阅</SelectItem><SelectItem value="v2rayn:Shadowrocket">复制 Shadowrocket 订阅</SelectItem><SelectItem value="sing-box:sing-box / NekoBox">复制 sing-box / NekoBox 订阅</SelectItem><SelectItem value="auth-uri">复制认证连接 URI</SelectItem></>}{residential ? <><SelectItem value="residential-clash">复制 Clash / Mihomo 订阅</SelectItem><SelectItem value="residential-control">复制自动化控制 URL</SelectItem></> : <><SelectItem value="address">复制入口地址</SelectItem></>}<SelectItem value="docker">复制 Docker 使用地址</SelectItem><SelectItem value="delete" className="text-destructive">删除服务</SelectItem></SelectContent></Select>
       </div>
     </div>
     {expanded && <div className="border-t bg-muted/70 px-3 py-3 sm:px-4">

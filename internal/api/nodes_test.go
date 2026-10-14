@@ -22,6 +22,10 @@ import (
 type fakeNodeService struct {
 	items    []node.Node
 	settings node.QualitySettings
+	// lastFilter records the projection the API asked for, so tests can assert
+	// that view=summary actually reaches the service instead of being parsed
+	// and dropped on the floor.
+	lastFilter node.Filter
 }
 
 func (service *fakeNodeService) QualitySettings(context.Context) (node.QualitySettings, error) {
@@ -50,6 +54,7 @@ func newNodeTestServer(t *testing.T, items []node.Node) *Server {
 }
 
 func (service *fakeNodeService) List(_ context.Context, filter node.Filter) ([]node.Node, error) {
+	service.lastFilter = filter
 	items := make([]node.Node, 0, len(service.items))
 	for _, item := range service.items {
 		if filter.Protocol != "" && item.Protocol != filter.Protocol {
@@ -61,6 +66,14 @@ func (service *fakeNodeService) List(_ context.Context, filter node.Filter) ([]n
 		items = append(items, item)
 	}
 	return items, nil
+}
+
+func (service *fakeNodeService) Count(_ context.Context, filter node.Filter) (int, error) {
+	items, err := service.List(context.Background(), filter)
+	if err != nil {
+		return 0, err
+	}
+	return len(items), nil
 }
 
 func (service *fakeNodeService) Get(_ context.Context, id string) (node.Node, error) {
@@ -202,6 +215,76 @@ func TestNodeAPIExposesMetadataWithoutCanonicalConfig(t *testing.T) {
 	items, ok := raw["items"].([]any)
 	if !ok || len(items) != 1 {
 		t.Fatalf("items = %#v", raw["items"])
+	}
+}
+
+func TestNodeAPILeanProjectionAndTotal(t *testing.T) {
+	t.Parallel()
+	nodes := &fakeNodeService{items: []node.Node{
+		{ID: "node-a", Protocol: "vless", LifecycleState: "healthy"},
+		{ID: "node-b", Protocol: "vless", LifecycleState: "candidate"},
+		{ID: "node-c", Protocol: "trojan", LifecycleState: "healthy"},
+	}}
+	server, err := NewServer(
+		&stubBundleService{},
+		slog.New(slog.NewTextHandler(io.Discard, nil)),
+		WithNodes(nodes),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	testServer := httptest.NewServer(server.Handler())
+	defer testServer.Close()
+
+	response, err := http.Get(testServer.URL + "/api/v1/nodes?view=summary&with_total=1&protocol=vless")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d", response.StatusCode)
+	}
+	var payload struct {
+		Items []node.Node `json:"items"`
+		Total *int        `json:"total"`
+	}
+	if err := json.NewDecoder(response.Body).Decode(&payload); err != nil {
+		t.Fatal(err)
+	}
+	if len(payload.Items) != 2 {
+		t.Fatalf("items = %d, want 2", len(payload.Items))
+	}
+	if payload.Total == nil || *payload.Total != 2 {
+		t.Fatalf("total = %v, want 2 (the filtered size, not the page size)", payload.Total)
+	}
+	if !nodes.lastFilter.SkipHealthChecks {
+		t.Fatal("view=summary did not reach the service as SkipHealthChecks")
+	}
+
+	// Without with_total the field must stay absent: the count is opt-in.
+	plain, err := http.Get(testServer.URL + "/api/v1/nodes?limit=1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer plain.Body.Close()
+	var raw map[string]json.RawMessage
+	if err := json.NewDecoder(plain.Body).Decode(&raw); err != nil {
+		t.Fatal(err)
+	}
+	if _, present := raw["total"]; present {
+		t.Fatal("total was returned without with_total=1")
+	}
+	if nodes.lastFilter.SkipHealthChecks {
+		t.Fatal("the default view must stay the full projection")
+	}
+
+	invalid, err := http.Get(testServer.URL + "/api/v1/nodes?view=lean")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer invalid.Body.Close()
+	if invalid.StatusCode != http.StatusBadRequest {
+		t.Fatalf("unknown view status = %d, want 400", invalid.StatusCode)
 	}
 }
 

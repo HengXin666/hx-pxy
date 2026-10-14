@@ -27,6 +27,7 @@ import (
 	"github.com/HengXin666/hx-pxy/internal/fleet"
 	"github.com/HengXin666/hx-pxy/internal/instance"
 	"github.com/HengXin666/hx-pxy/internal/listener"
+	"github.com/HengXin666/hx-pxy/internal/logretention"
 	"github.com/HengXin666/hx-pxy/internal/metrics"
 	"github.com/HengXin666/hx-pxy/internal/node"
 	"github.com/HengXin666/hx-pxy/internal/nodeparse"
@@ -478,6 +479,46 @@ func run(logger *slog.Logger) error {
 		MaxHeaderBytes:    32 << 10,
 	}
 
+	// 日志保留 (2026-10-14 用户要求): 只保留产品自己写的日志 30 天, 过期自动清理。
+	// 范围 = data 目录下的 mihomo.log* 轮转日志 + HOME 下陈旧的短运行时实例目录;
+	// 判定与白名单见 internal/logretention。
+	// 决策见 .agents/notes/implemented/feature/2026-10-14-log-retention-by-mtime.md。
+	logRetentionPolicies := logretention.DefaultPolicy(cfg.DataDirectory, os.Getenv("HOME"))
+	logRetentionWhitelist := logretention.Whitelist(
+		// 当前活跃实例目录: 同一台机器上由另一个运行目录派生, 但算法与数据面一致。
+		logretention.InstanceDirectory(os.Getenv("HOME"), filepath.Dir(cfg.RuntimeConfigPath)),
+		// 活跃日志文件: 数据面可能正被外部进程托管, 那条 socket 不属于本进程。
+		// 活跃目录下唯一的轮转日志文件也必须保留 —— 正在写的文件不该被清掉,
+		// 它由数据面自己的大小/年龄轮转管理 (见 mihomo.WithLogRotation)。
+		filepath.Join(filepath.Dir(cfg.RuntimeConfigPath), "mihomo.log"),
+	)
+	// 保留天数每次运行都从系统设置读取: 设置页改动后在下一个 tick 生效, 无需重启。
+	logRetentionResolver := func(ctx context.Context) (logretention.Plan, error) {
+		settings, err := systemsettings.Load(ctx, database)
+		if err != nil {
+			return logretention.Plan{}, fmt.Errorf("load log retention settings: %w", err)
+		}
+		days := settings.LogRetentionDays
+		if days > logretention.MaxDays {
+			days = logretention.MaxDays
+		}
+		policies := make([]logretention.Policy, 0, len(logRetentionPolicies))
+		for _, policy := range logRetentionPolicies {
+			policy.Days = days
+			policies = append(policies, policy)
+		}
+		return logretention.Plan{
+			Days:      days,
+			Policies:  policies,
+			Whitelist: logRetentionWhitelist,
+		}, nil
+	}
+	// Run 随 ctx 取消返回, 不留永久 goroutine (AGENTS.md §5); 启动时先跑一次。
+	logRetentionRunner, err := logretention.NewRunner(logRetentionResolver, logger, logretention.DefaultInterval)
+	if err != nil {
+		return err
+	}
+
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
@@ -497,7 +538,8 @@ func run(logger *slog.Logger) error {
 		serverErrors <- nil
 	}()
 
-	const backgroundTasks = 6
+	// 6 个 scheduler/service 后台任务 + 日志保留清理 = 7。
+	const backgroundTasks = 7
 	backgroundErrors := make(chan error, backgroundTasks)
 	runBackground := func(name string, task func(context.Context) error) {
 		go func() {
@@ -525,6 +567,7 @@ func run(logger *slog.Logger) error {
 	runBackground("alert_scheduler", alertScheduler.Run)
 	runBackground("fleet_scheduler", fleetService.Run)
 	runBackground("traffic_service", trafficService.Run)
+	runBackground("log_retention", logRetentionRunner.Run)
 	drainBackground := func(alreadyRead int) error {
 		var joined error
 		for index := alreadyRead; index < backgroundTasks; index++ {

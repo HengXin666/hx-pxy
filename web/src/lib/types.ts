@@ -172,6 +172,10 @@ export interface NodeList {
   items: NodeRecord[]
   limit: number
   offset: number
+  // Present only when the request asked with_total=1. It is the size of the
+  // whole filtered set, which is what lets the client fetch the remaining
+  // pages concurrently instead of walking offsets one at a time.
+  total?: number
 }
 
 export interface NodeCheckList {
@@ -193,6 +197,7 @@ export interface HealthTarget {
 }
 
 export interface GlobalSettings {
+  tun?: { enabled: boolean; proxy_group_id: string }
   quality: {
     check_interval_seconds: number
     timeout_seconds: number
@@ -224,6 +229,22 @@ export interface GlobalSettings {
   shared_inbound: SharedInboundSettings
   // Guard carries the operator's write-surface guards. See guard.deny_api_group_create.
   guard: GuardSettings
+  // How many days the product keeps the log files it writes itself (the
+  // managed Mihomo log and its byte-rotated backups) and the stale short
+  // runtime instance directories under ~/.hx-pxy-runtime. 0 disables the
+  // cleanup; the server default is 30.
+  log_retention_days: number
+}
+
+/**
+ * Host addresses a container can use to reach a listener bound on this host.
+ * See api.systemNetwork().
+ */
+export interface NetworkAddresses {
+  /** Host IPv4 on its docker bridge; empty when no bridge exists. */
+  docker_gateway?: string
+  /** Non-loopback host IPv4 addresses, bridge addresses first. */
+  lan_addresses: string[]
 }
 
 export interface GuardSettings {
@@ -427,15 +448,39 @@ export interface UpdateListenerRequest {
   enabled: boolean
 }
 
-export interface CreateProxyServiceRequest {
-  name: string
-  strategy: ProxyGroupStrategy
-  source_spec: ProxyGroupSourceSpec
-  empty_behavior?: "fail-closed" | "direct"
-  /** Group this service's egress is tunnelled through, at any depth. */
-  dialer_proxy_group_id?: string
-  listener: Omit<CreateListenerRequest, "proxy_group_id">
-}
+/** A listener whose egress anchor is decided by the create request around it. */
+type CreateProxyServiceListener = Omit<CreateListenerRequest, "proxy_group_id">
+
+/**
+ * Two mutually exclusive create shapes:
+ *
+ * - the historical one, which builds a group from name/strategy/source_spec;
+ * - a **reuse** one, whose listener names an existing enabled group
+ *   (a residential channel's group) and carries no group-creation field.
+ *
+ * The exclusion is enforced on the server with a 422 rather than by ignoring
+ * the extra fields: a caller that also describes a group would otherwise
+ * believe it created the group it described. See
+ * .agents/notes/implemented/feature/2026-10-14-reuse-existing-group-for-an-entry.md.
+ */
+export type CreateProxyServiceRequest =
+  | {
+      name: string
+      strategy: ProxyGroupStrategy
+      source_spec: ProxyGroupSourceSpec
+      empty_behavior?: "fail-closed" | "direct"
+      /** Group this service's egress is tunnelled through, at any depth. */
+      dialer_proxy_group_id?: string
+      listener: CreateProxyServiceListener
+    }
+  | {
+      /**
+       * Reuses an existing enabled proxy group as this service's egress. The
+       * listener is the only created object; the group keeps its own strategy,
+       * members and failure policy.
+       */
+      listener: CreateProxyServiceListener & { proxy_group_id: string }
+    }
 
 export interface UpdateProxyServiceRequest {
   group_id: string

@@ -13,6 +13,7 @@ import type {
   GlobalSettings,
   ListenerList,
   ListenerRecord,
+  NetworkAddresses,
   NodeCheckResult,
   NodeCheckList,
   NodeCheckProgress,
@@ -51,6 +52,11 @@ import type {
   FleetWorker,
 } from "@/lib/types"
 
+import { cacheableQuery, QueryCache } from "./query-cache"
+
+const queryCache = new QueryCache()
+export function invalidateQueries() { queryCache.clear() }
+
 export class ApiError extends Error {
   readonly status: number
   readonly code?: string
@@ -65,10 +71,22 @@ export class ApiError extends Error {
   }
 }
 
+export type NetworkSnapshot = {
+  interfaces: Array<{ name: string; addresses: string[]; up: boolean; kind: string }>
+  ipv4_forwarding: boolean
+  tun_available: boolean
+}
+export type ActiveConnectionSnapshot = {
+  items: Array<{ id: string; source_ip: string; source_port: string; destination: string; destination_port: string; network: string; inbound: string; origin: string; upload: number; download: number }>
+  total: number
+  sampled_at: string
+}
+
 let csrfToken = ""
 let onUnauthenticated: (() => void) | null = null
 
 export function setCsrfToken(token: string) {
+  if (token !== csrfToken || !token) invalidateQueries()
   csrfToken = token
 }
 
@@ -82,6 +100,17 @@ export function setUnauthenticatedHandler(handler: (() => void) | null) {
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
+  const method = (init?.method ?? "GET").toUpperCase()
+  if (method === "GET") {
+    if (!init && cacheableQuery(path)) return queryCache.read(path, () => fetchJSON<T>(path))
+    return fetchJSON<T>(path, init)
+  }
+  invalidateQueries()
+  try { return await fetchJSON<T>(path, init) }
+  finally { invalidateQueries() }
+}
+
+async function fetchJSON<T>(path: string, init?: RequestInit): Promise<T> {
   const headers = new Headers(init?.headers)
   if (init?.body && !headers.has("Content-Type") && !(init.body instanceof FormData)) {
     headers.set("Content-Type", "application/json")
@@ -96,6 +125,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     headers,
   })
   if (response.status === 401 && !path.startsWith("/api/v1/auth/")) {
+    invalidateQueries()
     onUnauthenticated?.()
   }
   if (!response.ok) {
@@ -509,19 +539,54 @@ export const api = {
    * the per-subscription node counts — was computed over a partial set. The
    * pool service showed `0/493 可用` when it held 1305 members. The server caps
    * a page at 1000, so the only correct shape is to keep asking.
+   *
+   * Two knobs keep that cheap, both measured on a 2750-node inventory:
+   *
+   * - `health: false` asks for the summary projection. Attaching the per-node
+   *   health-target samples costs ~240ms of a ~390ms page for 1000 nodes; the
+   *   proxy-service member lists never render them, so they must not pay for
+   *   them. The node inventory page keeps the full projection.
+   * - `with_total` lets the remaining pages be fetched in parallel. Walking
+   *   offsets serially costs one round trip per page (~0.44s + 0.19s + 0.23s
+   *   measured); with the total from the first page the rest are concurrent.
    */
-  async listNodes(filters?: { search?: string; protocol?: string; state?: string }): Promise<NodeList> {
+  async listNodes(
+    filters?: { search?: string; protocol?: string; state?: string },
+    options?: { health?: boolean },
+  ): Promise<NodeList> {
     const pageSize = 1000
-    const items: NodeRecord[] = []
-    for (let offset = 0; ; offset += pageSize) {
+    const url = (offset: number, withTotal: boolean) => {
       const query = new URLSearchParams({ limit: String(pageSize), offset: String(offset) })
       if (filters?.search) query.set("search", filters.search)
       if (filters?.protocol) query.set("protocol", filters.protocol)
       if (filters?.state) query.set("state", filters.state)
-      const page = await request<NodeList>(`/api/v1/nodes?${query.toString()}`)
-      items.push(...page.items)
-      if (page.items.length < pageSize) return { items, limit: pageSize, offset: 0 }
+      if (options?.health === false) query.set("view", "summary")
+      if (withTotal) query.set("with_total", "1")
+      return `/api/v1/nodes?${query.toString()}`
     }
+    const first = await request<NodeList>(url(0, true))
+    const items: NodeRecord[] = [...first.items]
+    if (first.items.length < pageSize) return { items, limit: pageSize, offset: 0, total: items.length }
+    if (typeof first.total !== "number") {
+      // A server that does not answer `total` (an older control plane, or one
+      // that ignored with_total) cannot be paged in parallel. Fall back to the
+      // serial walk rather than treating the first page as the whole set: doing
+      // the latter is exactly the silent truncation that made every derived
+      // count wrong before 2026-10-01.
+      for (let offset = pageSize; ; offset += pageSize) {
+        const page = await request<NodeList>(url(offset, false))
+        items.push(...page.items)
+        if (page.items.length < pageSize) return { items, limit: pageSize, offset: 0, total: items.length }
+      }
+    }
+    if (items.length >= first.total) return { items, limit: pageSize, offset: 0, total: first.total }
+    const offsets: number[] = []
+    for (let offset = pageSize; offset < first.total; offset += pageSize) offsets.push(offset)
+    for (let index = 0; index < offsets.length; index += 4) {
+      const pages = await Promise.all(offsets.slice(index, index + 4).map((offset) => request<NodeList>(url(offset, false))))
+      for (const page of pages) items.push(...page.items)
+    }
+    return { items, limit: pageSize, offset: 0, total: first.total }
   },
 
   checkNode(id: string): Promise<NodeCheckResult> {
@@ -550,6 +615,25 @@ export const api = {
   globalSettings(): Promise<GlobalSettings> {
     return request("/api/v1/settings")
   },
+
+  /**
+   * Host addresses a container can use to reach a bound listener.
+   *
+   * A container's 127.0.0.1 is the container itself and the public endpoint is
+   * normally a Cloudflare domain pointing at an edge, so neither can be copied
+   * into a docker compose/env file. The docker bridge gateway (172.17.0.1 by
+   * default) is reachable from every bridge network because the host routes
+   * between its bridges; lan_addresses is the fallback when no bridge exists.
+   */
+  systemNetwork(): Promise<NetworkAddresses> {
+    return request("/api/v1/system/network")
+  },
+
+  networkInspect(): Promise<NetworkSnapshot> { return request("/api/v1/system/network/inspect") },
+  networkOperation(action: string, container_id = "", confirm = false): Promise<{ exit_code: number; stdout: string; stderr: string }> {
+    return request("/api/v1/system/network/operations", { method: "POST", body: JSON.stringify({ action, container_id, confirm }) })
+  },
+  activeConnections(): Promise<ActiveConnectionSnapshot> { return request("/api/v1/connections") },
 
   updateGlobalSettings(payload: GlobalSettings): Promise<GlobalSettings> {
     return request("/api/v1/settings", {

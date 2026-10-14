@@ -1,5 +1,5 @@
 import { useMemo, useState, type FormEvent } from "react"
-import { Cable, Gauge, LoaderCircle, Plus, Server } from "lucide-react"
+import { Cable, Gauge, Globe, LoaderCircle, Plus, Server } from "lucide-react"
 
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -9,11 +9,18 @@ import { Input } from "@/components/ui/input"
 import { api } from "@/lib/api"
 import { listenerKinds, matchesRegion, regionChoices, strategyChoices } from "@/lib/proxy-groups"
 import { shapeForSelection, shapeMeta, sourceClassLabel, type ServiceShape } from "@/lib/service-shape"
-import type { NodeRecord, ProxyGroupStrategy, SharedInboundSettings, Subscription } from "@/lib/types"
+import type { CreateListenerRequest, NodeRecord, ProxyGroupStrategy, ResidentialChannel, SharedInboundSettings, Subscription } from "@/lib/types"
+import { cn } from "@/lib/utils"
 
 interface CreateProxyServiceFormProps {
   nodes: NodeRecord[]
   subscriptions: Subscription[]
+  /**
+   * Residential channels are not subscriptions: each one already owns a proxy
+   * group (provider + channel), so a new service can reuse it instead of
+   * building a second group for the same exits.
+   */
+  residentialChannels: ResidentialChannel[]
   sharedInbound: SharedInboundSettings | null
   onCreated: () => Promise<void>
   onCancel: () => void
@@ -29,15 +36,17 @@ interface CreateProxyServiceFormProps {
  * 它现在的形态与「新建订阅」「新建渠道」一致。见
  * .agents/notes/implemented/simplification/2026-09-29-proxy-service-create-dialog.md。
  */
-export function CreateProxyServiceForm({ nodes, subscriptions, sharedInbound, onCreated, onCancel, onNotice }: CreateProxyServiceFormProps) {
+export function CreateProxyServiceForm({ nodes, subscriptions, residentialChannels, sharedInbound, onCreated, onCancel, onNotice }: CreateProxyServiceFormProps) {
   // In shared mode the bind address and port belong to the aggregate listener,
   // so the form shows them read-only and the backend derives the real endpoint.
   const shared = sharedInbound?.mode === "shared"
   const [name, setName] = useState("")
   const [strategy, setStrategy] = useState<ProxyGroupStrategy>("manual")
-  const [sourceMode, setSourceMode] = useState<"direct" | "rule" | "manual">("direct")
+  const [sourceMode, setSourceMode] = useState<"direct" | "rule" | "manual" | "residential">("direct")
   const [selectedSubscriptions, setSelectedSubscriptions] = useState<string[]>([])
   const [selectedNodes, setSelectedNodes] = useState<string[]>([])
+  // 住宅渠道是单选: 一个服务复用一个渠道已建的代理组。
+  const [selectedChannelID, setSelectedChannelID] = useState("")
   // 默认**不选地区** = 不限地区。
   // See .agents/notes/implemented/feature/2026-10-03-region-filter-defaults-to-none.md
   // 旧默认 ["jp"] 等于替用户加了条件: 选一个不含日本节点的订阅 (实测 shadowmere
@@ -67,6 +76,13 @@ export function CreateProxyServiceForm({ nodes, subscriptions, sharedInbound, on
   )
   const knobs = shapeMeta[shape].knobs
   const effectiveStrategy: ProxyGroupStrategy = knobs.strategies.includes(strategy) ? strategy : (knobs.strategies[0] ?? "manual")
+  // 停用的渠道不是候选: 它的组在数据面也被停用, 服务端会以 422 拒绝 (判据只有
+  // enabled —— 前端不另立一套更严或更松的判据)。选中项在渠道被停用/删除后立即
+  // 失效, 而不是留着一个提交必失败的选中态。
+  const selectedChannel = useMemo(
+    () => residentialChannels.find((item) => item.id === selectedChannelID && item.enabled),
+    [residentialChannels, selectedChannelID],
+  )
   const estimated = useMemo(() => sourceMode === "direct" ? 1 : sourceMode === "manual" ? selectedNodes.length : nodes.filter((node) => {
     if (!node.sources.some((source) => selectedSubscriptions.includes(source.subscription_id))) return false
     if (knobs.maxLatency && (node.last_latency_ms == null || node.last_latency_ms > maxLatency)) return false
@@ -83,6 +99,25 @@ export function CreateProxyServiceForm({ nodes, subscriptions, sharedInbound, on
     }
     setSubmitting(true)
     try {
+      // 入口字段与来源无关: 住宅来源也只决定**出口是哪个组**, 协议/绑定/认证仍按
+      // 共享入口或普通入口的既有规则处理, 不引入住宅专属字段。
+      const listener: Omit<CreateListenerRequest, "proxy_group_id"> = {
+        name: `${name.trim()} 入口`, kind, bind_address: bindAddress.trim(), port,
+        auth: authEnabled ? { username: username.trim(), password } : undefined,
+        transport: advanced ? { type: "ws", ws_path: wsPath.trim() } : undefined,
+        public_endpoint: publicHost.trim() ? { host: publicHost.trim(), port: advanced ? 443 : (Number(publicPort) || port), tls: advanced || publicTLS } : undefined,
+      }
+      if (sourceMode === "residential") {
+        // 复用渠道已建的代理组: **不下发** name/strategy/source_spec。组不是这次
+        // 创建出来的, 它保留自己的策略与成员; 服务端也会拒绝一个"既复用又描述"
+        // 的请求, 而不是安静地忽略那些字段。
+        if (!selectedChannel) { onNotice("请选择一个可用的住宅渠道", "error"); return }
+        await api.createProxyService({ listener: { ...listener, proxy_group_id: selectedChannel.proxy_group_id } })
+        await onCreated()
+        onNotice(`代理服务已创建，出口复用住宅渠道「${selectedChannel.name}」`)
+        onCancel()
+        return
+      }
       // Only the knobs this shape has are sent. Sending an inapplicable one is
       // not a harmless no-op: `max_latency_ms` on a pool drops every member
       // that has never answered — i.e. the whole group. See lib/service-shape.ts.
@@ -100,12 +135,7 @@ export function CreateProxyServiceForm({ nodes, subscriptions, sharedInbound, on
         name: name.trim(), strategy: effectiveStrategy,
         source_spec: sourceMode === "direct" ? { node_ids: [], include_direct: true } : sourceMode === "rule" ? ruleSpec : { node_ids: selectedNodes, include_direct: false },
         empty_behavior: sourceMode === "direct" ? "direct" : "fail-closed",
-        listener: {
-          name: `${name.trim()} 入口`, kind, bind_address: bindAddress.trim(), port,
-          auth: authEnabled ? { username: username.trim(), password } : undefined,
-          transport: advanced ? { type: "ws", ws_path: wsPath.trim() } : undefined,
-          public_endpoint: publicHost.trim() ? { host: publicHost.trim(), port: advanced ? 443 : (Number(publicPort) || port), tls: advanced || publicTLS } : undefined,
-        },
+        listener,
       })
       await onCreated()
       onNotice(shared ? `代理服务已加入共享入口：${username.trim()}` : `代理服务已启动：${bindAddress}:${port}`)
@@ -114,7 +144,8 @@ export function CreateProxyServiceForm({ nodes, subscriptions, sharedInbound, on
     finally { setSubmitting(false) }
   }
 
-  const validSource = sourceMode === "direct" || (sourceMode === "rule" ? selectedSubscriptions.length > 0 : selectedNodes.length > 0)
+  const validSource = sourceMode === "direct"
+    || (sourceMode === "rule" ? selectedSubscriptions.length > 0 : sourceMode === "manual" ? selectedNodes.length > 0 : selectedChannel !== undefined)
   const advanced = kind === "vless" || kind === "vmess" || kind === "trojan"
   const nonLoopback = bindAddress.trim() !== "" && !["127.0.0.1", "::1", "localhost"].includes(bindAddress.trim())
   function changeKind(next: typeof kind) {
@@ -127,7 +158,7 @@ export function CreateProxyServiceForm({ nodes, subscriptions, sharedInbound, on
       if ((next === "vless" || next === "vmess") && !password) setPassword(crypto.randomUUID())
     }
   }
-  function changeSourceMode(next: "direct" | "rule" | "manual") {
+  function changeSourceMode(next: "direct" | "rule" | "manual" | "residential") {
     setSourceMode(next)
     if (next === "direct") setStrategy("manual")
   }
@@ -143,8 +174,17 @@ export function CreateProxyServiceForm({ nodes, subscriptions, sharedInbound, on
           </DialogHeader>
           <div className="space-y-4 px-5 py-4">
             <Field label="服务名称"><Input value={name} onChange={(event) => setName(event.target.value)} placeholder="例如：日本低延迟出口" maxLength={128} autoFocus required /></Field>
-            <Field label="节点来源"><ChipSet values={[{ value: "direct", label: "服务器直连" }, { value: "rule", label: "跨订阅规则" }, { value: "manual", label: "固定节点" }]} current={sourceMode} onChange={changeSourceMode} /></Field>
-            {sourceMode === "direct" ? <div className="flex items-center gap-2 rounded-md border bg-muted/60 px-3 py-2 text-xs"><Server className="size-4 text-success" />流量使用当前服务器网络出口</div> : sourceMode === "rule" ? <>
+            <Field label="节点来源"><ChipSet values={[{ value: "direct", label: "服务器直连" }, { value: "rule", label: "跨订阅规则" }, { value: "manual", label: "固定节点" }, { value: "residential", label: "住宅代理" }]} current={sourceMode} onChange={changeSourceMode} /></Field>
+            {sourceMode === "direct" ? <div className="flex items-center gap-2 rounded-md border bg-muted/60 px-3 py-2 text-xs"><Server className="size-4 text-success" />流量使用当前服务器网络出口</div> : sourceMode === "residential" ? <>
+              {/* 渠道不是订阅: 这里选的是一个**已经存在的代理组** (建渠道时一并创建),
+                  不是一份节点快照, 所以没有地区/延迟/上限这些筛选。 */}
+              <Field label="住宅渠道"><ResidentialChannelChoice items={residentialChannels} selected={selectedChannelID} onChange={setSelectedChannelID} /></Field>
+              <a className="text-xs text-primary underline" href="#residential" onClick={onCancel}>配置住宅供应商账号、密码与渠道</a>
+              {selectedChannel && <div className="flex items-start gap-2 rounded-md border bg-muted/60 px-3 py-2 text-xs" title={selectedChannel.proxy_group_id}>
+                <Globe className="mt-0.5 size-4 shrink-0 text-info" />
+                <span>复用渠道「{selectedChannel.name}」已建的代理组：出口、出站策略与成员由住宅渠道维护，本服务只新增一个入口，不会再建组。专属粘性身份请在住宅渠道页面创建。</span>
+              </div>}
+            </> : sourceMode === "rule" ? <>
               <Field label={`订阅（已选 ${selectedSubscriptions.length}）`}><SubscriptionCheckList items={subscriptions} selected={selectedSubscriptions} onChange={setSelectedSubscriptions} /></Field>
               {/* 勾选订阅之后才知道形态, 之前不猜。形态决定下面哪些指标存在。 */}
               <div className="flex flex-wrap items-center gap-x-2 gap-y-1 rounded-md border bg-muted/60 px-3 py-2 text-[11px]">
@@ -160,7 +200,9 @@ export function CreateProxyServiceForm({ nodes, subscriptions, sharedInbound, on
               {!knobs.maxLatency && <p className="text-[11px] leading-4 text-muted-foreground">该来源不按延迟筛选：未测速的成员同样会被选中，实际可用性由数据面健康检查决定。</p>}
               <div className="flex items-center gap-2 rounded-md border bg-muted/60 px-3 py-2 text-xs"><Gauge className="size-4 text-info" />当前指标预计命中 {estimated} 个节点</div>
             </> : <Field label={`固定节点（已选 ${selectedNodes.length}）`}><CheckList items={nodes.map((item) => ({ id: item.id, label: `${item.display_name} · ${item.last_latency_ms == null ? "未测试" : `${item.last_latency_ms}ms`}` }))} selected={selectedNodes} onChange={setSelectedNodes} empty="暂无活动节点" /></Field>}
-            <Field label="出站策略"><ChipSet values={strategyChoicesForShape(shape)} current={effectiveStrategy} onChange={setStrategy} /></Field>
+            {/* 复用组时出站策略属于那个组, 不属于本服务: 一个改不了的选择器只会骗人。
+                表单因此既不显示它, 也不下发 strategy (见下方 submit)。 */}
+            {sourceMode !== "residential" && <Field label="出站策略"><ChipSet values={strategyChoicesForShape(shape)} current={effectiveStrategy} onChange={setStrategy} /></Field>}
             <div className="border-t pt-4">
               <div className="mb-3 text-xs font-semibold">入口与登录</div>
               <div className="space-y-3">
@@ -201,6 +243,32 @@ function SubscriptionCheckList({ items, selected, onChange }: { items: Subscript
       <Checkbox checked={checked} onCheckedChange={(value) => onChange(value === true ? [...selected, item.id] : selected.filter((id) => id !== item.id))} />
       <span className="min-w-0 flex-1 truncate">{item.name}</span>
       <Badge variant={meta.variant} className="shrink-0">{meta.label}</Badge>
+    </label>
+  })}</div>
+}
+
+/**
+ * 住宅渠道单选列表。
+ *
+ * 渠道不是订阅: 建渠道时控制面就一并建好了它的代理组 (provider + channel),
+ * 所以这里选的是**一个已经存在的组**, 而不是一份会随刷新变化的节点快照。
+ * 停用的渠道仍然列出但不可选 —— 它的组在数据面同样被停用, 服务端也会以 422
+ * 拒绝; 直接藏起来会让操作员以为自己的渠道不见了。
+ *
+ * 见 .agents/notes/implemented/feature/2026-10-14-reuse-existing-group-for-an-entry.md。
+ */
+function ResidentialChannelChoice({ items, selected, onChange }: { items: ResidentialChannel[]; selected: string; onChange: (id: string) => void }) {
+  if (items.length === 0) return <div className="rounded-md border px-3 py-4 text-center text-xs text-muted-foreground">暂无住宅渠道。先到「住宅代理」页面创建供应商与渠道，再回到这里复用它的出口。</div>
+  return <div className="max-h-40 overflow-y-auto rounded-md border">{items.map((item) => {
+    const exits = Math.max(item.pool_size ?? 0, item.active_session_count)
+    return <label key={item.id} title={`代理组 ${item.proxy_group_id}`} className={cn("flex items-center gap-2 border-b px-3 py-2 text-xs last:border-b-0", item.enabled ? "cursor-pointer hover:bg-muted/60" : "cursor-not-allowed opacity-60")}>
+      <Checkbox checked={selected === item.id} disabled={!item.enabled} onCheckedChange={(value) => { if (value === true) onChange(item.id) }} />
+      <span className="min-w-0 flex-1 truncate">{item.name}</span>
+      <span className="shrink-0 text-muted-foreground">{item.region_mode === "fixed" && item.region ? item.region : "不限地区"}</span>
+      {/* 出口数是信息而不是闸门: 服务端只校验渠道是否启用, 前端不另立更严的判据。
+          0 个出口的渠道仍可选, 但它今天会以 fail-closed 拒绝, 所以说清楚。 */}
+      <span className={cn("shrink-0 tabular-nums", exits === 0 && "text-warning")}>{item.session_count > 0 ? `${item.active_session_count}/${item.session_count} 会话` : `${exits} 个出口`}</span>
+      <Badge variant={item.enabled ? "outline" : "secondary"} className="shrink-0">{item.enabled ? "可用" : "已停用"}</Badge>
     </label>
   })}</div>
 }

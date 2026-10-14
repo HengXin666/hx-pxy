@@ -37,9 +37,15 @@ type runtimeConnection struct {
 }
 
 type connectionMetadata struct {
-	InboundName  string `json:"inboundName"`
-	InboundUser  string `json:"inboundUser"`
-	SpecialProxy string `json:"specialProxy"`
+	SourceIP        string `json:"sourceIP"`
+	SourcePort      string `json:"sourcePort"`
+	DestinationIP   string `json:"destinationIP"`
+	DestinationPort string `json:"destinationPort"`
+	Host            string `json:"host"`
+	Network         string `json:"network"`
+	InboundName     string `json:"inboundName"`
+	InboundUser     string `json:"inboundUser"`
+	SpecialProxy    string `json:"specialProxy"`
 }
 
 func (m *Manager) TrafficSnapshot(ctx context.Context) (metrics.RuntimeSnapshot, error) {
@@ -135,6 +141,11 @@ func mapTrafficConnections(connections []runtimeConnection, identities map[strin
 			}
 		}
 		result.Connections = append(result.Connections, metrics.Connection{
+			Detail: metrics.ConnectionDetail{
+				SourceIP: connection.Metadata.SourceIP, SourcePort: connection.Metadata.SourcePort,
+				Destination: connection.Metadata.DestinationIP, DestinationPort: connection.Metadata.DestinationPort,
+				Network: connection.Metadata.Network, Inbound: connection.Metadata.InboundName,
+			},
 			ID: connection.ID, Upload: connection.Upload, Download: connection.Download, Resources: resources,
 		})
 	}

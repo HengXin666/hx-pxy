@@ -219,6 +219,9 @@ check_platform() {
     case "${ID:-}" in debian|ubuntu|fedora|rhel|centos|rocky|almalinux|arch|opensuse*|sles|"") ;; *) warn "distribution ${ID} is not in the validated matrix" ;; esac
     normalize_arch >/dev/null
     for command in systemctl install getent tar sha256sum; do require_command "${command}"; done
+    local systemd_version
+    systemd_version="$(systemctl --version | awk 'NR == 1 {print $2}')"
+    [[ "${systemd_version}" =~ ^[0-9]+$ && "${systemd_version}" -ge 245 ]] || fail "systemd >= 245 is required for isolated 30-day journal retention"
 }
 
 load_os_release() {
@@ -352,6 +355,16 @@ install_version() {
     install -m 0644 -o root -g root "${stage}/deploy/systemd/${CONTROL_SERVICE}" "${UNIT_DIR}/${CONTROL_SERVICE}"
     install -m 0644 -o root -g root "${stage}/deploy/systemd/${DATAPLANE_SERVICE}" "${UNIT_DIR}/${DATAPLANE_SERVICE}"
     install -m 0644 -o root -g root "${stage}/deploy/systemd/${TERMINAL_SERVICE}" "${UNIT_DIR}/${TERMINAL_SERVICE}"
+    install_journal_policy "${stage}"
+}
+
+# A private namespace gives the product a retention bound without deleting
+# another service's audit trail. LogNamespace requires systemd >= 245.
+install_journal_policy() {
+    local source="$1/deploy/systemd/journald@hx-pxy.conf"
+    if [[ -f "${source}" ]]; then
+        install -m 0644 -o root -g root "${source}" "$(dirname "${UNIT_DIR}")/journald@hx-pxy.conf"
+    fi
 }
 
 switch_current() {
@@ -386,7 +399,7 @@ wait_until_ready() {
 # plane all present as the same "address already in use".
 diagnose_control_plane_failure() {
     local journal
-    journal="$(journalctl -u "${CONTROL_SERVICE}" -n 40 --no-pager 2>/dev/null || true)"
+    journal="$(journalctl --namespace=hx-pxy -u "${CONTROL_SERVICE}" -n 40 --no-pager 2>/dev/null || true)"
     if [[ "${journal}" == *"address already in use"* ]]; then
         warn "the control plane could not bind 127.0.0.1:19090: something else is already listening there"
         local holder=""
@@ -488,6 +501,7 @@ repair_installation() {
     [[ "${START_SERVICES}" == "false" ]] || require_command curl
     [[ -x "${INSTALL_ROOT}/current/hx-pxyd" && -x "${INSTALL_ROOT}/current/mihomo" ]] || fail "current version is missing; run install"
     local source="${INSTALL_ROOT}/current"
+    install_journal_policy "${source}"
     if [[ -f "${source}/deploy/systemd/${CONTROL_SERVICE}" ]]; then
         install -m 0644 "${source}/deploy/systemd/${CONTROL_SERVICE}" "${UNIT_DIR}/${CONTROL_SERVICE}"
         install -m 0644 "${source}/deploy/systemd/${DATAPLANE_SERVICE}" "${UNIT_DIR}/${DATAPLANE_SERVICE}"

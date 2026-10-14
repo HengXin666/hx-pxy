@@ -15,19 +15,34 @@ import (
 
 type fakeGroups struct {
 	created     proxygroup.Group
+	createCalls int
 	deleted     string
+	deleteCalls int
 	stored      proxygroup.Group
+	// getErr fails every lookup, so a test can exercise "the store itself is
+	// down" as opposed to "the group does not exist".
+	getErr      error
 	updateCalls []proxygroup.UpdateRequest
 }
 
 func (groups *fakeGroups) Create(context.Context, proxygroup.CreateRequest) (proxygroup.Group, error) {
+	groups.createCalls++
 	groups.created = proxygroup.Group{ID: "group-1", Version: 1}
 	return groups.created, nil
 }
 
-func (groups *fakeGroups) Get(context.Context, string) (proxygroup.Group, error) {
+func (groups *fakeGroups) Get(_ context.Context, id string) (proxygroup.Group, error) {
+	if groups.getErr != nil {
+		return proxygroup.Group{}, groups.getErr
+	}
+	// A stored group stands in for the one real group this fake knows. Asking
+	// for anything else is a lookup miss, which is what makes "reuse a group
+	// that does not exist" testable at all.
 	if groups.stored.ID == "" {
-		groups.stored = proxygroup.Group{ID: "group-1", Version: 1, Name: "original"}
+		groups.stored = proxygroup.Group{ID: id, Version: 1, Name: "original", Enabled: true}
+	}
+	if id != groups.stored.ID {
+		return proxygroup.Group{}, fmt.Errorf("%w: %s", proxygroup.ErrNotFound, id)
 	}
 	return groups.stored, nil
 }
@@ -48,6 +63,7 @@ func (groups *fakeGroups) Update(_ context.Context, _ string, request proxygroup
 
 func (groups *fakeGroups) Delete(_ context.Context, id string, _ int) error {
 	groups.deleted = id
+	groups.deleteCalls++
 	return nil
 }
 
@@ -69,12 +85,23 @@ type fakeListeners struct {
 	// updates records every listener update so a test can assert the pin that
 	// was actually carried to the listener service.
 	updates []listener.UpdateRequest
+	// creates records every listener create, so a test can assert that a
+	// rejected request created nothing.
+	creates []listener.CreateRequest
+	deleted string
+	syncErr error
+}
+
+func (listeners *fakeListeners) Delete(_ context.Context, id string, _ int) error {
+	listeners.deleted = id
+	return nil
 }
 
 func (listeners *fakeListeners) Create(_ context.Context, request listener.CreateRequest) (listener.Listener, error) {
 	if listeners.err != nil {
 		return listener.Listener{}, listeners.err
 	}
+	listeners.creates = append(listeners.creates, request)
 	return listener.Listener{ID: "listener-1", ProxyGroupID: request.ProxyGroupID}, nil
 }
 
@@ -89,7 +116,7 @@ func (listeners *fakeListeners) Get(_ context.Context, id string) (listener.List
 }
 
 func (listeners *fakeListeners) EnsureSharedInbounds(context.Context, listener.SharedInboundSpec, []store.ProxyGroupRecord, []listener.SharedInboundMember) ([]listener.Listener, error) {
-	return nil, nil
+	return nil, listeners.syncErr
 }
 
 func (listeners *fakeListeners) Update(_ context.Context, _ string, request listener.UpdateRequest) (listener.Listener, error) {

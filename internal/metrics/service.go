@@ -22,6 +22,7 @@ type Resource struct {
 }
 
 type Connection struct {
+	Detail    ConnectionDetail
 	ID        string
 	Upload    int64
 	Download  int64
@@ -116,6 +117,7 @@ type Service struct {
 	lastActive      map[Resource]int64
 	lastCollectedAt time.Time
 	liveHistory     []LiveSample
+	connections     ActiveConnections
 	subscribers     map[chan LiveSample]struct{}
 }
 
@@ -234,8 +236,10 @@ func (s *Service) Collect(ctx context.Context) error {
 		return err
 	}
 	now := s.now().UTC()
+	details := connectionDetails(snapshot, now)
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.connections = details
 
 	nextObserved := make(map[string]observedConnection, len(snapshot.Connections))
 	active := make(map[Resource]int64)

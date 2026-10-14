@@ -17,6 +17,15 @@ const (
 	legacyQualityKey = "node_quality_settings"
 	legacyTestURL    = "https://www.gstatic.com/generate_204"
 	defaultTestURL   = "http://cp.cloudflare.com/generate_204"
+
+	// DefaultLogRetentionDays is how long the product keeps its own log files.
+	// The retention pass reads this through Settings, so a settings change takes
+	// effect on the next pass instead of requiring a restart.
+	DefaultLogRetentionDays = 30
+	// logRetentionMaxDays mirrors logretention.MaxDays: ten years is already
+	// past any forensic value, and the bound keeps a typo from disabling the
+	// cleanup forever.
+	logRetentionMaxDays = 3650
 )
 
 var ErrInvalid = errors.New("invalid global settings")
@@ -69,6 +78,7 @@ type PerformanceSettings struct {
 }
 
 type Settings struct {
+	TUN         *TUNSettings        `json:"tun,omitempty"`
 	Quality     QualitySettings     `json:"quality"`
 	DNS         DNSSettings         `json:"dns"`
 	Performance PerformanceSettings `json:"performance"`
@@ -88,6 +98,13 @@ type Settings struct {
 	SharedInbound SharedInboundSettings `json:"shared_inbound"`
 	// Guard carries the operator's write-surface guards; see GuardSettings.
 	Guard GuardSettings `json:"guard"`
+	// LogRetentionDays is how many days the product keeps the log files it
+	// writes itself (the managed Mihomo log and its byte-rotated backups) and
+	// the stale short runtime instance directories under ~/.hx-pxy-runtime.
+	// 0 disables the cleanup; the default (30) applies to any stored document
+	// that does not mention the field, because Load decodes over Default().
+	// See .agents/notes/implemented/feature/2026-10-14-log-retention-by-mtime.md.
+	LogRetentionDays int `json:"log_retention_days"`
 }
 
 // FleetSettings gates the built-in CF worker fleet maintainer.
@@ -164,6 +181,7 @@ func boolPointer(value bool) *bool { return &value }
 
 func Default() Settings {
 	return Settings{
+		TUN: &TUNSettings{},
 		Quality: QualitySettings{
 			CheckIntervalSeconds: 600,
 			TimeoutSeconds:       10,
@@ -195,6 +213,8 @@ func Default() Settings {
 			LogLevel:          "warning",
 		},
 		SharedInbound: DefaultSharedInbound(),
+		// The user's ask (2026-10-14): keep the product's own logs for 30 days.
+		LogRetentionDays: DefaultLogRetentionDays,
 		// Default off: an upgraded installation must keep behaving exactly as
 		// it did until an operator turns the guard on. Turning it on by default
 		// would break every existing script on the next restart, with the
@@ -363,6 +383,9 @@ func (s *Service) Update(ctx context.Context, settings Settings) (Settings, erro
 	if err != nil {
 		return Settings{}, err
 	}
+	if settings.TUN == nil {
+		settings.TUN = previous.TUN
+	}
 	// PUT replaces the whole document, so a field the caller omitted arrives as
 	// its zero value. For the guard fields that is not a statement about the
 	// value — it is an absent statement, and treating it as "off" let any
@@ -391,6 +414,9 @@ func (s *Service) Update(ctx context.Context, settings Settings) (Settings, erro
 }
 
 func Validate(settings Settings) error {
+	if err := validateTUN(settings.TUN, settings.DNS); err != nil {
+		return err
+	}
 	quality := settings.Quality
 	if quality.CheckIntervalSeconds < 60 || quality.CheckIntervalSeconds > 86400 {
 		return fmt.Errorf("%w: quality.check_interval_seconds must be between 60 and 86400", ErrInvalid)
@@ -464,6 +490,9 @@ func Validate(settings Settings) error {
 	}
 	if err := validateSharedInbound(settings.SharedInbound); err != nil {
 		return err
+	}
+	if settings.LogRetentionDays < 0 || settings.LogRetentionDays > logRetentionMaxDays {
+		return fmt.Errorf("%w: log_retention_days must be between 0 (disabled) and %d", ErrInvalid, logRetentionMaxDays)
 	}
 	return nil
 }

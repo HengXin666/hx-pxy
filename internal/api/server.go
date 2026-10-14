@@ -21,6 +21,7 @@ import (
 	"github.com/HengXin666/hx-pxy/internal/auth"
 	"github.com/HengXin666/hx-pxy/internal/bundle"
 	"github.com/HengXin666/hx-pxy/internal/dataplane/mihomo"
+	"github.com/HengXin666/hx-pxy/internal/hostnetwork"
 	"github.com/HengXin666/hx-pxy/internal/listener"
 	"github.com/HengXin666/hx-pxy/internal/metrics"
 	"github.com/HengXin666/hx-pxy/internal/node"
@@ -53,6 +54,9 @@ type SubscriptionService interface {
 
 type NodeService interface {
 	List(context.Context, node.Filter) ([]node.Node, error)
+	// Count answers the size of a filtered node set so a paging client can fetch
+	// the remaining pages concurrently (see handleNodes' with_total).
+	Count(context.Context, node.Filter) (int, error)
 	Get(context.Context, string) (node.Node, error)
 	Check(context.Context, string) (node.CheckResult, error)
 	CheckMany(context.Context, []string) ([]node.CheckResult, error)
@@ -328,31 +332,33 @@ func WithResidential(service ResidentialService) Option {
 }
 
 type Server struct {
-	bundles          BundleService
-	subscriptions    SubscriptionService
-	nodes            NodeService
-	proxyGroups      ProxyGroupService
-	listeners        ListenerService
-	proxyServices    ProxyServiceService
-	traffic          TrafficService
-	settings         SettingsService
-	routingRules     RoutingRulesService
-	overview         OverviewService
-	residential      ResidentialService
-	fleet            FleetService
-	logs             http.Handler
-	dataplane        DataPlaneService
-	systemInfo       *SystemInfo
-	auth             AuthService
-	alerts           AlertService
-	terminal         TerminalService
-	updater          UpdaterService
-	webRoot          string
-	logger           *slog.Logger
-	ready            atomic.Bool
-	overviewInterval time.Duration
-	edgeSlots        chan struct{}
-	quickstart       QuickstartService
+	bundles           BundleService
+	subscriptions     SubscriptionService
+	nodes             NodeService
+	proxyGroups       ProxyGroupService
+	listeners         ListenerService
+	proxyServices     ProxyServiceService
+	traffic           TrafficService
+	networkOps        *hostnetwork.Service
+	settings          SettingsService
+	routingRules      RoutingRulesService
+	overview          OverviewService
+	residential       ResidentialService
+	fleet             FleetService
+	logs              http.Handler
+	dataplane         DataPlaneService
+	systemInfo        *SystemInfo
+	auth              AuthService
+	alerts            AlertService
+	terminal          TerminalService
+	terminalHeartbeat terminalHeartbeatBudget
+	updater           UpdaterService
+	webRoot           string
+	logger            *slog.Logger
+	ready             atomic.Bool
+	overviewInterval  time.Duration
+	edgeSlots         chan struct{}
+	quickstart        QuickstartService
 }
 
 type errorResponse struct {
@@ -526,6 +532,12 @@ func (s *Server) routes() *http.ServeMux {
 	if s.systemInfo != nil {
 		mux.HandleFunc("/api/v1/system/info", s.handleSystemInfo)
 	}
+	// Interface addresses for "use this from a container": the docker bridge
+	// gateway and the LAN IPs. Facts about the host routing only.
+	mux.HandleFunc("/api/v1/system/network", s.handleSystemNetwork)
+	mux.HandleFunc("/api/v1/connections", s.handleConnections)
+	mux.HandleFunc("/api/v1/system/network/inspect", s.handleNetworkInspect)
+	mux.HandleFunc("/api/v1/system/network/operations", s.handleNetworkOperation)
 	if s.updater != nil {
 		mux.HandleFunc("/api/v1/system/update", s.handleSystemUpdate)
 	}

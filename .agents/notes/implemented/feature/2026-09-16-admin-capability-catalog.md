@@ -103,3 +103,5 @@ Status: implemented
 - `uv run scripts/validate_skill.py .agents/skills/hx-proxy-admin`: skill 结构合规。
 - 端到端(真实进程 + 真 mihomo): `hx-catalog.py quickstart` 成功返回
   `share_path`/`nodes`/`auth`; 失败场景下组与 Listener 计数都为 0。
+
+The catalog includes optional TUN settings, residential group reuse, network diagnostics/repair confirmation and transient connection sampling. Network operations describe their restricted actions and step-up boundary rather than advertising arbitrary shell execution.

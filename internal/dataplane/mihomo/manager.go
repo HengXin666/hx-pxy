@@ -240,7 +240,7 @@ func (m *Manager) Apply(ctx context.Context) error {
 		m.status.LastError = ""
 		return nil
 	}
-	if !m.externalProcess && len(compiled.Endpoints) == 0 && compiled.ProxyCount == 0 {
+	if !m.externalProcess && len(compiled.Endpoints) == 0 && compiled.ProxyCount == 0 && compiled.TUNDevice == "" {
 		if err := m.stopLocked(ctx); err != nil {
 			m.recordFailureLocked(err)
 			return err
@@ -297,7 +297,7 @@ func (m *Manager) Apply(ctx context.Context) error {
 			rollbackErr := m.rollbackAndRestartLocked(ctx, hadOldConfig, oldEndpoints)
 			return m.failLocked(errors.Join(err, rollbackErr))
 		}
-		if err := m.waitReadyLocked(ctx, compiled.Endpoints, compiled.ProxyCount); err != nil {
+		if err := m.waitReadyLocked(ctx, compiled.Endpoints, compiled.ProxyCount, compiled.TUNDevice); err != nil {
 			rollbackErr := m.rollbackAndRestartLocked(ctx, hadOldConfig, oldEndpoints)
 			return m.failLocked(errors.Join(err, rollbackErr))
 		}
@@ -328,7 +328,7 @@ func (m *Manager) Apply(ctx context.Context) error {
 		}
 		return m.failLocked(err)
 	}
-	if err := m.waitReadyLocked(ctx, compiled.Endpoints, compiled.ProxyCount); err != nil {
+	if err := m.waitReadyLocked(ctx, compiled.Endpoints, compiled.ProxyCount, compiled.TUNDevice); err != nil {
 		_ = m.stopLocked(context.Background())
 		rollbackErr := m.rollbackAndRestartLocked(ctx, hadOldConfig, oldEndpoints)
 		if rollbackErr != nil {
@@ -465,13 +465,47 @@ func (m *Manager) reloadExternalLocked(ctx context.Context) error {
 	return nil
 }
 
+// proxyEnvironmentNames are the variables Go's net/http consults through
+// http.ProxyFromEnvironment, plus the ones curl-style tools read. The managed
+// data plane must not inherit them.
+//
+// Why this is a correctness rule and not hygiene: Mihomo is a Go program and
+// fetches proxy-providers, rule-sets and geo files with an HTTP transport that
+// honours HTTP_PROXY / ALL_PROXY. Inheriting the control plane's environment
+// therefore lets a *local* proxy (a desktop client's "system proxy" mode, a
+// shell exported in run.sh, a service manager EnvironmentFile) silently rewrite
+// the data plane's own egress — the exact class of interference the operator
+// asked us to stop. The traffic that must leave through the physical NIC is
+// the data plane's; it is not a caller's job to decide that at the environment
+// level.
+//
+// Unsetting is deliberately preferred over forcing no_proxy=*: an unset
+// variable cannot be re-enabled by an inherited NO_PROXY entry, and it keeps
+// the child environment byte-for-byte independent of whatever the parent shell
+// happened to export.
+var proxyEnvironmentNames = map[string]struct{}{
+	"http_proxy":  {},
+	"https_proxy": {},
+	"all_proxy":   {},
+	"ftp_proxy":   {},
+	"no_proxy":    {},
+}
+
 func (m *Manager) commandEnvironment() []string {
 	prefix := "GOMAXPROCS="
 	environment := make([]string, 0, len(os.Environ())+1)
 	for _, value := range os.Environ() {
-		if !strings.HasPrefix(value, prefix) {
-			environment = append(environment, value)
+		if strings.HasPrefix(value, prefix) {
+			continue
 		}
+		if name, _, found := strings.Cut(value, "="); found {
+			// Environment names are case-insensitive on the platforms we run on;
+			// both HTTP_PROXY and http_proxy are stripped.
+			if _, isProxy := proxyEnvironmentNames[strings.ToLower(strings.TrimSpace(name))]; isProxy {
+				continue
+			}
+		}
+		environment = append(environment, value)
 	}
 	return append(environment, prefix+strconv.Itoa(m.maxProcs))
 }
@@ -508,7 +542,7 @@ func (m *Manager) stopLocked(ctx context.Context) error {
 	return nil
 }
 
-func (m *Manager) waitReadyLocked(ctx context.Context, endpoints []Endpoint, proxyCount int) error {
+func (m *Manager) waitReadyLocked(ctx context.Context, endpoints []Endpoint, proxyCount int, tunDevice ...string) error {
 	deadline := time.Now().Add(8 * time.Second)
 	for time.Now().Before(deadline) {
 		m.refreshProcessLocked()
@@ -516,6 +550,11 @@ func (m *Manager) waitReadyLocked(ctx context.Context, endpoints []Endpoint, pro
 			return errors.New("mihomo exited before runtime became ready")
 		}
 		allReady := true
+		if len(tunDevice) > 0 {
+			device, err := net.InterfaceByName(managedTUNDevice)
+			up := err == nil && device.Flags&net.FlagUp != 0
+			allReady = up == (tunDevice[0] != "")
+		}
 		for _, endpoint := range endpoints {
 			address := probeAddress(endpoint.BindAddress, endpoint.Port)
 			connection, err := net.DialTimeout("tcp", address, 250*time.Millisecond)
@@ -542,7 +581,7 @@ func (m *Manager) waitReadyLocked(ctx context.Context, endpoints []Endpoint, pro
 		case <-time.After(100 * time.Millisecond):
 		}
 	}
-	return errors.New("mihomo listeners did not become ready")
+	return errors.New("mihomo listeners or managed TUN did not become ready (TUN requires /dev/net/tun and CAP_NET_ADMIN)")
 }
 
 // validateEndpointAvailabilityLocked catches a port owned by another process
@@ -722,7 +761,7 @@ func (m *Manager) rollbackAndRestartLocked(ctx context.Context, hadOldConfig boo
 				return errors.Join(err, startErr)
 			}
 		}
-		if err := m.waitReadyLocked(ctx, oldEndpoints, m.lastCompiled.ProxyCount); err != nil {
+		if err := m.waitReadyLocked(ctx, oldEndpoints, m.lastCompiled.ProxyCount, m.lastCompiled.TUNDevice); err != nil {
 			return fmt.Errorf("previous mihomo config did not recover: %w", err)
 		}
 		m.status.Running = true
@@ -739,7 +778,7 @@ func (m *Manager) rollbackAndRestartLocked(ctx context.Context, hadOldConfig boo
 		return fmt.Errorf("restart previous mihomo config: %w", err)
 	}
 	if len(oldEndpoints) > 0 || m.lastCompiled.ProxyCount > 0 {
-		if err := m.waitReadyLocked(ctx, oldEndpoints, m.lastCompiled.ProxyCount); err != nil {
+		if err := m.waitReadyLocked(ctx, oldEndpoints, m.lastCompiled.ProxyCount, m.lastCompiled.TUNDevice); err != nil {
 			return fmt.Errorf("previous mihomo config did not recover: %w", err)
 		}
 	}

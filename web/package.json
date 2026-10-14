@@ -9,6 +9,8 @@
     "test:e2e:inventory": "node e2e/inventory-layout.mjs",
     "test:terminal-cwd": "node --experimental-strip-types --test e2e/terminal-cwd.test.ts",
     "test:terminal-layout": "node e2e/terminal-layout.mjs",
+    "test:terminal-input": "node --experimental-strip-types --test e2e/terminal-input.test.ts",
+    "test:docker-scroll": "node e2e/docker-scroll-guard.mjs",
     "check": "tsc -b --pretty false",
     "test:residential-ui": "node e2e/residential-channel-layout.mjs",
     "test:routing-layout": "node e2e/routing-create-dialog-layout.mjs",
@@ -16,7 +18,9 @@
     "test:ui": "node e2e/ui-smoke.mjs",
     "test:guard-settings": "node e2e/guard-settings.mjs",
     "preview": "vite preview",
-    "test:delete-guard": "node e2e/delete-shared-group-guard.mjs"
+    "test:delete-guard": "node e2e/delete-shared-group-guard.mjs",
+    "test:runtime": "node --experimental-strip-types --test e2e/query-cache.test.ts e2e/docker-endpoint.test.ts e2e/terminal-input.test.ts",
+    "test:network-routing": "node e2e/network-routing-regression.mjs"
   },
   "dependencies": {
     "@radix-ui/react-checkbox": "^1.3.11",

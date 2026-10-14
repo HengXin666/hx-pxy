@@ -260,7 +260,7 @@ func (m *memoryCwdStore) read(key string) string {
 
 // newTerminalAPITestServer builds the full auth + 2FA + terminal stack and
 // returns the pieces a WebSocket test needs.
-func newTerminalAPITestServer(t *testing.T) (*auth.Service, *terminalservice.Service, *memoryCwdStore, string, string) {
+func newTerminalAPITestServer(t *testing.T, options ...Option) (*auth.Service, *terminalservice.Service, *memoryCwdStore, string, string) {
 	t.Helper()
 	root := t.TempDir()
 	database, err := store.Open(context.Background(), filepath.Join(root, "terminal-api.db"))
@@ -316,7 +316,7 @@ func newTerminalAPITestServer(t *testing.T) (*auth.Service, *terminalservice.Ser
 		t.Fatal(err)
 	}
 	t.Cleanup(terminalService.Shutdown)
-	server, err := NewServer(&stubBundleService{}, logger, WithAuth(authService), WithTerminal(terminalService))
+	server, err := NewServer(&stubBundleService{}, logger, append([]Option{WithAuth(authService), WithTerminal(terminalService)}, options...)...)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -403,16 +403,7 @@ func TestTerminalWebSocketPingPongAndCwdReport(t *testing.T) {
 // that stops reading cannot answer pings, so the server must close the socket
 // and free the session slot instead of leaking it forever.
 func TestTerminalHeartbeatReapsSilentPeer(t *testing.T) {
-	previousInterval := terminalHeartbeatInterval
-	previousTimeout := terminalHeartbeatTimeout
-	terminalHeartbeatInterval = 30 * time.Millisecond
-	terminalHeartbeatTimeout = 60 * time.Millisecond
-	defer func() {
-		terminalHeartbeatInterval = previousInterval
-		terminalHeartbeatTimeout = previousTimeout
-	}()
-
-	_, terminalService, _, websocketURL, sessionToken := newTerminalAPITestServer(t)
+	_, terminalService, _, websocketURL, sessionToken := newTerminalAPITestServer(t, withHeartbeatBudget(30*time.Millisecond, 60*time.Millisecond))
 	headers := http.Header{}
 	headers.Set("Cookie", sessionCookieName+"="+sessionToken)
 	origin := "http://" + strings.TrimSuffix(strings.TrimPrefix(websocketURL, "ws://"), "/api/v1/terminal/ws")
@@ -457,4 +448,8 @@ func TestTerminalHeartbeatReapsSilentPeer(t *testing.T) {
 	if active := terminalService.Status().ActiveSessions; active != 0 {
 		t.Fatalf("silent peer was not reaped by the heartbeat; active = %d", active)
 	}
+}
+
+func withHeartbeatBudget(interval, timeout time.Duration) Option {
+	return func(s *Server) error { s.terminalHeartbeat = terminalHeartbeatBudget{interval, timeout}; return nil }
 }

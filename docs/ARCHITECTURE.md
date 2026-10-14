@@ -685,3 +685,11 @@ HX 上游，`hx-pxyd` 在保留的 `/__hx-proxy__/` 路径下提供受限 WebSoc
 **决定**：只实现 MihomoAdapter。
 
 **原因**：同时维护 Mihomo 和 sing-box 会成倍增加协议差异、配置编译、统计和回归测试成本。保留接口即可，不提前支付双实现成本。
+
+## 网络运维与瞬时连接边界
+
+`api -> hostnetwork.Service -> terminal.Executor` 执行白名单诊断与转发开关；控制面不实现网络转发。
+TUN Desired State 位于 settings，由 Mihomo 编译器生成，默认关闭，权限只授权数据面。
+现有 metrics 采样保留上限 500 条连接详情于内存，不新增连接历史表或轮询器。
+前端列表缓存限 128 条、5 秒、会话内存作用域，写入与认证变化失效，敏感详情及实时连接不缓存。
+具体契约见 [网络运维](NETWORK_OPERATIONS.md)。

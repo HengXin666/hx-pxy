@@ -1,3 +1,4 @@
+// See .agents/notes/implemented/bug-fix/2026-09-19-terminal-subpage-scroll-container.md.
 import { useEffect, useRef, useState } from "react"
 import { Container, LoaderCircle, RefreshCw } from "lucide-react"
 
@@ -53,9 +54,21 @@ export function DockerPage({ onNotice }: { onNotice: (message: string, tone?: "s
 
   return (
     // 终端页的 main 在 lg 断点是 lg:h-full lg:overflow-hidden, 所以这一页必须
-    // 自己是滚动容器 —— 否则表头以下的容器行(以及端口映射)会被裁掉且无法滚动。
+    // 自己分配高度。滚动**只由表格区域承担** (min-h-0 flex-1 overflow-auto):
+    //
+    //   - 根节点不再 overflow-y-auto: 如果根和表格都能滚, 滚轮落在哪一层、
+    //     列表是否还能滚到底就取决于当时的布局, 用户就会遇到 "docker 页面无法
+    //     滚动列表"。
+    //   - lg 以下 main 是内容高度(auto), flex 链没有确定高度, flex-1 的表格区域
+    //     会被内容撑开而不产生滚动。max-lg:max-h 用视口高度给这一层一个确定上限,
+    //     表格因此在 900x700 这类窄视口也仍然是唯一的滚动容器。
+    //
+    // 已知取舍: lg 以下整页会比视口高几十像素(900x700 实测 93px), 也就是文档级
+    // 滚动条会同时存在。这是 App 壳在 lg 以下的既有行为(该高度的 flex 链没有确定
+    // 高度, 只能靠内容撑), 不在本页可控范围内; 门禁 e2e/docker-scroll-guard.mjs
+    // 因此只在 lg 及以上断死"整页不溢出", 窄视口只要求列表仍由表格区域滚动。
     // min-h-0 让 flex 子项在溢出时收缩而不是撑开父级。
-    <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto">
+    <div className="flex min-h-0 max-lg:max-h-[calc(100dvh-9.5rem)] flex-1 flex-col gap-3 overflow-hidden">
       <div className="flex shrink-0 items-center justify-between">
         <div className="flex items-center gap-1.5 text-sm font-semibold">
           <Container className="size-4 text-muted-foreground" />Docker 容器
@@ -82,9 +95,11 @@ export function DockerPage({ onNotice }: { onNotice: (message: string, tone?: "s
       </div>
 
       {containers.length === 0 ? (
-        <div className="rounded-md border bg-card px-4 py-8 text-center text-xs text-muted-foreground">没有可显示的容器</div>
+        <div className="shrink-0 rounded-md border bg-card px-4 py-8 text-center text-xs text-muted-foreground">没有可显示的容器</div>
       ) : (
-        <div className="shrink-0 overflow-x-auto rounded-md border bg-card">
+        // 唯一的滚动容器: 纵向滚容器行, 横向滚 min-w-[860px] 的表格。
+        // overscroll-contain 阻止滚到边界后把滚动传给外层页面。
+        <div className="min-h-0 flex-1 overflow-auto overscroll-contain rounded-md border bg-card">
           <table className="w-full min-w-[860px] text-left text-xs">
             <thead>
               <tr className="border-b bg-muted/60 text-muted-foreground">

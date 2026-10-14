@@ -24,6 +24,7 @@ type GroupService interface {
 
 type ListenerService interface {
 	Create(context.Context, listener.CreateRequest) (listener.Listener, error)
+	Delete(context.Context, string, int) error
 	Get(context.Context, string) (listener.Listener, error)
 	Update(context.Context, string, listener.UpdateRequest) (listener.Listener, error)
 	// EnsureSharedInbounds converges the aggregate listener rows for the
@@ -63,6 +64,18 @@ type ListenerCreateRequest struct {
 	Transport      listener.Transport      `json:"transport,omitempty"`
 	PublicEndpoint listener.PublicEndpoint `json:"public_endpoint,omitempty"`
 	Enabled        *bool                   `json:"enabled,omitempty"`
+	// ProxyGroupID attaches this entry point to an already existing proxy group
+	// instead of the one Create would have built alongside it. When set, Create
+	// creates no group at all: the named group keeps its own strategy, members
+	// and failure policy, and the service is only a new entry point onto it.
+	//
+	// The name is deliberately the same as on listener.CreateRequest, where it
+	// means the same thing. A top-level group_id was rejected: UpdateRequest
+	// already uses that name for "the service being updated", and this
+	// repository has paid before for letting one name carry two roles.
+	//
+	// See .agents/notes/implemented/feature/2026-10-14-reuse-existing-group-for-an-entry.md.
+	ProxyGroupID string `json:"proxy_group_id,omitempty"`
 }
 
 type ListenerUpdateRequest struct {
@@ -129,23 +142,48 @@ func NewService(groups GroupService, listeners ListenerService, settings Setting
 	return service, nil
 }
 
+// Create builds one service: an egress anchor plus an entry point.
+//
+// The anchor is either created here from name/strategy/source_spec, or — when
+// listener.proxy_group_id names one — reused as-is. Reuse exists so a residential
+// channel (provider + channel, which owns a proxy group but is not a
+// subscription) can gain extra entry points without a second group being built
+// for the same exits. See
+// .agents/notes/implemented/feature/2026-10-14-reuse-existing-group-for-an-entry.md.
 func (s *Service) Create(ctx context.Context, request CreateRequest) (ServiceRecord, error) {
-	group, err := s.groups.Create(ctx, proxygroup.CreateRequest{
-		Name:             request.Name,
-		Strategy:         request.Strategy,
-		SourceSpec:       request.SourceSpec,
-		Enabled:          request.Enabled,
-		EmptyBehavior:    request.EmptyBehavior,
-		DialerProxyGroup: request.DialerProxyGroup,
-	})
-	if err != nil {
-		if group.ID != "" {
-			_ = s.groups.Delete(ctx, group.ID, group.Version)
+	reuseGroupID := strings.TrimSpace(request.Listener.ProxyGroupID)
+	reusing := reuseGroupID != ""
+	var group proxygroup.Group
+	if reusing {
+		reused, err := s.reuseGroup(ctx, request, reuseGroupID)
+		if err != nil {
+			return ServiceRecord{}, err
 		}
-		return ServiceRecord{}, fmt.Errorf("%w: create proxy group: %v", ErrCreateFailed, err)
+		group = reused
+	} else {
+		created, err := s.groups.Create(ctx, proxygroup.CreateRequest{
+			Name:             request.Name,
+			Strategy:         request.Strategy,
+			SourceSpec:       request.SourceSpec,
+			Enabled:          request.Enabled,
+			EmptyBehavior:    request.EmptyBehavior,
+			DialerProxyGroup: request.DialerProxyGroup,
+		})
+		if err != nil {
+			if created.ID != "" {
+				_ = s.groups.Delete(ctx, created.ID, created.Version)
+			}
+			return ServiceRecord{}, fmt.Errorf("%w: create proxy group: %v", ErrCreateFailed, err)
+		}
+		group = created
 	}
 	createdListener, err := s.createListener(ctx, group.ID, request.Listener)
 	if err != nil {
+		if reusing {
+			// The group belongs to whoever created it (a residential channel
+			// owns its own), so a failed entry point must leave it alone.
+			return ServiceRecord{}, fmt.Errorf("%w: create listener: %v", ErrCreateFailed, err)
+		}
 		cleanupErr := s.groups.Delete(ctx, group.ID, group.Version)
 		if cleanupErr != nil {
 			return ServiceRecord{Group: group}, fmt.Errorf("%w: create listener: %v; cleanup proxy group: %v", ErrCreateFailed, err, cleanupErr)
@@ -153,6 +191,14 @@ func (s *Service) Create(ctx context.Context, request CreateRequest) (ServiceRec
 		return ServiceRecord{}, fmt.Errorf("%w: create listener: %v", ErrCreateFailed, err)
 	}
 	if err := s.syncSharedInbound(ctx); err != nil {
+		if reusing {
+			// Compensate only the new entry; the channel-owned group is shared.
+			cleanupErr := s.listeners.Delete(ctx, createdListener.ID, createdListener.Version)
+			if cleanupErr == nil {
+				cleanupErr = s.syncSharedInbound(ctx)
+			}
+			return ServiceRecord{}, fmt.Errorf("%w: publish shared inbound: %v; cleanup listener: %v", ErrCreateFailed, err, cleanupErr)
+		}
 		cleanupErr := s.groups.Delete(ctx, group.ID, group.Version)
 		if cleanupErr == nil {
 			cleanupErr = s.syncSharedInbound(ctx)

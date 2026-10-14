@@ -8,10 +8,12 @@ StartLimitBurst=20
 
 [Service]
 Type=simple
+LogNamespace=hx-pxy
 User=hx-pxy
 Group=hx-pxy
 WorkingDirectory=/var/lib/hx-pxy/runtime
 Environment=GOMAXPROCS=4
+UnsetEnvironment=HTTP_PROXY HTTPS_PROXY ALL_PROXY FTP_PROXY NO_PROXY http_proxy https_proxy all_proxy ftp_proxy no_proxy
 ExecStartPre=/usr/local/lib/hx-pxy/current/mihomo -t -d /var/lib/hx-pxy/runtime -f /var/lib/hx-pxy/runtime/active.yaml
 ExecStart=/usr/local/lib/hx-pxy/current/mihomo -d /var/lib/hx-pxy/runtime -f /var/lib/hx-pxy/runtime/active.yaml
 Restart=on-failure

@@ -259,7 +259,7 @@ func (s *Server) CapabilityCatalog() CapabilityCatalog {
 			},
 		},
 		Enums:        enums,
-		Endpoints:    capabilityEndpoints(),
+		Endpoints:    append(capabilityEndpoints(), networkCapabilityEndpoints()...),
 		Workflows:    capabilityWorkflows(),
 		NotSupported: capabilityNotSupported(),
 		Related:      capabilityRelated(),
