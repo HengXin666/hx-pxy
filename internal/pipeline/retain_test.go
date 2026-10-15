@@ -2,6 +2,7 @@ package pipeline
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"testing"
 	"time"
@@ -73,23 +74,53 @@ func TestRetainMinDwellProtectsRecentMembers(t *testing.T) {
 	}
 }
 
-func TestRetainNeverKeepsQuarantinedOrFilteredIncumbents(t *testing.T) {
+func TestRetainNeverKeepsQuarantinedIncumbents(t *testing.T) {
 	now := time.Unix(1_800_000_000, 0)
 	built := buildRetaining(t, 1, RetainSpec{Margin: 1000})
-	sick := latencyNode("sick", 50)
+	// The quarantined incumbent ranks below the newcomer: if it were treated as
+	// an incumbent the huge margin would keep it.
+	sick := latencyNode("sick", 300)
 	sick.LifecycleState = "quarantined"
 	nodes := []*Node{sick, latencyNode("ok", 80)}
-	incumbents := Incumbents{JoinedAt: map[string]time.Time{"fp-sick": now.Add(-time.Hour), "fp-gone": now.Add(-time.Hour)}, Now: now}
+	incumbents := Incumbents{JoinedAt: map[string]time.Time{"fp-sick": now.Add(-time.Hour)}, Now: now}
 	result, _ := built.RunRetaining(context.Background(), nodes, incumbents)
-	// sick is not an incumbent (quarantined) and ranks first; ok has no claim.
-	if got := ids(result); got != "sick" {
-		t.Fatalf("members = %s", got)
+	if got := ids(result); got != "ok" {
+		t.Fatalf("members = %s, want ok (quarantined incumbent must not be retained)", got)
 	}
 	nodes = []*Node{latencyNode("ok", 80), latencyNode("other", 70)}
 	incumbents.JoinedAt = map[string]time.Time{"fp-ok": now.Add(-time.Hour)}
 	result, _ = built.RunRetaining(context.Background(), nodes, incumbents)
 	if got := ids(result); got != "ok" {
 		t.Fatalf("members = %s, want incumbent ok", got)
+	}
+}
+
+type fixedBucket map[string]string
+
+func (b fixedBucket) Bucket(_ context.Context, item *NodeContext) (string, error) {
+	return b[item.Node.ID], nil
+}
+
+func TestRetainHonoursPerBucketCapWithoutDroppingIncumbentsFirst(t *testing.T) {
+	now := time.Unix(1_800_000_000, 0)
+	registry := DefaultRegistry()
+	registry.RegisterBucketer("fixed", func(json.RawMessage) (Bucketer, error) {
+		return fixedBucket{"a": "x", "b": "x", "c": "y"}, nil
+	})
+	built, err := registry.Build(Spec{Sort: []string{"latency"}, Bucket: &RuleSpec{Use: "fixed"}, Limit: LimitSpec{Total: 2, PerBucket: 1}, Retain: &RetainSpec{Margin: 50}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// a ranks first in bucket x; b is the incumbent in x. A plain per-bucket
+	// cap would drop b before Retain sees it.
+	nodes := []*Node{latencyNode("a", 90), latencyNode("b", 100), latencyNode("c", 200)}
+	incumbents := Incumbents{JoinedAt: map[string]time.Time{"fp-b": now.Add(-time.Hour)}, Now: now}
+	result, err := built.RunRetaining(context.Background(), nodes, incumbents)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := ids(result); got != "b,c" {
+		t.Fatalf("members = %s, want b,c", got)
 	}
 }
 

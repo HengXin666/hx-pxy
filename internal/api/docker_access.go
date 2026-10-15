@@ -6,6 +6,7 @@ import (
 	"net/http"
 
 	"github.com/HengXin666/hx-pxy/internal/dockeraccess"
+	"github.com/HengXin666/hx-pxy/internal/listener"
 )
 
 // DockerAccessService assesses, previews, applies and revokes the companion
@@ -83,4 +84,24 @@ func (s *Server) handleListenerDockerAccess(writer http.ResponseWriter, request 
 	default:
 		methodNotAllowed(writer, request, http.MethodGet, http.MethodPost, http.MethodDelete)
 	}
+}
+
+// markDockerEntries labels companion rows in a listener listing so no client
+// mistakes a Docker entry for an ordinary service bound where it says.
+func (s *Server) markDockerEntries(request *http.Request, items []listener.Listener) error {
+	if s.dockerAccess == nil {
+		return nil
+	}
+	links, err := s.dockerAccess.Links(request.Context())
+	if err != nil {
+		return err
+	}
+	sourceOf := make(map[string]string, len(links))
+	for _, link := range links {
+		sourceOf[link.EntryListenerID] = link.ListenerID
+	}
+	for index := range items {
+		items[index].DockerAccessFor = sourceOf[items[index].ID]
+	}
+	return nil
 }

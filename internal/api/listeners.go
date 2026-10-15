@@ -16,6 +16,10 @@ func (s *Server) handleListeners(writer http.ResponseWriter, request *http.Reque
 			s.handleError(writer, request, err)
 			return
 		}
+		if err := s.markDockerEntries(request, items); err != nil {
+			s.handleError(writer, request, err)
+			return
+		}
 		writeJSON(writer, http.StatusOK, map[string]any{"items": items})
 	case http.MethodPost:
 		var createRequest listener.CreateRequest
@@ -130,10 +134,6 @@ func (s *Server) handleListener(writer http.ResponseWriter, request *http.Reques
 			s.handleListenerDockerAccess(writer, request, identifier)
 			return
 		}
-		if action == "docker-access" && identifier != "" {
-			s.handleListenerDockerAccess(writer, request, identifier)
-			return
-		}
 		if action == "rotate-share" && identifier != "" {
 			if request.Method != http.MethodPost {
 				methodNotAllowed(writer, request, http.MethodPost)
@@ -176,6 +176,16 @@ func (s *Server) handleListener(writer http.ResponseWriter, request *http.Reques
 		if err != nil {
 			s.writeAPIError(writer, request, http.StatusBadRequest, "invalid_request", err.Error())
 			return
+		}
+		// A Docker entry exists only to reach this service. Revoke it before
+		// the source row goes, so no caller (UI, API key, script) can leave a
+		// running companion behind once the link would cascade away. A failed
+		// revoke keeps the source and its link so the delete can be retried.
+		if s.dockerAccess != nil {
+			if err := s.dockerAccess.Revoke(request.Context(), id); err != nil {
+				s.handleError(writer, request, err)
+				return
+			}
 		}
 		if err := s.listeners.Delete(request.Context(), id, version); err != nil {
 			s.handleError(writer, request, err)

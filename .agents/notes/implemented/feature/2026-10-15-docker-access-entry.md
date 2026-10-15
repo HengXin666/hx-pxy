@@ -35,16 +35,29 @@ credentials and the source's exact egress (`proxy_group_id` + `node_id`). Placem
 
 `POST` applies only with `confirm: true` and the `plan.id` digest the preview showed; a
 changed source, bridge or port yields a new id and the stale confirmation gets 409.
-`DELETE` revokes (deletes the companion). The link lives in `docker_access_entries`
-(migration 40), cascading on either listener. The shared-inbound migrator skips linked
-companions so a bridge-bound entry is never folded back onto a loopback carrier.
-Deleting a service in the UI revokes its companion first.
+`DELETE` revokes (deletes the companion and its link). The link lives in
+`docker_access_entries` (migration 40), cascading on either listener. The shared-inbound
+migrator skips linked companions so a bridge-bound entry is never folded back onto a
+loopback carrier. `DELETE /api/v1/listeners/{id}` revokes the source's companion
+server-side before deleting the source, so no caller can orphan a running entry; the
+listener listing marks companions with `docker_access_for`.
+
+The compiler gates companions (`compiler_docker_entries.go`): a companion whose source
+is disabled or gone is not compiled, and a bridge-bound companion whose gateway is no
+longer on the host is left out, so a removed compose network makes only that entry
+unusable instead of failing the endpoint pre-check of every apply. The assessment
+reports such an entry as `entry_unreachable` (revocable), a shared member while the
+shared entry is off as `shared_entry_disabled`, and an exhausted port window as
+`no_free_port`. Port allocation probes TCP and UDP because Mixed serves both.
 
 Mixed companions yield both `http://` (HTTP_PROXY / HTTPS_PROXY) and `socks5h://`
 (ALL_PROXY, remote DNS) URIs.
 
 ## Alternatives considered
 
+- **Keep the explanatory refusal** (status quo): it never creates a listener, so it
+  can never widen exposure; but it leaves the operator at a dead end although every
+  fact needed for a safe entry is known, which is the defect this note fixes.
 - **Rebind the source listener in place** to the bridge: breaks every host-side client
   using 127.0.0.1, and is impossible for WebSocket kinds (they must stay loopback behind
   the reverse proxy).
@@ -52,7 +65,8 @@ Mixed companions yield both `http://` (HTTP_PROXY / HTTPS_PROXY) and `socks5h://
   at once; a companion touches nothing else.
 - **Multi-address bind targets on one listener**: Mihomo listeners take one `listen`
   address, so this is N compiled listeners anyway; a separate row keeps one meaning per
-  row and is reversible. Revisit if per-network membership grows (see C in the PR).
+  row and is reversible. Revisit when one service needs entries on more than one Docker
+  network at once, which a single companion per source cannot express.
 - **Auto-open firewall rules**: changes host policy outside HX's ownership; the dialog
   only shows a subnet-scoped example command.
 

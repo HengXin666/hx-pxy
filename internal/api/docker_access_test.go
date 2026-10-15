@@ -80,3 +80,30 @@ func TestDockerAccessRoutes(t *testing.T) {
 		t.Fatalf("PUT = %d", response.Code)
 	}
 }
+
+func TestListenerListMarksDockerEntriesAndDeleteRevokesFirst(t *testing.T) {
+	stub := &stubDockerAccess{}
+	listeners := &consumerNodeService{edgeListenerService: edgeListenerService{items: []listener.Listener{{ID: "svc"}, {ID: "entry"}}}}
+	server, err := NewServer(&stubBundleService{}, slog.New(slog.NewTextHandler(io.Discard, nil)),
+		WithListeners(listeners), WithDockerAccess(stub))
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler := server.Handler()
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/api/v1/listeners", nil))
+	var body struct {
+		Items []listener.Listener `json:"items"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &body); err != nil || len(body.Items) != 2 {
+		t.Fatalf("list = %d %s", recorder.Code, recorder.Body.String())
+	}
+	if body.Items[0].DockerAccessFor != "" || body.Items[1].DockerAccessFor != "svc" {
+		t.Fatalf("docker_access_for = %q, %q", body.Items[0].DockerAccessFor, body.Items[1].DockerAccessFor)
+	}
+	recorder = httptest.NewRecorder()
+	handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodDelete, "/api/v1/listeners/svc?version=1", nil))
+	if stub.revoked != "svc" {
+		t.Fatalf("deleting a source must revoke its Docker entry server-side, revoked = %q", stub.revoked)
+	}
+}

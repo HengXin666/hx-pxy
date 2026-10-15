@@ -13,7 +13,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { api, invalidateQueries } from "@/lib/api"
 import { matchesRegion, regionLabel, strategyLabel } from "@/lib/proxy-groups"
 import { serviceShape, shapeMeta, type ServiceShape } from "@/lib/service-shape"
-import type { DataPlaneStatus, DockerAccessLink, ListenerRecord, NodeRecord, ProxyGroup, ResidentialChannel, RoutingAction, RoutingRulesConfig, RoutingRuleSet, SharedInboundSettings, Subscription } from "@/lib/types"
+import type { DataPlaneStatus, ListenerRecord, NodeRecord, ProxyGroup, ResidentialChannel, RoutingAction, RoutingRulesConfig, RoutingRuleSet, SharedInboundSettings, Subscription } from "@/lib/types"
 import { cn, formatDate } from "@/lib/utils"
 import { DockerAccessDialog } from "@/components/docker-access-dialog"
 
@@ -32,9 +32,6 @@ export function RoutingPage({ onNotice }: RoutingPageProps) {
   // Shared-inbound settings decide whether a new service opens its own port or
   // joins the one-client entry points; the banner and the create form read it.
   const [sharedInbound, setSharedInbound] = useState<SharedInboundSettings | null>(null)
-  // Source -> companion Docker entry links (internal/dockeraccess). A missing
-  // endpoint only hides the labels; it must not fail the page.
-  const [dockerLinks, setDockerLinks] = useState<DockerAccessLink[]>([])
   const loadVersion = useRef(0)
   const [membersLoading, setMembersLoading] = useState(true)
   const [loading, setLoading] = useState(true)
@@ -57,7 +54,6 @@ export function RoutingPage({ onNotice }: RoutingPageProps) {
       if (version === loadVersion.current) onNotice(error instanceof Error ? error.message : "节点加载失败", "error")
     }).finally(() => { if (version === loadVersion.current) setMembersLoading(false) })
     void api.dataPlaneStatus().then((result) => { if (version === loadVersion.current) setStatus(result) }).catch(() => {})
-    void api.dockerAccessLinks().then((result) => { if (version === loadVersion.current) setDockerLinks(result.items) }).catch(() => {})
     try {
       const [subscriptionResult, groupResult, listenerResult, ruleResult, residentialResult, settingsResult] = await Promise.all([
         api.listSubscriptions(), api.listProxyGroups(), api.listListeners(), api.routingRules(), api.listResidentialChannels(), api.globalSettings(),
@@ -125,10 +121,8 @@ export function RoutingPage({ onNotice }: RoutingPageProps) {
     setBusy(true)
     const target = deleteTarget
     try {
-      // A service's Docker entry exists only to reach this service, so it goes
-      // with it; otherwise it would linger as an orphan entry on the same exit.
-      const companion = dockerLinks.find((link) => link.listener_id === target.listener.id)
-      if (companion) await api.revokeDockerAccess(target.listener.id)
+      // The server revokes this service's Docker entry before deleting it, so
+      // the entry row (marked docker_access_for) no longer shares the group.
       await api.deleteListener(target.listener.id, target.listener.version)
       // The group is only removed when it belongs to this service alone.
       //
@@ -142,7 +136,7 @@ export function RoutingPage({ onNotice }: RoutingPageProps) {
       // action, so the row stayed and the operator retried into a confusing
       // 404. Only a group this listener is the last user of may go.
       const group = target.group
-      const remaining = companion ? listeners.filter((item) => item.id !== companion.entry_listener_id) : listeners
+      const remaining = listeners.filter((item) => item.docker_access_for !== target.listener.id)
       if (group && isSoleOwnerOfGroup(remaining, target.listener.id, group.id)) {
         await api.deleteProxyGroup(group.id, group.version)
       }
@@ -199,9 +193,10 @@ export function RoutingPage({ onNotice }: RoutingPageProps) {
           {listeners.length === 0 ? <EmptyState onCreate={() => setShowCreate(true)} /> : <div className="min-h-48 divide-y overflow-y-auto 2xl:min-h-0 2xl:flex-1">{listeners.map((listener) => {
             const group = groups.find((item) => item.id === listener.proxy_group_id)
             const residential = residentialChannels.find((channel) => channel.listener_id === listener.id)
-            const sourceLink = dockerLinks.find((link) => link.entry_listener_id === listener.id)
-            const dockerEntryFor = sourceLink ? (listeners.find((item) => item.id === sourceLink.listener_id)?.name ?? "") : undefined
-            return <ServiceRow key={listener.id} listener={listener} dockerEntryFor={dockerEntryFor} group={group} groups={groups} routingRules={routingRules} nodes={serviceNodes.get(listener.id) ?? []} subscriptions={subscriptions} allNodes={nodes} residential={residential} sharedInbound={sharedInbound} expanded={expanded.has(listener.id)} editing={editing === listener.id} onToggle={() => setExpanded((current) => { const next = new Set(current); if (next.has(listener.id)) next.delete(listener.id); else next.add(listener.id); return next })} onEdit={() => { setExpanded((current) => new Set(current).add(listener.id)); setEditing(listener.id) }} onCloseEdit={() => setEditing(null)} onRoutingChanged={setRoutingRules} onChanged={async () => { setEditing(null); await load() }} onDelete={() => setDeleteTarget({ listener, group })} onNotice={onNotice} />
+            // Docker entries are marked by the server (docker_access_for).
+            const dockerEntryFor = listener.docker_access_for ? (listeners.find((item) => item.id === listener.docker_access_for)?.name ?? "") : undefined
+            const hasDockerEntry = listeners.some((item) => item.docker_access_for === listener.id)
+            return <ServiceRow key={listener.id} listener={listener} dockerEntryFor={dockerEntryFor} hasDockerEntry={hasDockerEntry} group={group} groups={groups} routingRules={routingRules} nodes={serviceNodes.get(listener.id) ?? []} subscriptions={subscriptions} allNodes={nodes} residential={residential} sharedInbound={sharedInbound} expanded={expanded.has(listener.id)} editing={editing === listener.id} onToggle={() => setExpanded((current) => { const next = new Set(current); if (next.has(listener.id)) next.delete(listener.id); else next.add(listener.id); return next })} onEdit={() => { setExpanded((current) => new Set(current).add(listener.id)); setEditing(listener.id) }} onCloseEdit={() => setEditing(null)} onRoutingChanged={setRoutingRules} onChanged={async () => { setEditing(null); await load() }} onDelete={() => setDeleteTarget({ listener, group })} onNotice={onNotice} />
           })}</div>}
         </section>
       </div>
@@ -292,7 +287,7 @@ function isPublicBindAddress(value: string): boolean {
   return value !== "127.0.0.1" && value !== "::1" && value !== "0.0.0.0" && value !== "::" && !value.startsWith("127.")
 }
 
-function ServiceRow({ listener, dockerEntryFor, group, groups, routingRules, nodes, subscriptions, allNodes, residential, sharedInbound, expanded, editing, onToggle, onEdit, onCloseEdit, onRoutingChanged, onChanged, onDelete, onNotice }: { listener: ListenerRecord; dockerEntryFor?: string; group?: ProxyGroup; groups: ProxyGroup[]; routingRules: RoutingRulesConfig; nodes: NodeRecord[]; subscriptions: Subscription[]; allNodes: NodeRecord[]; residential?: ResidentialChannel; sharedInbound: SharedInboundSettings | null; expanded: boolean; editing: boolean; onToggle: () => void; onEdit: () => void; onCloseEdit: () => void; onRoutingChanged: (config: RoutingRulesConfig) => void; onChanged: () => Promise<void>; onDelete: () => void; onNotice: RoutingPageProps["onNotice"] }) {
+function ServiceRow({ listener, dockerEntryFor, hasDockerEntry, group, groups, routingRules, nodes, subscriptions, allNodes, residential, sharedInbound, expanded, editing, onToggle, onEdit, onCloseEdit, onRoutingChanged, onChanged, onDelete, onNotice }: { listener: ListenerRecord; dockerEntryFor?: string; hasDockerEntry: boolean; group?: ProxyGroup; groups: ProxyGroup[]; routingRules: RoutingRulesConfig; nodes: NodeRecord[]; subscriptions: Subscription[]; allNodes: NodeRecord[]; residential?: ResidentialChannel; sharedInbound: SharedInboundSettings | null; expanded: boolean; editing: boolean; onToggle: () => void; onEdit: () => void; onCloseEdit: () => void; onRoutingChanged: (config: RoutingRulesConfig) => void; onChanged: () => Promise<void>; onDelete: () => void; onNotice: RoutingPageProps["onNotice"] }) {
   const [action, setAction] = useState("")
   const [dockerOpen, setDockerOpen] = useState(false)
   const [detailTab, setDetailTab] = useState("members")
@@ -403,7 +398,7 @@ function ServiceRow({ listener, dockerEntryFor, group, groups, routingRules, nod
       </div>
       <div className="min-w-0"><div className="flex items-center gap-1.5 text-xs font-medium"><Network className="size-3.5 shrink-0" />{strategyText}</div><div className="mt-1 truncate text-[11px] text-muted-foreground" title={sourceText}>{sourceText}</div></div>
       <div className="w-full lg:w-[190px]">
-        <Select value={action} onValueChange={runAction}><SelectTrigger onClick={(event) => event.stopPropagation()} className="h-8"><Link2 className="mr-1 size-3.5" /><SelectValue placeholder="服务操作" /></SelectTrigger><SelectContent><SelectItem value="edit">编辑服务</SelectItem>{!residential && listener.share_path && <><SelectItem value="clash:Clash / Mihomo">复制 Clash / Mihomo 订阅</SelectItem><SelectItem value="v2rayn:v2rayN / v2rayNG">复制 v2rayN / v2rayNG 订阅</SelectItem><SelectItem value="v2rayn:Shadowrocket">复制 Shadowrocket 订阅</SelectItem><SelectItem value="sing-box:sing-box / NekoBox">复制 sing-box / NekoBox 订阅</SelectItem><SelectItem value="auth-uri">复制认证连接 URI</SelectItem></>}{residential ? <><SelectItem value="residential-clash">复制 Clash / Mihomo 订阅</SelectItem><SelectItem value="residential-control">复制自动化控制 URL</SelectItem></> : <><SelectItem value="address">复制入口地址</SelectItem></>}{listener.enabled && <SelectItem value="docker">Docker 使用方式</SelectItem>}<SelectItem value="delete" className="text-destructive">删除服务</SelectItem></SelectContent></Select>
+        <Select value={action} onValueChange={runAction}><SelectTrigger onClick={(event) => event.stopPropagation()} className="h-8"><Link2 className="mr-1 size-3.5" /><SelectValue placeholder="服务操作" /></SelectTrigger><SelectContent><SelectItem value="edit">编辑服务</SelectItem>{!residential && listener.share_path && <><SelectItem value="clash:Clash / Mihomo">复制 Clash / Mihomo 订阅</SelectItem><SelectItem value="v2rayn:v2rayN / v2rayNG">复制 v2rayN / v2rayNG 订阅</SelectItem><SelectItem value="v2rayn:Shadowrocket">复制 Shadowrocket 订阅</SelectItem><SelectItem value="sing-box:sing-box / NekoBox">复制 sing-box / NekoBox 订阅</SelectItem><SelectItem value="auth-uri">复制认证连接 URI</SelectItem></>}{residential ? <><SelectItem value="residential-clash">复制 Clash / Mihomo 订阅</SelectItem><SelectItem value="residential-control">复制自动化控制 URL</SelectItem></> : <><SelectItem value="address">复制入口地址</SelectItem></>}{(listener.enabled || hasDockerEntry) && <SelectItem value="docker">Docker 使用方式</SelectItem>}<SelectItem value="delete" className="text-destructive">删除服务</SelectItem></SelectContent></Select>
       </div>
     </div>
     {dockerOpen && <DockerAccessDialog listener={listener} subscriptionURL={residential?.subscription_url} onClose={() => setDockerOpen(false)} onChanged={() => void onChanged()} />}

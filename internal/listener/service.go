@@ -97,11 +97,16 @@ type Listener struct {
 	// family. It is a control-plane resource, not a service: it holds no
 	// credential and no group of its own, so the UI must not offer it for
 	// editing or deletion.
-	SharedInboundAggregate bool      `json:"shared_inbound_aggregate,omitempty"`
-	Enabled                bool      `json:"enabled"`
-	Version                int       `json:"version"`
-	CreatedAt              time.Time `json:"created_at"`
-	UpdatedAt              time.Time `json:"updated_at"`
+	SharedInboundAggregate bool `json:"shared_inbound_aggregate,omitempty"`
+	// DockerAccessFor names the source listener when this row is a Docker
+	// entry (a companion created for container access). Consumers that build
+	// egress lists from listeners must skip or special-case these rows: they
+	// bind a Docker bridge or ride the shared entry, never 127.0.0.1.
+	DockerAccessFor string    `json:"docker_access_for,omitempty"`
+	Enabled         bool      `json:"enabled"`
+	Version         int       `json:"version"`
+	CreatedAt       time.Time `json:"created_at"`
+	UpdatedAt       time.Time `json:"updated_at"`
 }
 
 type CreateRequest struct {

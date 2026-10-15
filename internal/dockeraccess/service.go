@@ -32,6 +32,7 @@ type Repository interface {
 	ListDockerAccessEntries(context.Context) ([]store.DockerAccessEntryRecord, error)
 	CreateDockerAccessEntry(context.Context, store.DockerAccessEntryRecord) error
 	DeleteDockerAccessEntry(context.Context, string) error
+	DeleteDockerAccessEntryFor(context.Context, string) error
 }
 
 // Listeners is the subset of the listener service this package drives. All
@@ -202,6 +203,11 @@ func (s *Service) removeEntry(ctx context.Context, entry listener.Listener, shar
 	if err := s.listeners.Delete(ctx, entry.ID, entry.Version); err != nil && !errors.Is(err, listener.ErrNotFound) {
 		return err
 	}
+	// The cascade already drops the link in SQLite; deleting it explicitly
+	// keeps the contract independent of the storage engine.
+	if err := s.repository.DeleteDockerAccessEntryFor(ctx, entry.ID); err != nil {
+		return err
+	}
 	if shared {
 		return s.converger.ConvergeSharedInbound(ctx)
 	}
@@ -296,12 +302,20 @@ func (s *Service) allocatePort(host string, used map[int]struct{}) int {
 	return 0
 }
 
+// tcpPortFree checks both TCP and UDP: a Mixed listener also serves UDP
+// (SOCKS5 UDP ASSOCIATE), so a port taken on either protocol fails the apply.
 func tcpPortFree(host string, port int) bool {
-	probe, err := net.Listen("tcp", net.JoinHostPort(host, strconv.Itoa(port)))
+	address := net.JoinHostPort(host, strconv.Itoa(port))
+	stream, err := net.Listen("tcp", address)
 	if err != nil {
 		return false
 	}
-	_ = probe.Close()
+	defer func() { _ = stream.Close() }()
+	packet, err := net.ListenPacket("udp", address)
+	if err != nil {
+		return false
+	}
+	_ = packet.Close()
 	return true
 }
 

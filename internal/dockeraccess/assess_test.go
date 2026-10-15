@@ -133,3 +133,45 @@ func TestSortBridgesPrefersDocker0(t *testing.T) {
 		t.Fatalf("order = %+v", bridges)
 	}
 }
+
+func TestAssessSharedMemberIsNotDialableWhenSharedEntryIsOff(t *testing.T) {
+	member := service("mixed", "0.0.0.0", true)
+	member.SharedInbound = listener.SharedInboundStandardOwner
+	got := Assess(Input{Source: member, Bridges: []Bridge{docker0}, Shared: SharedEntry{Enabled: false, Bind: "0.0.0.0", Port: 7890}, AllocatedPort: 17890})
+	if got.State != StateNeedsEntry || got.Reason != ReasonSharedDisabled || got.Plan.Placement != PlacementBridge {
+		t.Fatalf("assessment = %+v plan=%+v", got, got.Plan)
+	}
+	entry := service("mixed", "0.0.0.0", true)
+	entry.ID, entry.SharedInbound = "companion", listener.SharedInboundStandardOwner
+	got = Assess(Input{Source: service("vless", "127.0.0.1", true), Entry: &entry, Bridges: []Bridge{docker0}, Shared: SharedEntry{Enabled: false}})
+	if got.State != StateBlocked || got.Reason != ReasonEntryUnreachable || !got.Revocable {
+		t.Fatalf("shared companion after switch-off = %+v", got)
+	}
+}
+
+func TestAssessBridgeCompanionWhoseBridgeVanishedIsUnreachable(t *testing.T) {
+	entry := service("mixed", "172.18.0.1", true)
+	entry.ID, entry.Port = "companion", 17890
+	got := Assess(Input{Source: service("vless", "127.0.0.1", true), Entry: &entry, Bridges: []Bridge{docker0}})
+	if got.State != StateBlocked || got.Reason != ReasonEntryUnreachable || !got.Revocable || got.Entry != nil {
+		t.Fatalf("assessment = %+v", got)
+	}
+}
+
+func TestAssessDisabledSourceKeepsCompanionRevocable(t *testing.T) {
+	source := service("vless", "127.0.0.1", true)
+	source.Enabled = false
+	entry := service("mixed", "172.17.0.1", true)
+	entry.ID = "companion"
+	got := Assess(Input{Source: source, Entry: &entry, Bridges: []Bridge{docker0}})
+	if got.State != StateBlocked || got.Reason != ReasonServiceDisabled || !got.Revocable {
+		t.Fatalf("assessment = %+v", got)
+	}
+}
+
+func TestAssessReportsExhaustedPortWindowSeparately(t *testing.T) {
+	got := Assess(Input{Source: service("http", "127.0.0.1", true), Bridges: []Bridge{docker0}})
+	if got.State != StateBlocked || got.Reason != ReasonNoFreePort {
+		t.Fatalf("assessment = %+v", got)
+	}
+}

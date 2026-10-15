@@ -99,7 +99,7 @@ func DiscoverLAN() []string {
 			if !ok {
 				continue
 			}
-			if ip := network.IP.To4(); ip != nil && !ip.IsLoopback() && !ip.IsLinkLocalUnicast() {
+			if ip := network.IP.To4(); ip != nil && !ip.IsLoopback() && !ip.IsUnspecified() && !ip.IsLinkLocalUnicast() {
 				result = append(result, ip.String())
 			}
 		}

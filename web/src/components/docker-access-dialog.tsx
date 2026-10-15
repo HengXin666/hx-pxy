@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react"
+import { useCallback, useEffect, useRef, useState } from "react"
 import { LoaderCircle, Undo2 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog"
@@ -26,7 +26,9 @@ const reasonText: Record<DockerAccessReason, string> = {
   no_reachable_address: "本机没有可供容器连接的地址。",
   no_docker_bridge: "本机未检测到 Docker 网桥（docker0 或 compose 的 br-*）。请先在本机启动 Docker 或创建 compose 网络，再重新打开此窗口。",
   entry_disabled: "该服务的 Docker 入口已停用。撤销后可重新创建。",
-  entry_unreachable: "该服务的 Docker 入口已无法从容器访问（网桥可能已被删除或地址已变）。撤销后可按当前网桥重新创建。",
+  entry_unreachable: "该服务的 Docker 入口已无法从容器访问（网桥被删除、地址变化或共享入口已关闭）。撤销后可按当前网络重新创建。",
+  no_free_port: "所选网桥上 17890–17989 的端口都已被占用。请释放其中一个端口，或切换到其他网桥后重试。",
+  shared_entry_disabled: "共享入口已关闭，该服务当前不可连接。",
 }
 
 type ProxyURI = { scheme: string; uri: string }
@@ -43,8 +45,12 @@ export function DockerAccessDialog({ listener, subscriptionURL, onClose, onChang
   const [status, setStatus] = useState("正在检查容器能否连接此服务…")
   const [busy, setBusy] = useState(false)
   const [failed, setFailed] = useState(false)
+  // Every load gets a sequence number; only the newest one may update the
+  // dialog, so a slow answer for a previously selected bridge can never
+  // overwrite (or auto-copy) the URI of the bridge picked after it.
+  const sequence = useRef(0)
 
-  const show = useCallback(async (result: DockerAccessAssessment, cancelled: () => boolean = () => false) => {
+  const show = useCallback(async (result: DockerAccessAssessment, cancelled: () => boolean) => {
     setAssessment(result)
     setURIs([])
     if (result.state !== "ready" || !result.entry) {
@@ -65,7 +71,9 @@ export function DockerAccessDialog({ listener, subscriptionURL, onClose, onChang
     }
   }, [])
 
-  const load = useCallback(async (selected: string, cancelled: () => boolean = () => false) => {
+  const load = useCallback(async (selected: string, unmounted: () => boolean = () => false) => {
+    const ticket = ++sequence.current
+    const cancelled = () => unmounted() || ticket !== sequence.current
     setFailed(false)
     setStatus("正在检查容器能否连接此服务…")
     try {
@@ -90,9 +98,10 @@ export function DockerAccessDialog({ listener, subscriptionURL, onClose, onChang
     if (!assessment?.plan) return
     setBusy(true)
     try {
+      const ticket = ++sequence.current
       const result = await api.applyDockerAccess(listener.id, { plan_id: assessment.plan.id, gateway: gateway || undefined, confirm: true })
       onChanged?.()
-      await show(result)
+      await show(result, () => ticket !== sequence.current)
     } catch (error) {
       setStatus(error instanceof Error ? error.message : "创建 Docker 入口失败")
       await load(gateway)
@@ -168,7 +177,7 @@ export function DockerAccessDialog({ listener, subscriptionURL, onClose, onChang
 
         {(state === "client_landing" || (assessment?.client_landing && state !== "ready")) && <ClientLanding listener={listener} subscriptionURL={subscriptionURL} primary={state === "client_landing"} onCopy={copy} />}
 
-        {port !== undefined && state === "ready" && selectedBridge && <p className="text-xs leading-5 text-muted-foreground">
+        {port !== undefined && state === "ready" && selectedBridge && assessment?.entry?.host === selectedBridge.address && <p className="text-xs leading-5 text-muted-foreground">
           若容器内连接超时，多半是宿主防火墙拦截了 {selectedBridge.subnet} → {port}。可由管理员按需放行（示例，不会自动执行）：<span className="mt-1 block break-all font-mono">sudo iptables -I INPUT -s {selectedBridge.subnet} -d {selectedBridge.address} -p tcp --dport {port} -j ACCEPT</span>
         </p>}
       </div>

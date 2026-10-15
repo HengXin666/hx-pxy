@@ -41,7 +41,11 @@ func TestReplaceGroupMembersKeepsJoinTimeAndDropsLeavers(t *testing.T) {
 	if err := storage.DeleteProxyGroup(ctx, "g1", 1); err != nil {
 		t.Fatal(err)
 	}
-	if members, _ := storage.ListGroupMembers(ctx); len(members) != 0 {
+	members, err = storage.ListGroupMembers(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(members) != 0 {
 		t.Fatalf("deleting a group must cascade its members, got %+v", members)
 	}
 }

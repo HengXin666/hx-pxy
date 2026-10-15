@@ -59,6 +59,11 @@ type Compiler struct {
 	controllerSocket string
 	egressInterface  string
 	now              func() time.Time
+	// hostAddressPresent is replaced in tests; nil checks host interfaces.
+	hostAddressPresent func(string) bool
+	// pendingMembers is the membership of the last applied document when
+	// recording it failed; it overrides stored history until a write succeeds.
+	pendingMembers *pendingMembership
 }
 
 func NewCompiler(repository Repository, cipher Cipher) (*Compiler, error) {
@@ -96,6 +101,10 @@ func (c *Compiler) Compile(ctx context.Context) (Compiled, error) {
 	if err != nil {
 		return Compiled{}, err
 	}
+	listeners, err = c.gateDockerEntries(ctx, listeners)
+	if err != nil {
+		return Compiled{}, err
+	}
 	enabledGroups := make(map[string]store.ProxyGroupRecord)
 	groupNames := make(map[string]string)
 	for _, group := range groups {
@@ -125,6 +134,7 @@ func (c *Compiler) Compile(ctx context.Context) (Compiled, error) {
 		return Compiled{}, err
 	}
 	members := newMemberResolver(candidates, incumbents, c.clock())
+	members.addFingerprints(nodeRecords)
 	clientRoutes, err := c.repository.ListResidentialClientRoutes(ctx)
 	if err != nil {
 		return Compiled{}, err

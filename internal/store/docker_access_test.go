@@ -40,7 +40,29 @@ func TestDockerAccessEntriesCascadeWithEitherListener(t *testing.T) {
 	if err := storage.DeleteListener(ctx, "entry", 1); err != nil {
 		t.Fatal(err)
 	}
-	if listed, _ := storage.ListDockerAccessEntries(ctx); len(listed) != 0 {
+	listed, err = storage.ListDockerAccessEntries(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(listed) != 0 {
 		t.Fatalf("deleting the companion must drop the link, got %+v", listed)
+	}
+	// The source side cascades too.
+	if err := storage.CreateDockerAccessEntry(ctx, DockerAccessEntryRecord{ListenerID: "source", EntryListenerID: "other", BindTarget: "shared", CreatedAt: now}); err != nil {
+		t.Fatal(err)
+	}
+	if err := storage.DeleteListener(ctx, "source", 1); err != nil {
+		t.Fatal(err)
+	}
+	listed, err = storage.ListDockerAccessEntries(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(listed) != 0 {
+		t.Fatalf("deleting the source must drop the link, got %+v", listed)
+	}
+	// DeleteDockerAccessEntryFor removes by companion id.
+	if err := storage.CreateDockerAccessEntry(ctx, DockerAccessEntryRecord{ListenerID: "other", EntryListenerID: "entry2", BindTarget: "shared", CreatedAt: now}); err == nil {
+		t.Fatal("a link to a missing listener must be rejected by the foreign key")
 	}
 }

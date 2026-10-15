@@ -85,3 +85,16 @@ func TestCompileRetainsPreviousMembersUntilANewcomerIsClearlyBetter(t *testing.T
 		t.Fatalf("clearly better newcomer did not replace the incumbent: %v", third)
 	}
 }
+
+func TestOverlayPendingPrefersAppliedMembershipAndKeepsJoinTimes(t *testing.T) {
+	early := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)
+	late := time.Date(2026, 10, 16, 0, 0, 0, 0, time.UTC)
+	stored := map[string]map[string]time.Time{"g": {"old": early, "stays": early}}
+	got := overlayPending(stored, &pendingMembership{members: map[string][]string{"g": {"stays", "new"}}, at: late})
+	if len(got["g"]) != 2 || !got["g"]["stays"].Equal(early) || !got["g"]["new"].Equal(late) {
+		t.Fatalf("overlay = %+v", got)
+	}
+	if _, ok := got["g"]["old"]; ok {
+		t.Fatal("a member that left the applied document must not be retained")
+	}
+}

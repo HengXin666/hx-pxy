@@ -32,6 +32,9 @@ same Retain decision.
 
 ## Alternatives considered
 
+- **Plain re-ranking** (status quo): stateless and trivially reproducible, but every
+  probe round can swap members by a millisecond, which is the churn this note removes.
+
 - **Hysteresis on the latency samples** (EWMA): smooths noise but still swaps
   members whenever the smoothed order flips, and does nothing for score order.
 - **Writing membership during compile**: compile must stay a read of desired state;
@@ -42,8 +45,12 @@ same Retain decision.
 ## Consequences
 
 Retention is opt-in, so existing groups compile exactly as before. A Retain group's
-output depends on stored history as well as desired state; the same history still
-yields the same document. A failed membership write is logged and only makes the
+output depends on stored history, desired state and the current time: once an
+incumbent's min dwell elapses a better newcomer may replace it without any other
+input changing. A per-bucket cap is enforced inside Retain, not before it, so an
+incumbent is not dropped by the cap before Retain can keep it. When recording the
+applied membership fails, the compiler keeps it in memory and retains from it until a
+write succeeds. A failed membership write is logged and only makes the
 next compile retain from older state. fill / best modes, L2 tag probes and per-group
 snapshot ETags are not part of this change.
 

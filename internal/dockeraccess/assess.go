@@ -55,6 +55,8 @@ const (
 	ReasonNoShareExport     = "no_share_export"
 	ReasonNoAddress         = "no_reachable_address"
 	ReasonNoBridge          = "no_docker_bridge"
+	ReasonNoFreePort        = "no_free_port"
+	ReasonSharedDisabled    = "shared_entry_disabled"
 	ReasonEntryDisabled     = "entry_disabled"
 	ReasonEntryUnreachable  = "entry_unreachable"
 	PlacementShared         = "shared"
@@ -147,7 +149,9 @@ func Assess(in Input) Assessment {
 		return result
 	}
 	if !in.Source.Enabled {
-		result.State, result.Reason = StateBlocked, ReasonServiceDisabled
+		// A companion of a disabled source is not compiled (the data plane
+		// gates it), but it must stay revocable from here.
+		result.State, result.Reason, result.Revocable = StateBlocked, ReasonServiceDisabled, in.Entry != nil
 		return result
 	}
 	result.ClientLanding = isWebSocketKind(in.Source.Kind)
@@ -158,7 +162,7 @@ func Assess(in Input) Assessment {
 			return result
 		}
 		endpoint, _ := direct(*in.Entry, in.Shared, result.Gateway, in.LAN)
-		if endpoint == nil {
+		if endpoint == nil || !bridgeStillPresent(*in.Entry, in.Bridges) {
 			// The companion was valid when created; a missing bridge or a
 			// changed shared bind can strand it. Revoke and recreate fixes it.
 			result.State, result.Reason = StateBlocked, ReasonEntryUnreachable
@@ -177,6 +181,9 @@ func Assess(in Input) Assessment {
 	plan := planEntry(in, result.Gateway)
 	if plan == nil {
 		result.State, result.Reason = StateBlocked, ReasonNoBridge
+		if result.Gateway != "" {
+			result.Reason = ReasonNoFreePort
+		}
 		return result
 	}
 	result.State, result.Plan = StateNeedsEntry, plan
@@ -190,6 +197,11 @@ func direct(item listener.Listener, shared SharedEntry, gateway string, lan []st
 	}
 	bind, port := item.BindAddress, item.Port
 	if item.SharedInbound == sharedStandardOwnerName {
+		// A member of a shared entry that is switched off is not compiled at
+		// all; its stored bind/port must not be offered as dialable.
+		if !shared.Enabled {
+			return nil, ReasonSharedDisabled
+		}
 		bind, port = shared.Bind, shared.Port
 	}
 	ip := net.ParseIP(strings.TrimSpace(bind))
@@ -255,6 +267,20 @@ func withID(source listener.Listener, plan *Plan) *Plan {
 		source.ID, source.Version, plan.Placement, plan.Name, plan.BindAddress, plan.Port, plan.DialHost)))
 	plan.ID = hex.EncodeToString(digest[:8])
 	return plan
+}
+
+// bridgeStillPresent reports whether a bridge-bound companion still binds an
+// address the host has. A shared-placed companion is judged by direct().
+func bridgeStillPresent(entry listener.Listener, bridges []Bridge) bool {
+	if entry.SharedInbound != "" {
+		return true
+	}
+	for _, bridge := range bridges {
+		if bridge.Address == entry.BindAddress {
+			return true
+		}
+	}
+	return false
 }
 
 func selectGateway(bridges []Bridge, requested string) string {

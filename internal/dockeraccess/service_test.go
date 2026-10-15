@@ -29,6 +29,17 @@ func (f *fakeRepo) CreateDockerAccessEntry(_ context.Context, record store.Docke
 	f.entries = append(f.entries, record)
 	return nil
 }
+func (f *fakeRepo) DeleteDockerAccessEntryFor(_ context.Context, entryID string) error {
+	kept := f.entries[:0]
+	for _, entry := range f.entries {
+		if entry.EntryListenerID != entryID {
+			kept = append(kept, entry)
+		}
+	}
+	f.entries = kept
+	return nil
+}
+
 func (f *fakeRepo) DeleteDockerAccessEntry(_ context.Context, id string) error {
 	kept := f.entries[:0]
 	for _, entry := range f.entries {
@@ -146,6 +157,9 @@ func TestApplyBridgeCompanionCarriesEgressAndIsRevocable(t *testing.T) {
 	}
 	if len(listeners.deleted) != 1 || listeners.deleted[0] != "companion" {
 		t.Fatalf("deleted = %v", listeners.deleted)
+	}
+	if links, _ := service.Links(ctx); len(links) != 0 {
+		t.Fatalf("first revoke must clear the link, got %+v", links)
 	}
 	if err := service.Revoke(ctx, "svc"); err != nil {
 		t.Fatalf("second revoke must be a no-op, got %v", err)

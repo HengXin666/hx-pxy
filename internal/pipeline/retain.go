@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"math"
-	"sort"
 	"time"
 )
 
@@ -47,7 +46,8 @@ func (r RetainSpec) Validate() error {
 	if r.Margin < 0 || math.IsNaN(r.Margin) || math.IsInf(r.Margin, 0) {
 		return fmt.Errorf("retain margin must be a finite number >= 0")
 	}
-	if r.MinDwellSeconds < 0 || time.Duration(r.MinDwellSeconds)*time.Second > MaxRetainDwell {
+	// Compare in seconds: multiplying first can overflow and wrap negative.
+	if r.MinDwellSeconds < 0 || int64(r.MinDwellSeconds) > int64(MaxRetainDwell/time.Second) {
 		return fmt.Errorf("retain min_dwell_seconds must be between 0 and %d", int(MaxRetainDwell/time.Second))
 	}
 	return nil
@@ -57,108 +57,120 @@ func (r RetainSpec) Validate() error {
 // stage. A pipeline without a Retain spec, or with no total limit, behaves
 // exactly like Run.
 func (p *Pipeline) RunRetaining(ctx context.Context, nodes []*Node, incumbents Incumbents) (Result, error) {
-	seats := p.limit.Total
-	if p.retain == nil || seats <= 0 || len(incumbents.JoinedAt) == 0 {
+	if p.retain == nil || p.limit.Total <= 0 || len(incumbents.JoinedAt) == 0 {
 		return p.Run(ctx, nodes)
 	}
-	// Run every stage except the total limit, then let Retain choose the
-	// seats and record why. The pipeline itself is not mutated.
-	result, err := p.run(ctx, nodes, 0)
+	// Run every stage except Limit (both the total and the per-bucket cap),
+	// then let Retain choose the seats under the same caps. Applying the
+	// per-bucket cap first would drop an incumbent before Retain could keep
+	// it. The pipeline itself is not mutated.
+	result, err := p.run(ctx, nodes, LimitSpec{})
 	if err != nil {
 		return result, err
 	}
-	p.applyRetain(&result, seats, incumbents)
+	p.applyRetain(&result, incumbents)
 	return result, nil
 }
 
-func (p *Pipeline) applyRetain(result *Result, seats int, incumbents Incumbents) {
+type retainSeat struct {
+	ctx       *NodeContext
+	incumbent bool
+	protected bool
+	chosen    bool
+}
+
+// applyRetain picks at most limit.Total seats, at most limit.PerBucket per
+// bucket. Cost is O(n log n + swaps * seats): challengers are visited best
+// first and the scan stops at the first one that cannot beat the weakest
+// replaceable incumbent by the margin, because every later challenger ranks
+// no better on the first sort key.
+func (p *Pipeline) applyRetain(result *Result, incumbents Incumbents) {
+	seats, perBucket := p.limit.Total, p.limit.PerBucket
 	metric := retainMetric(p.sortKeys)
 	dwell := time.Duration(p.retain.MinDwellSeconds) * time.Second
-	type seat struct {
-		ctx       *NodeContext
-		incumbent bool
-		protected bool
-		rank      int
-	}
-	all := make([]seat, 0, len(result.Nodes))
-	for rank, nodeCtx := range result.Nodes {
+	all := make([]*retainSeat, 0, len(result.Nodes))
+	for _, nodeCtx := range result.Nodes {
 		joined, was := incumbents.JoinedAt[nodeCtx.Node.Fingerprint]
 		incumbent := was && nodeCtx.Node.Fingerprint != "" && retainable(nodeCtx.Node.LifecycleState)
 		protected := incumbent && dwell > 0 && incumbents.Now.Sub(joined) < dwell
-		all = append(all, seat{ctx: nodeCtx, incumbent: incumbent, protected: protected, rank: rank})
+		all = append(all, &retainSeat{ctx: nodeCtx, incumbent: incumbent, protected: protected})
 	}
-	chosen := make(map[int]bool, seats)
-	// Incumbents first, best-ranked first, up to the seat count.
-	for index := range all {
-		if len(chosen) >= seats {
-			break
-		}
-		if all[index].incumbent {
-			chosen[index] = true
+	used, buckets := 0, map[string]int{}
+	fits := func(item *retainSeat) bool {
+		return perBucket <= 0 || buckets[item.ctx.Bucket] < perBucket
+	}
+	take := func(item *retainSeat) {
+		item.chosen = true
+		used++
+		buckets[item.ctx.Bucket]++
+	}
+	// Incumbents first (best ranked first), then the best newcomers.
+	for _, pass := range []bool{true, false} {
+		for _, item := range all {
+			if used >= seats {
+				break
+			}
+			if !item.chosen && item.incumbent == pass && fits(item) {
+				take(item)
+			}
 		}
 	}
-	// Remaining seats go to the best newcomers.
-	for index := range all {
-		if len(chosen) >= seats {
-			break
+	if metric != nil {
+		weakest := func() *retainSeat {
+			var found *retainSeat
+			for _, item := range all {
+				if item.chosen && item.incumbent && !item.protected {
+					found = item // all is rank ordered, so the last one is the weakest
+				}
+			}
+			return found
 		}
-		if !chosen[index] {
-			chosen[index] = true
-		}
-	}
-	// A newcomer replaces the weakest unprotected incumbent only when it is
-	// better by more than the margin. Each newcomer is considered once, best
-	// first, so the loop is O(n * seats) and terminates.
-	for challenger := range all {
-		if chosen[challenger] || all[challenger].incumbent {
-			continue
-		}
-		weakest := -1
-		for index := range all {
-			if !chosen[index] || !all[index].incumbent || all[index].protected {
+		victim := weakest()
+		for _, challenger := range all {
+			if victim == nil {
+				break
+			}
+			if challenger.chosen || challenger.incumbent {
 				continue
 			}
-			if weakest < 0 || all[index].rank > all[weakest].rank {
-				weakest = index
+			if metric(challenger.ctx)-metric(victim.ctx) <= p.retain.Margin {
+				break
 			}
-		}
-		if weakest < 0 || metric == nil {
-			break
-		}
-		if metric(all[challenger].ctx)-metric(all[weakest].ctx) > p.retain.Margin {
-			delete(chosen, weakest)
-			chosen[challenger] = true
+			sameBucket := challenger.ctx.Bucket == victim.ctx.Bucket
+			if !sameBucket && !fits(challenger) {
+				continue
+			}
+			victim.chosen = false
+			used--
+			buckets[victim.ctx.Bucket]--
+			take(challenger)
 			result.Traces = append(result.Traces, Trace{
-				Stage: StageRetain, Rule: "retain", NodeID: all[challenger].ctx.Node.ID, Outcome: OutcomeHit,
-				Detail: fmt.Sprintf("replaced %s: better by more than %.3f", all[weakest].ctx.Node.ID, p.retain.Margin),
+				Stage: StageRetain, Rule: "retain", NodeID: challenger.ctx.Node.ID, Outcome: OutcomeHit,
+				Detail: fmt.Sprintf("replaced %s: better by more than %.3f", victim.ctx.Node.ID, p.retain.Margin),
 			})
+			victim = weakest()
 		}
 	}
 	kept := make([]*NodeContext, 0, seats)
-	order := make([]int, 0, len(chosen))
-	for index := range chosen {
-		order = append(order, index)
-	}
-	sort.Ints(order)
-	for _, index := range order {
-		item := all[index]
-		kept = append(kept, item.ctx)
-		if item.incumbent {
-			detail := "kept: previous member still passes every predicate"
-			if item.protected {
-				detail = "kept: within min dwell"
+	for _, item := range all {
+		if item.chosen {
+			kept = append(kept, item.ctx)
+			if item.incumbent {
+				detail := "kept: previous member still passes every predicate"
+				if item.protected {
+					detail = "kept: within min dwell"
+				}
+				result.Traces = append(result.Traces, Trace{Stage: StageRetain, Rule: "retain", NodeID: item.ctx.Node.ID, Outcome: OutcomeHit, Detail: detail})
 			}
-			result.Traces = append(result.Traces, Trace{Stage: StageRetain, Rule: "retain", NodeID: item.ctx.Node.ID, Outcome: OutcomeHit, Detail: detail})
-		}
-	}
-	for index, item := range all {
-		if chosen[index] {
 			continue
 		}
 		reason := fmt.Sprintf("beyond the first %d nodes", seats)
-		if item.incumbent {
+		switch {
+		case perBucket > 0 && buckets[item.ctx.Bucket] >= perBucket:
+			reason = fmt.Sprintf("bucket %q already has %d nodes", item.ctx.Bucket, perBucket)
+		case item.incumbent:
 			reason = fmt.Sprintf("replaced by a node better by more than %.3f", p.retain.Margin)
-		} else if metric != nil {
+		case metric != nil:
 			reason = fmt.Sprintf("seats held by previous members (margin %.3f)", p.retain.Margin)
 		}
 		result.Excluded = append(result.Excluded, Exclusion{NodeID: item.ctx.Node.ID, Stage: StageRetain, Rule: "retain", Reason: reason})

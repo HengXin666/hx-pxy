@@ -43,9 +43,19 @@ paths:
           schema: { type: string, enum: [clash, v2rayn, sing-box, uri] }
       responses:
         "200":
-          description: Rendered subscription (YAML, base64 URI list, sing-box JSON or plain URI list)
+          description: |
+            Rendered subscription. The media type follows the format:
+            v2rayn (default) is a base64 URI list and uri a plain URI list
+            (text/plain), clash is a Mihomo YAML document (application/yaml),
+            sing-box is an outbound JSON document (application/json). The
+            X-HX-Subscription-Format header names the rendering served.
+          headers:
+            X-HX-Subscription-Format:
+              schema: { type: string, enum: [clash, v2rayn, sing-box, uri] }
           content:
             text/plain: { schema: { type: string } }
+            application/yaml: { schema: { type: string } }
+            application/json: { schema: { type: object } }
         "404": { description: Unknown or disabled token }
 components:
   parameters:

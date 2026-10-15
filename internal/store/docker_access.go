@@ -70,3 +70,11 @@ func (s *Store) DeleteDockerAccessEntry(ctx context.Context, listenerID string) 
 	}
 	return nil
 }
+
+// DeleteDockerAccessEntryFor removes the link whose companion is entryID.
+func (s *Store) DeleteDockerAccessEntryFor(ctx context.Context, entryID string) error {
+	if _, err := s.db.ExecContext(ctx, `DELETE FROM docker_access_entries WHERE entry_listener_id = ?`, entryID); err != nil {
+		return fmt.Errorf("delete docker access entry: %w", err)
+	}
+	return nil
+}

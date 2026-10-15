@@ -144,10 +144,10 @@ type Pipeline struct {
 // previous values, and a failing predicate keeps the node (fail-open) so a
 // broken rule cannot silently empty the data plane configuration.
 func (p *Pipeline) Run(ctx context.Context, nodes []*Node) (Result, error) {
-	return p.run(ctx, nodes, p.limit.Total)
+	return p.run(ctx, nodes, p.limit)
 }
 
-func (p *Pipeline) run(ctx context.Context, nodes []*Node, total int) (Result, error) {
+func (p *Pipeline) run(ctx context.Context, nodes []*Node, limit LimitSpec) (Result, error) {
 	if err := ctx.Err(); err != nil {
 		return Result{}, err
 	}
@@ -167,7 +167,7 @@ func (p *Pipeline) run(ctx context.Context, nodes []*Node, total int) (Result, e
 		result.Nodes = append(result.Nodes, nodeCtx)
 	}
 	sortContexts(result.Nodes, p.sortKeys)
-	p.applyLimit(&result, total)
+	applyLimit(&result, limit)
 	return result, nil
 }
 
@@ -249,16 +249,17 @@ func (p *Pipeline) runBucket(ctx context.Context, nodeCtx *NodeContext, result *
 	nodeCtx.Bucket = bucket
 }
 
-func (p *Pipeline) applyLimit(result *Result, total int) {
-	if p.limit.PerBucket > 0 {
+func applyLimit(result *Result, limit LimitSpec) {
+	total := limit.Total
+	if limit.PerBucket > 0 {
 		counts := make(map[string]int)
 		kept := result.Nodes[:0]
 		for _, nodeCtx := range result.Nodes {
 			counts[nodeCtx.Bucket]++
-			if counts[nodeCtx.Bucket] > p.limit.PerBucket {
+			if counts[nodeCtx.Bucket] > limit.PerBucket {
 				result.Excluded = append(result.Excluded, Exclusion{
 					NodeID: nodeCtx.Node.ID, Stage: StageLimit, Rule: "per-bucket-limit",
-					Reason: fmt.Sprintf("bucket %q already has %d nodes", nodeCtx.Bucket, p.limit.PerBucket),
+					Reason: fmt.Sprintf("bucket %q already has %d nodes", nodeCtx.Bucket, limit.PerBucket),
 				})
 				continue
 			}

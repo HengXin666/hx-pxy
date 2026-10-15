@@ -39,6 +39,16 @@ func newMemberResolver(candidates []store.GroupNodeCandidate, incumbents map[str
 	return &memberResolver{candidates: candidates, incumbents: incumbents, now: now, cache: map[string][]string{}, fingerprintOf: fingerprints}
 }
 
+// addFingerprints covers nodes a group carries through explicit node_ids that
+// are not in the subscription candidate set, so their membership is recorded.
+func (r *memberResolver) addFingerprints(records []store.NodeConfigRecord) {
+	for _, record := range records {
+		if _, known := r.fingerprintOf[record.ID]; !known && record.Fingerprint != "" {
+			r.fingerprintOf[record.ID] = record.Fingerprint
+		}
+	}
+}
+
 func (r *memberResolver) nodeIDs(record store.ProxyGroupRecord) ([]string, error) {
 	if cached, ok := r.cache[record.ID]; ok {
 		return cached, nil
@@ -69,6 +79,11 @@ func (r *memberResolver) memberships(enabled map[string]string) map[string][]str
 	return result
 }
 
+type pendingMembership struct {
+	members map[string][]string
+	at      time.Time
+}
+
 func (c *Compiler) loadIncumbents(ctx context.Context) (map[string]map[string]time.Time, error) {
 	repository, ok := c.repository.(GroupMemberRepository)
 	if !ok {
@@ -78,18 +93,44 @@ func (c *Compiler) loadIncumbents(ctx context.Context) (map[string]map[string]ti
 	if err != nil {
 		return nil, fmt.Errorf("load previous group members: %w", err)
 	}
-	return incumbents, nil
+	return overlayPending(incumbents, c.pendingMembers), nil
+}
+
+// overlayPending makes the last applied membership win over stored history
+// when it could not be written: Retain must start from what Mihomo serves.
+func overlayPending(stored map[string]map[string]time.Time, pending *pendingMembership) map[string]map[string]time.Time {
+	if pending == nil {
+		return stored
+	}
+	result := make(map[string]map[string]time.Time, len(pending.members))
+	for groupID, fingerprints := range pending.members {
+		result[groupID] = make(map[string]time.Time, len(fingerprints))
+		for _, fingerprint := range fingerprints {
+			if joined, ok := stored[groupID][fingerprint]; ok {
+				result[groupID][fingerprint] = joined
+			} else {
+				result[groupID][fingerprint] = pending.at
+			}
+		}
+	}
+	return result
 }
 
 // recordMembers stores what an applied configuration actually serves. It runs
-// only after a successful apply; a failure here never undoes the apply, it
-// only means the next compile retains from an older membership.
+// only after a successful apply; a failure never undoes the apply. The
+// membership is kept as pending so the next compile retains from it and the
+// next successful write replaces it.
 func (c *Compiler) recordMembers(ctx context.Context, compiled Compiled, now time.Time) error {
 	repository, ok := c.repository.(GroupMemberRepository)
 	if !ok || compiled.GroupMembers == nil {
 		return nil
 	}
-	return repository.ReplaceGroupMembers(ctx, compiled.GroupMembers, now)
+	if err := repository.ReplaceGroupMembers(ctx, compiled.GroupMembers, now); err != nil {
+		c.pendingMembers = &pendingMembership{members: compiled.GroupMembers, at: now}
+		return err
+	}
+	c.pendingMembers = nil
+	return nil
 }
 
 func (c *Compiler) clock() time.Time {

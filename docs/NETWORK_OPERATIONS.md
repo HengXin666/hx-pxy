@@ -68,8 +68,13 @@ main 表本身被其他代理改写、基于防火墙重定向或无原生 IPv6 
 - **住宅渠道**（`client_landing`）：沿用订阅 / 自动化控制 URL。WS 服务也可展开“在容器里用 Mihomo
   客户端落地订阅”：客户端配置 `mixed-port: 7890`，共享网络命名空间用 `http://127.0.0.1:7890`，
   不同容器用私有网络的 `http://mihomo:7890` 并开启 `allow-lan: true`。
-- **无法自动处理**（`blocked`）：服务已停用（菜单不提供入口）、本机没有 Docker 网桥、或 Docker 入口
-  所在网桥已消失（撤销后按当前网桥重建）。弹窗说明需要先做什么，不提供复制按钮。
+- **无法自动处理**（`blocked`）：服务已停用（已有 Docker 入口时仍可在弹窗撤销）；需要新建入口但本机
+  没有 Docker 网桥（`no_docker_bridge`；已绑定通配地址且带认证的服务仍可用 LAN 地址直连）；所选网桥上
+  17890–17989 已无空闲端口（`no_free_port`）；或 Docker 入口所在网桥已消失 / 共享入口已关闭
+  （`entry_unreachable`，撤销后按当前网络重建）。弹窗说明需要先做什么，不提供代理 URI 复制按钮。
+- 数据面只编译仍有效的 Docker 入口：源服务停用或网桥地址已不在本机时，该入口不会进入配置，
+  不会拖垮其他服务的应用。通过 API 删除源服务时，服务端先撤销其 Docker 入口；
+  `GET /api/v1/listeners` 用 `docker_access_for` 标出 Docker 入口行。
 
 API：`GET /api/v1/listeners/{id}/docker-access[?gateway=IP]` 返回判定与预览（`plan.id`）；
 `POST` 同路径 `{plan_id, gateway, confirm:true}` 创建，预览过期返回 409；`DELETE` 撤销；

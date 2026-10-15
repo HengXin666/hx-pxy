@@ -15,12 +15,17 @@ operator requires the two to stay completely separate, especially in APIs and SD
 `docs/openapi/subscription-consumer.openapi.yaml` and
 `docs/openapi/residential-control.openapi.yaml` are separate documents with disjoint
 paths and schemas. `internal/api/openapi_test.go` checks each schema's properties
-against the Go type that renders the response (`listener.ConsumerNode`,
-`listener.ConsumerPayload`, `residential.ControlNode`, `residential.ControlNodeList`)
+recursively against the Go types that render the responses (`listener.ConsumerPayload`,
+`residential.ControlNodeList`, `residential.ControlNode` and their nested types), the
+`/sub` media types against the renderer,
 and that neither document exposes the other's paths. The prose contracts remain the
 source of truth for semantics; the OpenAPI documents are their machine-readable form.
 
 ## Alternatives considered
+
+- **Prose contracts only** (status quo): one source of truth and nothing to keep in
+  sync, but SDK generators and agents cannot consume them, and nothing mechanical
+  stops the two resources from being described together.
 
 - **One OpenAPI document with tags**: one SDK generated from it would put leases and
   rotation next to read-only service exports, which is exactly the mixing the operator
