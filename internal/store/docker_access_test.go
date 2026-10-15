@@ -104,8 +104,10 @@ func TestDeleteDockerAccessEntryForRemovesByCompanionID(t *testing.T) {
 	if len(listed) != 1 || listed[0].EntryListenerID != "entry-b" {
 		t.Fatalf("listed = %+v, want only the entry-b link", listed)
 	}
-	// Both listeners stay: only the link is removed.
-	if _, err := storage.GetListener(ctx, "entry-a"); err != nil {
-		t.Fatalf("companion listener must survive, err = %v", err)
+	// Listeners stay: only the link is removed.
+	for _, id := range []string{"source-a", "entry-a"} {
+		if _, err := storage.GetListener(ctx, id); err != nil {
+			t.Fatalf("listener %s must survive, err = %v", id, err)
+		}
 	}
 }

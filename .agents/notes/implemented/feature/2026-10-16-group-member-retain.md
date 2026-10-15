@@ -55,7 +55,7 @@ NaN difference (two nodes without a latency sample) never replaces anyone, and s
 weights are bounded to finite values in [0, 1e6] so scores stay finite. When recording
 the applied membership fails, the failure is logged and the compiler keeps that
 membership in memory as pending, with each member's join time carried from the
-previous applied membership (a member that left and came back joins anew); later
+previous applied membership (a member that left and came back joins anew; if reading the previous membership also fails, every join time resets to now, which extends min_dwell); later
 compiles retain from it until a write succeeds. fill / best modes, L2 tag probes and per-group
 snapshot ETags are not part of this change.
 
