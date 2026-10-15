@@ -18,6 +18,8 @@ import (
 type stubDockerAccess struct {
 	applied dockeraccess.ApplyRequest
 	revoked string
+	deleted string
+	version int
 }
 
 func (s *stubDockerAccess) Assess(_ context.Context, id, gateway string) (dockeraccess.Assessment, error) {
@@ -37,8 +39,16 @@ func (s *stubDockerAccess) Apply(_ context.Context, id string, request dockeracc
 
 func (s *stubDockerAccess) Revoke(_ context.Context, id string) error { s.revoked = id; return nil }
 
+func (s *stubDockerAccess) DeleteSource(_ context.Context, id string, version int) error {
+	if version != 1 {
+		return fmt.Errorf("%w: stale", listener.ErrConflict)
+	}
+	s.deleted, s.version = id, version
+	return nil
+}
+
 func (s *stubDockerAccess) Links(context.Context) ([]dockeraccess.Link, error) {
-	return []dockeraccess.Link{{ListenerID: "svc", EntryListenerID: "entry"}}, nil
+	return []dockeraccess.Link{{ListenerID: "svc", EntryListenerID: "entry", Withheld: true}}, nil
 }
 
 func TestDockerAccessRoutes(t *testing.T) {
@@ -81,7 +91,7 @@ func TestDockerAccessRoutes(t *testing.T) {
 	}
 }
 
-func TestListenerListMarksDockerEntriesAndDeleteRevokesFirst(t *testing.T) {
+func TestListenerListMarksDockerEntriesAndDeleteGoesThroughDockerAccess(t *testing.T) {
 	stub := &stubDockerAccess{}
 	listeners := &consumerNodeService{edgeListenerService: edgeListenerService{items: []listener.Listener{{ID: "svc"}, {ID: "entry"}}}}
 	server, err := NewServer(&stubBundleService{}, slog.New(slog.NewTextHandler(io.Discard, nil)),
@@ -101,9 +111,17 @@ func TestListenerListMarksDockerEntriesAndDeleteRevokesFirst(t *testing.T) {
 	if body.Items[0].DockerAccessFor != "" || body.Items[1].DockerAccessFor != "svc" {
 		t.Fatalf("docker_access_for = %q, %q", body.Items[0].DockerAccessFor, body.Items[1].DockerAccessFor)
 	}
+	if body.Items[0].DockerAccessWithheld || !body.Items[1].DockerAccessWithheld {
+		t.Fatalf("docker_access_withheld = %v, %v", body.Items[0].DockerAccessWithheld, body.Items[1].DockerAccessWithheld)
+	}
+	recorder = httptest.NewRecorder()
+	handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodDelete, "/api/v1/listeners/svc?version=2", nil))
+	if recorder.Code != http.StatusConflict || stub.deleted != "" || stub.revoked != "" {
+		t.Fatalf("stale delete = %d deleted=%q revoked=%q, want 409 and nothing touched", recorder.Code, stub.deleted, stub.revoked)
+	}
 	recorder = httptest.NewRecorder()
 	handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodDelete, "/api/v1/listeners/svc?version=1", nil))
-	if stub.revoked != "svc" {
-		t.Fatalf("deleting a source must revoke its Docker entry server-side, revoked = %q", stub.revoked)
+	if recorder.Code != http.StatusNoContent || stub.deleted != "svc" || stub.version != 1 {
+		t.Fatalf("delete = %d deleted=%q version=%d, want 204 through DeleteSource", recorder.Code, stub.deleted, stub.version)
 	}
 }

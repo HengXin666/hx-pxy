@@ -36,7 +36,7 @@ func TestGateDockerEntriesSkipsCompanionsThatMustNotServe(t *testing.T) {
 		t.Fatal(err)
 	}
 	compiler.hostAddressPresent = func(address string) bool { return address == "172.17.0.1" }
-	kept, err := compiler.gateDockerEntries(context.Background(), listeners)
+	kept, withheld, err := compiler.gateDockerEntries(context.Background(), listeners)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -53,5 +53,10 @@ func TestGateDockerEntriesSkipsCompanionsThatMustNotServe(t *testing.T) {
 		if got[id] {
 			t.Errorf("%s must be gated out", id)
 		}
+	}
+	if len(withheld) != 2 ||
+		withheld[0] != (WithheldEntry{ListenerID: "entry-src-off", Reason: WithheldSourceDisabled}) ||
+		withheld[1] != (WithheldEntry{ListenerID: "entry-gone-bridge", BindAddress: "172.30.0.1", Reason: WithheldBridgeAbsent}) {
+		t.Fatalf("withheld = %+v", withheld)
 	}
 }

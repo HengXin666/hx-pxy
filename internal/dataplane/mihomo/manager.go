@@ -72,6 +72,9 @@ type Manager struct {
 	externalProcess  bool
 	// sup 是数据面看护的运行态; nil 表示未启用。所有者是本 Manager。
 	sup *supervisor
+	// withheld is the Docker companion entries the running document leaves
+	// out; see manager_docker_entries.go.
+	withheld dockerEntryState
 }
 
 type ManagerOption func(*Manager) error
@@ -236,9 +239,10 @@ func (m *Manager) Apply(ctx context.Context) error {
 	if err := m.applyCompiledLocked(ctx, compiled); err != nil {
 		return err
 	}
+	m.withheld.set(compiled.WithheldEntries)
 	// Only a configuration Mihomo actually accepted becomes the previous
 	// membership the Retain stage keeps. A failed record never undoes the
-	// apply; the next compile simply retains from older state.
+	// apply; it stays pending in memory until a write succeeds.
 	if err := m.compiler.recordMembers(ctx, compiled, time.Now()); err != nil {
 		m.logger.Warn("record proxy group members failed", "component", "dataplane", "error", err)
 	}

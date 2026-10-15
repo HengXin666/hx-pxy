@@ -27,6 +27,7 @@ const reasonText: Record<DockerAccessReason, string> = {
   no_docker_bridge: "本机未检测到 Docker 网桥（docker0 或 compose 的 br-*）。请先在本机启动 Docker 或创建 compose 网络，再重新打开此窗口。",
   entry_disabled: "该服务的 Docker 入口已停用。撤销后可重新创建。",
   entry_unreachable: "该服务的 Docker 入口已无法从容器访问（网桥被删除、地址变化或共享入口已关闭）。撤销后可按当前网络重新创建。",
+  entry_pending: "Docker 网桥已就绪，但数据面尚未加载该入口（启动时网桥还不存在）。约 30 秒内会自动生效，之后重新打开此窗口即可复制连接。",
   no_free_port: "所选网桥上 17890–17989 的端口都已被占用。请释放其中一个端口，或切换到其他网桥后重试。",
   shared_entry_disabled: "共享入口已关闭，该服务当前不可连接。",
 }
@@ -101,7 +102,9 @@ export function DockerAccessDialog({ listener, subscriptionURL, onClose, onChang
       const ticket = ++sequence.current
       const result = await api.applyDockerAccess(listener.id, { plan_id: assessment.plan.id, gateway: gateway || undefined, confirm: true })
       onChanged?.()
-      await show(result, () => ticket !== sequence.current)
+      // A bridge picked while the entry was being created owns the dialog
+      // now; the late result must not overwrite its assessment.
+      if (ticket === sequence.current) await show(result, () => ticket !== sequence.current)
     } catch (error) {
       setStatus(error instanceof Error ? error.message : "创建 Docker 入口失败")
       await load(gateway)

@@ -68,6 +68,9 @@ type Link struct {
 	EntryListenerID string    `json:"entry_listener_id"`
 	BindTarget      string    `json:"bind_target"`
 	CreatedAt       time.Time `json:"created_at"`
+	// Withheld is true when the running data plane does not serve the entry
+	// (its source is disabled or its bridge address is missing).
+	Withheld bool `json:"withheld"`
 }
 
 type Service struct {
@@ -79,6 +82,9 @@ type Service struct {
 	lan        func() []string
 	portFree   func(host string, port int) bool
 	now        func() time.Time
+	// withheld reports whether the running data plane leaves out a companion
+	// entry; nil means "served" (no data plane wired, as in tests).
+	withheld func(string) bool
 	// mu serialises Apply/Revoke: two confirmations for one service must not
 	// create two companions, and port allocation must not race itself.
 	mu sync.Mutex
@@ -89,6 +95,12 @@ type Option func(*Service)
 
 func WithBridges(source func() []Bridge) Option { return func(s *Service) { s.bridges = source } }
 func WithLAN(source func() []string) Option     { return func(s *Service) { s.lan = source } }
+
+// WithWithheld wires the data plane's view of which companion entries the
+// running document leaves out, so Assess never reports one as ready.
+func WithWithheld(withheld func(string) bool) Option {
+	return func(s *Service) { s.withheld = withheld }
+}
 func WithPortProbe(probe func(string, int) bool) Option {
 	return func(s *Service) { s.portFree = probe }
 }
@@ -126,7 +138,11 @@ func (s *Service) Links(ctx context.Context) ([]Link, error) {
 	}
 	links := make([]Link, 0, len(records))
 	for _, record := range records {
-		links = append(links, Link{ListenerID: record.ListenerID, EntryListenerID: record.EntryListenerID, BindTarget: record.BindTarget, CreatedAt: record.CreatedAt})
+		link := Link{ListenerID: record.ListenerID, EntryListenerID: record.EntryListenerID, BindTarget: record.BindTarget, CreatedAt: record.CreatedAt}
+		if s.withheld != nil {
+			link.Withheld = s.withheld(record.EntryListenerID)
+		}
+		links = append(links, link)
 	}
 	return links, nil
 }
@@ -268,6 +284,9 @@ func (s *Service) input(ctx context.Context, listenerID, gateway string) (Input,
 			Enabled: settings.SharedInbound.Enabled(), Bind: settings.SharedInbound.MixedBindAddress, Port: settings.SharedInbound.MixedPort,
 		},
 		TakenNames: taken,
+	}
+	if entry != nil && s.withheld != nil {
+		in.EntryWithheld = s.withheld(entry.ID)
 	}
 	if selected := selectGateway(in.Bridges, gateway); selected != "" {
 		in.AllocatedPort = s.allocatePort(selected, usedPorts)

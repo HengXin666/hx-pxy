@@ -25,17 +25,21 @@ type DockerEntryRepository interface {
 //     plane, while only the Docker entry is actually unusable.
 //
 // See .agents/notes/implemented/feature/2026-10-15-docker-access-entry.md.
-func (c *Compiler) gateDockerEntries(ctx context.Context, listeners []store.ListenerRecord) ([]store.ListenerRecord, error) {
+//
+// Every companion left out is reported as a WithheldEntry, so the manager can
+// re-apply once a missing bridge address appears and the control plane never
+// reports a withheld entry as dialable.
+func (c *Compiler) gateDockerEntries(ctx context.Context, listeners []store.ListenerRecord) ([]store.ListenerRecord, []WithheldEntry, error) {
 	repository, ok := c.repository.(DockerEntryRepository)
 	if !ok {
-		return listeners, nil
+		return listeners, nil, nil
 	}
 	links, err := repository.ListDockerAccessEntries(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("load docker access entries: %w", err)
+		return nil, nil, fmt.Errorf("load docker access entries: %w", err)
 	}
 	if len(links) == 0 {
-		return listeners, nil
+		return listeners, nil, nil
 	}
 	sourceOf := make(map[string]store.DockerAccessEntryRecord, len(links))
 	for _, link := range links {
@@ -50,19 +54,37 @@ func (c *Compiler) gateDockerEntries(ctx context.Context, listeners []store.List
 		present = hostHasAddress
 	}
 	kept := make([]store.ListenerRecord, 0, len(listeners))
+	var withheld []WithheldEntry
 	for _, record := range listeners {
 		link, companion := sourceOf[record.ID]
-		if companion {
+		if companion && record.Enabled {
 			if !enabled[link.ListenerID] {
+				withheld = append(withheld, WithheldEntry{ListenerID: record.ID, Reason: WithheldSourceDisabled})
 				continue
 			}
 			if link.BindTarget != "shared" && !present(record.BindAddress) {
+				withheld = append(withheld, WithheldEntry{ListenerID: record.ID, BindAddress: record.BindAddress, Reason: WithheldBridgeAbsent})
 				continue
 			}
 		}
 		kept = append(kept, record)
 	}
-	return kept, nil
+	return kept, withheld, nil
+}
+
+// Reasons a companion entry is left out of the compiled document.
+const (
+	WithheldSourceDisabled = "source_disabled"
+	WithheldBridgeAbsent   = "bridge_absent"
+)
+
+// WithheldEntry is an enabled Docker companion the data plane does not serve.
+type WithheldEntry struct {
+	ListenerID string
+	// BindAddress is set for WithheldBridgeAbsent: the gateway address whose
+	// appearance should trigger a re-apply.
+	BindAddress string
+	Reason      string
 }
 
 func hostHasAddress(address string) bool {

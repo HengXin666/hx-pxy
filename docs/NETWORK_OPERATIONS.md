@@ -73,8 +73,12 @@ main 表本身被其他代理改写、基于防火墙重定向或无原生 IPv6 
   17890–17989 已无空闲端口（`no_free_port`）；或 Docker 入口所在网桥已消失 / 共享入口已关闭
   （`entry_unreachable`，撤销后按当前网络重建）。弹窗说明需要先做什么，不提供代理 URI 复制按钮。
 - 数据面只编译仍有效的 Docker 入口：源服务停用或网桥地址已不在本机时，该入口不会进入配置，
-  不会拖垮其他服务的应用。通过 API 删除源服务时，服务端先撤销其 Docker 入口；
-  `GET /api/v1/listeners` 用 `docker_access_for` 标出 Docker 入口行。
+  不会拖垮其他服务的应用。被剔除的网桥入口每 30 秒复查一次，网桥地址出现（例如 dockerd 晚于
+  hx-pxyd 启动）后自动重新应用；在此之前弹窗报告 `entry_pending`，不给复制按钮。
+  `GET /api/v1/listeners` 用 `docker_access_for` 标出 Docker 入口行，用
+  `docker_access_withheld: true` 标出当前未被数据面加载的入口（消费者不应把它当作可用出口）。
+  通过 API 删除源服务时先按 `version` 校验，过期返回 409 且不动 Docker 入口；源服务删除成功后
+  再删除其 Docker 入口。
 
 API：`GET /api/v1/listeners/{id}/docker-access[?gateway=IP]` 返回判定与预览（`plan.id`）；
 `POST` 同路径 `{plan_id, gateway, confirm:true}` 创建，预览过期返回 409；`DELETE` 撤销；

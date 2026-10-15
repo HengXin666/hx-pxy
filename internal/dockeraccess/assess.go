@@ -45,20 +45,24 @@ const (
 
 // Reason codes. They are part of the API contract.
 const (
-	ReasonDirect            = "direct"
-	ReasonCompanion         = "companion_entry"
-	ReasonServiceDisabled   = "service_disabled"
-	ReasonResidential       = "residential_channel"
-	ReasonWebSocket         = "websocket_protocol"
-	ReasonLoopbackBind      = "loopback_bind"
-	ReasonMissingAuth       = "missing_auth"
-	ReasonNoShareExport     = "no_share_export"
-	ReasonNoAddress         = "no_reachable_address"
-	ReasonNoBridge          = "no_docker_bridge"
-	ReasonNoFreePort        = "no_free_port"
-	ReasonSharedDisabled    = "shared_entry_disabled"
-	ReasonEntryDisabled     = "entry_disabled"
-	ReasonEntryUnreachable  = "entry_unreachable"
+	ReasonDirect           = "direct"
+	ReasonCompanion        = "companion_entry"
+	ReasonServiceDisabled  = "service_disabled"
+	ReasonResidential      = "residential_channel"
+	ReasonWebSocket        = "websocket_protocol"
+	ReasonLoopbackBind     = "loopback_bind"
+	ReasonMissingAuth      = "missing_auth"
+	ReasonNoShareExport    = "no_share_export"
+	ReasonNoAddress        = "no_reachable_address"
+	ReasonNoBridge         = "no_docker_bridge"
+	ReasonNoFreePort       = "no_free_port"
+	ReasonSharedDisabled   = "shared_entry_disabled"
+	ReasonEntryDisabled    = "entry_disabled"
+	ReasonEntryUnreachable = "entry_unreachable"
+	// ReasonEntryPending: the entry is valid and its bridge is up, but the
+	// running data plane does not serve it yet (it was withheld while the
+	// bridge was missing). The data plane re-applies on its own shortly.
+	ReasonEntryPending      = "entry_pending"
 	PlacementShared         = "shared"
 	PlacementBridge         = "bridge"
 	companionNameSuffix     = " · Docker"
@@ -88,6 +92,8 @@ type Input struct {
 	Gateway string
 	// Entry is the companion listener already linked to Source, if any.
 	Entry *listener.Listener
+	// EntryWithheld is true when the running data plane leaves Entry out.
+	EntryWithheld bool
 	// AllocatedPort is the free port the service found for a bridge
 	// placement. Zero means none was found.
 	AllocatedPort int
@@ -166,6 +172,11 @@ func Assess(in Input) Assessment {
 			// The companion was valid when created; a missing bridge or a
 			// changed shared bind can strand it. Revoke and recreate fixes it.
 			result.State, result.Reason = StateBlocked, ReasonEntryUnreachable
+			return result
+		}
+		if in.EntryWithheld {
+			// Never hand out a URI the data plane does not serve yet.
+			result.State, result.Reason = StateBlocked, ReasonEntryPending
 			return result
 		}
 		endpoint.Companion = true

@@ -51,6 +51,9 @@ type Compiled struct {
 	// group carries in this document. It is recorded after a successful
 	// apply and feeds the Retain stage of the next compile.
 	GroupMembers map[string][]string
+	// WithheldEntries are Docker companion entries left out of this
+	// document (see compiler_docker_entries.go).
+	WithheldEntries []WithheldEntry
 }
 
 type Compiler struct {
@@ -101,7 +104,7 @@ func (c *Compiler) Compile(ctx context.Context) (Compiled, error) {
 	if err != nil {
 		return Compiled{}, err
 	}
-	listeners, err = c.gateDockerEntries(ctx, listeners)
+	listeners, withheldEntries, err := c.gateDockerEntries(ctx, listeners)
 	if err != nil {
 		return Compiled{}, err
 	}
@@ -360,6 +363,7 @@ func (c *Compiler) Compile(ctx context.Context) (Compiled, error) {
 		ProxyCount:       len(proxies),
 		ControllerSocket: c.controllerSocket,
 		GroupMembers:     members.memberships(groupNameByID),
+		WithheldEntries:  withheldEntries,
 	}, nil
 }
 

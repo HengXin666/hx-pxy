@@ -2,6 +2,7 @@ package mihomo
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -12,7 +13,8 @@ import (
 // the way the SQLite store does.
 type retainRepository struct {
 	chainRepository
-	members map[string]map[string]time.Time
+	members    map[string]map[string]time.Time
+	failWrites bool
 }
 
 func (r *retainRepository) ListGroupMembers(context.Context) (map[string]map[string]time.Time, error) {
@@ -20,6 +22,9 @@ func (r *retainRepository) ListGroupMembers(context.Context) (map[string]map[str
 }
 
 func (r *retainRepository) ReplaceGroupMembers(_ context.Context, members map[string][]string, now time.Time) error {
+	if r.failWrites {
+		return errors.New("disk full")
+	}
 	next := make(map[string]map[string]time.Time, len(members))
 	for groupID, fingerprints := range members {
 		next[groupID] = map[string]time.Time{}
@@ -86,15 +91,42 @@ func TestCompileRetainsPreviousMembersUntilANewcomerIsClearlyBetter(t *testing.T
 	}
 }
 
-func TestOverlayPendingPrefersAppliedMembershipAndKeepsJoinTimes(t *testing.T) {
+func TestPendingMembershipCarriesContinuousJoinTimesAcrossFailedWrites(t *testing.T) {
 	early := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)
-	late := time.Date(2026, 10, 16, 0, 0, 0, 0, time.UTC)
-	stored := map[string]map[string]time.Time{"g": {"old": early, "stays": early}}
-	got := overlayPending(stored, &pendingMembership{members: map[string][]string{"g": {"stays", "new"}}, at: late})
-	if len(got["g"]) != 2 || !got["g"]["stays"].Equal(early) || !got["g"]["new"].Equal(late) {
-		t.Fatalf("overlay = %+v", got)
+	t1 := early.Add(24 * time.Hour)
+	t2 := t1.Add(time.Hour)
+	repository := &retainRepository{members: map[string]map[string]time.Time{"g": {"old": early, "stays": early, "flaps": early}}, failWrites: true}
+	compiler := &Compiler{repository: repository}
+	// First failed write: join times come from the store for continuing
+	// members; "flaps" leaves the applied membership.
+	if err := compiler.recordMembers(context.Background(), Compiled{GroupMembers: map[string][]string{"g": {"stays", "new"}}}, t1); err == nil {
+		t.Fatal("write error swallowed")
+	}
+	got, err := compiler.loadIncumbents(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got["g"]) != 2 || !got["g"]["stays"].Equal(early) || !got["g"]["new"].Equal(t1) {
+		t.Fatalf("after first failure = %+v", got)
+	}
+	// Second failed write: "flaps" comes back. The store still says it
+	// joined early, but it left in between, so it joins anew.
+	if err := compiler.recordMembers(context.Background(), Compiled{GroupMembers: map[string][]string{"g": {"stays", "new", "flaps"}}}, t2); err == nil {
+		t.Fatal("write error swallowed")
+	}
+	got, _ = compiler.loadIncumbents(context.Background())
+	if !got["g"]["flaps"].Equal(t2) || !got["g"]["new"].Equal(t1) || !got["g"]["stays"].Equal(early) {
+		t.Fatalf("after second failure = %+v", got)
 	}
 	if _, ok := got["g"]["old"]; ok {
 		t.Fatal("a member that left the applied document must not be retained")
+	}
+	// A successful write clears the pending state.
+	repository.failWrites = false
+	if err := compiler.recordMembers(context.Background(), Compiled{GroupMembers: map[string][]string{"g": {"stays"}}}, t2); err != nil {
+		t.Fatal(err)
+	}
+	if compiler.pendingMembers != nil {
+		t.Fatal("pending membership must clear after a successful write")
 	}
 }

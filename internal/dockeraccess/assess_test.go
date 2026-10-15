@@ -102,6 +102,15 @@ func TestAssessExistingCompanionIsReadyAndRevocable(t *testing.T) {
 	}
 }
 
+func TestAssessWithheldCompanionIsPendingNotReady(t *testing.T) {
+	entry := service("mixed", "172.17.0.1", true)
+	entry.ID, entry.Port = "companion", 17890
+	got := Assess(Input{Source: service("vless", "127.0.0.1", true), Bridges: []Bridge{docker0}, Entry: &entry, EntryWithheld: true})
+	if got.State != StateBlocked || got.Reason != ReasonEntryPending || !got.Revocable || got.Entry != nil {
+		t.Fatalf("withheld companion = %+v (must not hand out a URI the data plane does not serve)", got)
+	}
+}
+
 func TestPlanIDChangesWhenTheSourceChanges(t *testing.T) {
 	in := Input{Source: service("http", "127.0.0.1", true), Bridges: []Bridge{docker0}, AllocatedPort: 17890}
 	first := Assess(in).Plan.ID

@@ -116,29 +116,41 @@ func (p *Pipeline) applyRetain(result *Result, incumbents Incumbents) {
 		}
 	}
 	if metric != nil {
-		weakest := func() *retainSeat {
+		// beats is written positively so a NaN difference (both metrics -Inf
+		// for nodes without a latency sample, or a degenerate score) never
+		// counts as better.
+		beats := func(challenger, victim *retainSeat) bool {
+			return metric(challenger.ctx)-metric(victim.ctx) > p.retain.Margin
+		}
+		// weakest returns the lowest ranked replaceable incumbent. With
+		// bucket set it only considers that bucket: a challenger whose bucket
+		// is full can only take a seat from its own bucket.
+		weakest := func(bucket *string) *retainSeat {
 			var found *retainSeat
 			for _, item := range all {
-				if item.chosen && item.incumbent && !item.protected {
+				if item.chosen && item.incumbent && !item.protected && (bucket == nil || item.ctx.Bucket == *bucket) {
 					found = item // all is rank ordered, so the last one is the weakest
 				}
 			}
 			return found
 		}
-		victim := weakest()
 		for _, challenger := range all {
-			if victim == nil {
-				break
-			}
 			if challenger.chosen || challenger.incumbent {
 				continue
 			}
-			if metric(challenger.ctx)-metric(victim.ctx) <= p.retain.Margin {
+			global := weakest(nil)
+			if global == nil || !beats(challenger, global) {
+				// No later challenger ranks better on the first sort key, and
+				// every constrained victim ranks no worse than the global one.
 				break
 			}
-			sameBucket := challenger.ctx.Bucket == victim.ctx.Bucket
-			if !sameBucket && !fits(challenger) {
-				continue
+			victim := global
+			if !fits(challenger) && challenger.ctx.Bucket != global.ctx.Bucket {
+				bucket := challenger.ctx.Bucket
+				victim = weakest(&bucket)
+				if victim == nil || !beats(challenger, victim) {
+					continue
+				}
 			}
 			victim.chosen = false
 			used--
@@ -148,7 +160,6 @@ func (p *Pipeline) applyRetain(result *Result, incumbents Incumbents) {
 				Stage: StageRetain, Rule: "retain", NodeID: challenger.ctx.Node.ID, Outcome: OutcomeHit,
 				Detail: fmt.Sprintf("replaced %s: better by more than %.3f", victim.ctx.Node.ID, p.retain.Margin),
 			})
-			victim = weakest()
 		}
 	}
 	kept := make([]*NodeContext, 0, seats)

@@ -177,17 +177,16 @@ func (s *Server) handleListener(writer http.ResponseWriter, request *http.Reques
 			s.writeAPIError(writer, request, http.StatusBadRequest, "invalid_request", err.Error())
 			return
 		}
-		// A Docker entry exists only to reach this service. Revoke it before
-		// the source row goes, so no caller (UI, API key, script) can leave a
-		// running companion behind once the link would cascade away. A failed
-		// revoke keeps the source and its link so the delete can be retried.
+		// A Docker entry exists only to reach this service, so the Docker
+		// access service deletes both: it rejects a stale version before
+		// touching anything and removes the companion only after the source
+		// delete succeeded.
 		if s.dockerAccess != nil {
-			if err := s.dockerAccess.Revoke(request.Context(), id); err != nil {
-				s.handleError(writer, request, err)
-				return
-			}
+			err = s.dockerAccess.DeleteSource(request.Context(), id, version)
+		} else {
+			err = s.listeners.Delete(request.Context(), id, version)
 		}
-		if err := s.listeners.Delete(request.Context(), id, version); err != nil {
+		if err != nil {
 			s.handleError(writer, request, err)
 			return
 		}

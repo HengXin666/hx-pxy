@@ -38,15 +38,24 @@ changed source, bridge or port yields a new id and the stale confirmation gets 4
 `DELETE` revokes (deletes the companion and its link). The link lives in
 `docker_access_entries` (migration 40), cascading on either listener. The shared-inbound
 migrator skips linked companions so a bridge-bound entry is never folded back onto a
-loopback carrier. `DELETE /api/v1/listeners/{id}` revokes the source's companion
-server-side before deleting the source, so no caller can orphan a running entry; the
-listener listing marks companions with `docker_access_for`.
+loopback carrier. `DELETE /api/v1/listeners/{id}` goes through `dockeraccess.Service.DeleteSource`
+(`internal/dockeraccess/delete.go`): a stale `version` is rejected with 409 before
+anything changes, the companion is looked up before the link cascades away, the source
+is deleted with the listener service's own version check, and only then is the
+companion removed (a failure there names the companion, now an ordinary listener). The
+listener listing marks companions with `docker_access_for`, and with
+`docker_access_withheld` when the running document leaves them out.
 
 The compiler gates companions (`compiler_docker_entries.go`): a companion whose source
 is disabled or gone is not compiled, and a bridge-bound companion whose gateway is no
 longer on the host is left out, so a removed compose network makes only that entry
-unusable instead of failing the endpoint pre-check of every apply. The assessment
-reports such an entry as `entry_unreachable` (revocable), a shared member while the
+unusable instead of failing the endpoint pre-check of every apply. Every companion left
+out is reported in `Compiled.WithheldEntries`; the manager keeps the set of the running
+document (`manager_docker_entries.go`) and `RunDockerEntryWatch` re-applies within 30 s
+once a withheld bridge address appears (dockerd usually starts after hx-pxyd). The
+assessment reports a withheld entry whose bridge is back as `entry_pending` (never
+`ready`, so no URI is handed out before Mihomo serves it), a missing bridge as
+`entry_unreachable` (revocable), a shared member while the
 shared entry is off as `shared_entry_disabled`, and an exhausted port window as
 `no_free_port`. Port allocation probes TCP and UDP because Mixed serves both.
 
@@ -79,7 +88,9 @@ still not proven: isolated networks, rootless Docker and host firewalls can bloc
 
 ## Testing
 
-internal/dockeraccess (assessment table + apply/revoke/rollback with fakes),
+internal/dockeraccess (assessment table incl. entry_pending, apply/revoke/rollback and
+DeleteSource stale-version / ordering with fakes), internal/dataplane/mihomo
+(compiler_docker_entries_test withheld reasons, manager_docker_entries_test),
 internal/store/docker_access_test.go (cascade, uniqueness), internal/api/docker_access_test.go
 (routes, 409 on stale plan), internal/sharedinbound (companions are not migrated),
 web/e2e/docker-endpoint.test.ts and web/e2e/network-routing-regression.mjs (ready

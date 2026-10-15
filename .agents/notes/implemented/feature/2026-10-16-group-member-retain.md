@@ -48,16 +48,22 @@ Retention is opt-in, so existing groups compile exactly as before. A Retain grou
 output depends on stored history, desired state and the current time: once an
 incumbent's min dwell elapses a better newcomer may replace it without any other
 input changing. A per-bucket cap is enforced inside Retain, not before it, so an
-incumbent is not dropped by the cap before Retain can keep it. When recording the
-applied membership fails, the compiler keeps it in memory and retains from it until a
-write succeeds. A failed membership write is logged and only makes the
-next compile retain from older state. fill / best modes, L2 tag probes and per-group
+incumbent is not dropped by the cap before Retain can keep it; a challenger whose
+bucket is full may only replace the weakest replaceable incumbent of its own bucket.
+The replacement test is written positively (`challenger - incumbent > margin`), so a
+NaN difference (two nodes without a latency sample) never replaces anyone, and score
+weights are bounded to finite values in [0, 1e6] so scores stay finite. When recording
+the applied membership fails, the failure is logged and the compiler keeps that
+membership in memory as pending, with each member's join time carried from the
+previous applied membership (a member that left and came back joins anew); later
+compiles retain from it until a write succeeds. fill / best modes, L2 tag probes and per-group
 snapshot ETags are not part of this change.
 
 ## Testing
 
 internal/pipeline/retain_test.go (margin, min dwell, quarantine, parity with Run,
-validation), internal/store/group_members_test.go (join time kept, leavers removed,
+validation), internal/pipeline/retain_edge_test.go (full-bucket challenger, NaN
+metric, weight bounds), internal/store/group_members_test.go (join time kept, leavers removed,
 cascade), internal/proxygroup/retain_test.go, and
 internal/dataplane/mihomo/compiler_members_test.go (compile -> record -> compile keeps
 the incumbent inside the margin and swaps beyond it).

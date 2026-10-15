@@ -79,9 +79,11 @@ func (r *memberResolver) memberships(enabled map[string]string) map[string][]str
 	return result
 }
 
+// pendingMembership is the last applied membership that could not be
+// written, with each member's join time in the continuous run that ends at
+// that apply. A member that left and came back joins anew.
 type pendingMembership struct {
-	members map[string][]string
-	at      time.Time
+	joined map[string]map[string]time.Time
 }
 
 func (c *Compiler) loadIncumbents(ctx context.Context) (map[string]map[string]time.Time, error) {
@@ -89,27 +91,30 @@ func (c *Compiler) loadIncumbents(ctx context.Context) (map[string]map[string]ti
 	if !ok {
 		return nil, nil
 	}
+	// The last applied membership wins over stored history when it could
+	// not be written: Retain must start from what Mihomo serves.
+	if c.pendingMembers != nil {
+		return c.pendingMembers.joined, nil
+	}
 	incumbents, err := repository.ListGroupMembers(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("load previous group members: %w", err)
 	}
-	return overlayPending(incumbents, c.pendingMembers), nil
+	return incumbents, nil
 }
 
-// overlayPending makes the last applied membership win over stored history
-// when it could not be written: Retain must start from what Mihomo serves.
-func overlayPending(stored map[string]map[string]time.Time, pending *pendingMembership) map[string]map[string]time.Time {
-	if pending == nil {
-		return stored
-	}
-	result := make(map[string]map[string]time.Time, len(pending.members))
-	for groupID, fingerprints := range pending.members {
+// carryJoined gives every member of the new membership its join time: the
+// time from previous when it was a member of the previous applied membership
+// (so it stayed continuously), otherwise now.
+func carryJoined(previous map[string]map[string]time.Time, members map[string][]string, now time.Time) map[string]map[string]time.Time {
+	result := make(map[string]map[string]time.Time, len(members))
+	for groupID, fingerprints := range members {
 		result[groupID] = make(map[string]time.Time, len(fingerprints))
 		for _, fingerprint := range fingerprints {
-			if joined, ok := stored[groupID][fingerprint]; ok {
+			if joined, ok := previous[groupID][fingerprint]; ok {
 				result[groupID][fingerprint] = joined
 			} else {
-				result[groupID][fingerprint] = pending.at
+				result[groupID][fingerprint] = now
 			}
 		}
 	}
@@ -117,16 +122,26 @@ func overlayPending(stored map[string]map[string]time.Time, pending *pendingMemb
 }
 
 // recordMembers stores what an applied configuration actually serves. It runs
-// only after a successful apply; a failure never undoes the apply. The
-// membership is kept as pending so the next compile retains from it and the
-// next successful write replaces it.
+// only after a successful apply; a failure never undoes the apply. On failure
+// the membership is kept in memory as pending, with join times carried from
+// the previous applied membership, so the next compile retains from it and
+// the next successful write replaces it.
 func (c *Compiler) recordMembers(ctx context.Context, compiled Compiled, now time.Time) error {
 	repository, ok := c.repository.(GroupMemberRepository)
 	if !ok || compiled.GroupMembers == nil {
 		return nil
 	}
 	if err := repository.ReplaceGroupMembers(ctx, compiled.GroupMembers, now); err != nil {
-		c.pendingMembers = &pendingMembership{members: compiled.GroupMembers, at: now}
+		var previous map[string]map[string]time.Time
+		if c.pendingMembers != nil {
+			previous = c.pendingMembers.joined
+		} else if stored, listErr := repository.ListGroupMembers(ctx); listErr == nil {
+			// No pending state: the store still holds the previous applied
+			// membership. If it cannot be read either, every member joins
+			// now, which only delays a replacement, never hastens one.
+			previous = stored
+		}
+		c.pendingMembers = &pendingMembership{joined: carryJoined(previous, compiled.GroupMembers, now)}
 		return err
 	}
 	c.pendingMembers = nil

@@ -16,6 +16,7 @@ type DockerAccessService interface {
 	Assess(context.Context, string, string) (dockeraccess.Assessment, error)
 	Apply(context.Context, string, dockeraccess.ApplyRequest) (dockeraccess.Assessment, error)
 	Revoke(context.Context, string) error
+	DeleteSource(context.Context, string, int) error
 	Links(context.Context) ([]dockeraccess.Link, error)
 }
 
@@ -96,12 +97,14 @@ func (s *Server) markDockerEntries(request *http.Request, items []listener.Liste
 	if err != nil {
 		return err
 	}
-	sourceOf := make(map[string]string, len(links))
+	linkOf := make(map[string]dockeraccess.Link, len(links))
 	for _, link := range links {
-		sourceOf[link.EntryListenerID] = link.ListenerID
+		linkOf[link.EntryListenerID] = link
 	}
 	for index := range items {
-		items[index].DockerAccessFor = sourceOf[items[index].ID]
+		link := linkOf[items[index].ID]
+		items[index].DockerAccessFor = link.ListenerID
+		items[index].DockerAccessWithheld = link.Withheld
 	}
 	return nil
 }

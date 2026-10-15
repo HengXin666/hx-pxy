@@ -320,7 +320,7 @@ func capabilityEndpoints() []CapabilityEndpoint {
 			ID:      "listener.docker_access.preview",
 			Method:  http.MethodGet,
 			Path:    "/api/v1/listeners/<id>/docker-access",
-			Summary: "Answer how a container dials this service. state=ready returns entry (listener_id, share_path, host, port, schemes); state=needs_entry returns a plan previewing the companion Mixed entry that would make it dialable (on the shared Mixed entry when reachable, otherwise on one Docker bridge gateway, never 0.0.0.0); state=client_landing is a residential channel, which containers use through its subscription / control URL; state=blocked names in reason what the operator must change first (service_disabled, no_docker_bridge, no_free_port, entry_disabled, entry_unreachable), with revocable=true when an existing entry can still be removed.",
+			Summary: "Answer how a container dials this service. state=ready returns entry (listener_id, share_path, host, port, schemes); state=needs_entry returns a plan previewing the companion Mixed entry that would make it dialable (on the shared Mixed entry when reachable, otherwise on one Docker bridge gateway, never 0.0.0.0); state=client_landing is a residential channel, which containers use through its subscription / control URL; state=blocked names in reason what the operator must change first (service_disabled, no_docker_bridge, no_free_port, entry_disabled, entry_unreachable, entry_pending while the data plane has not loaded an entry yet), with revocable=true when an existing entry can still be removed.",
 			Auth:    "api-key",
 			Fields: []CapabilityField{
 				{Name: "gateway", Type: "string", Description: "Bridge gateway address to plan against; defaults to docker0, then br-* compose bridges."},
