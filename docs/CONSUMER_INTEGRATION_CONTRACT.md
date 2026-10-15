@@ -210,6 +210,7 @@ node scripts/verify-consumer-contract.ts
 
 ## 8. 相关文档
 
+- [OpenAPI：订阅服务消费者](openapi/subscription-consumer.openapi.yaml) — 本契约的机器可读版本；与住宅渠道控制面分属两份文档，`go test ./internal/api -run OpenAPI` 校验字段与 Go 类型一致
 - [住宅代理客户端与自动化 API](RESIDENTIAL_SESSION_API.md) — `/ctl/` 的服务器端轮换契约
 - [住宅代理并发集成标准](RESIDENTIAL_INTEGRATION_STANDARD.md) — 租约与版本护栏
 - [Cloudflare / 雷池](CLOUDFLARE.md) — 公网拓扑与协议边界（WS 才走得通的那部分）
