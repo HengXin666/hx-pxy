@@ -305,6 +305,40 @@ func capabilityEndpoints() []CapabilityEndpoint {
 			ResponseRef: "Each listener exposes share_path, plus shared_inbound when it is served by an aggregate entry point.",
 		},
 		{
+			ID:      "listener.docker_access.preview",
+			Method:  http.MethodGet,
+			Path:    "/api/v1/listeners/<id>/docker-access",
+			Summary: "Answer how a container dials this service. state=ready returns entry (listener_id, share_path, host, port, schemes); state=needs_entry returns a plan previewing the companion Mixed entry that would make it dialable (on the shared Mixed entry when reachable, otherwise on one Docker bridge gateway, never 0.0.0.0).",
+			Auth:    "api-key",
+			Fields: []CapabilityField{
+				{Name: "gateway", Type: "string", Description: "Bridge gateway address to plan against; defaults to docker0, then br-* compose bridges."},
+			},
+			SeeAlso: []string{"docs/NETWORK_OPERATIONS.md"},
+		},
+		{
+			ID:      "listener.docker_access.apply",
+			Method:  http.MethodPost,
+			Path:    "/api/v1/listeners/<id>/docker-access",
+			Summary: "Create the previewed companion entry. It copies the source's egress (group or pinned node) and gets generated credentials. DELETE on the same path revokes it.",
+			Auth:    "api-key",
+			Fields: []CapabilityField{
+				{Name: "plan_id", Type: "string", Required: true, Description: "plan.id from the preview; a changed situation yields a new id and the stale one is refused."},
+				{Name: "confirm", Type: "boolean", Required: true, Description: "Must be true."},
+				{Name: "gateway", Type: "string", Description: "Same gateway the preview used."},
+			},
+			Errors: []CapabilityError{
+				{Status: 409, Code: "conflict", Meaning: "The preview is stale, the service needs no entry, or one already exists.", Remediation: "Read the preview again and confirm the new plan."},
+			},
+		},
+		{
+			ID:          "docker_access.links.read",
+			Method:      http.MethodGet,
+			Path:        "/api/v1/docker-access",
+			Summary:     "List source listener -> companion Docker entry links.",
+			Auth:        "api-key",
+			ResponseRef: "items[]: listener_id, entry_listener_id, bind_target (shared or the bridge address), created_at.",
+		},
+		{
 			ID:      "consumer_nodes.read",
 			Method:  http.MethodGet,
 			Path:    listener.ConsumerNodesPath + "<share-token>",

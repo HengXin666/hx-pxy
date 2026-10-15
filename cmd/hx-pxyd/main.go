@@ -24,6 +24,7 @@ import (
 	"github.com/HengXin666/hx-pxy/internal/bundle"
 	"github.com/HengXin666/hx-pxy/internal/config"
 	"github.com/HengXin666/hx-pxy/internal/dataplane/mihomo"
+	"github.com/HengXin666/hx-pxy/internal/dockeraccess"
 	"github.com/HengXin666/hx-pxy/internal/fleet"
 	"github.com/HengXin666/hx-pxy/internal/instance"
 	"github.com/HengXin666/hx-pxy/internal/listener"
@@ -435,6 +436,10 @@ func run(logger *slog.Logger) error {
 	if err != nil {
 		return err
 	}
+	dockerAccessService, err := dockeraccess.NewService(database, listenerService, settingsService, proxyService)
+	if err != nil {
+		return err
+	}
 	apiServer, err := api.NewServer(
 		transfers,
 		logger,
@@ -443,6 +448,7 @@ func run(logger *slog.Logger) error {
 		api.WithProxyGroups(proxyGroupService),
 		api.WithListeners(listenerService),
 		api.WithProxyServices(proxyService),
+		api.WithDockerAccess(dockerAccessService),
 		api.WithQuickstart(quickstartService),
 		api.WithResidential(residentialService),
 		api.WithFleet(fleetService),

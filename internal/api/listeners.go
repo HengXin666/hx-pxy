@@ -126,6 +126,14 @@ func (s *Server) handleListener(writer http.ResponseWriter, request *http.Reques
 		return
 	}
 	if identifier, action, found := strings.Cut(path, "/"); found {
+		if action == "docker-access" && identifier != "" {
+			s.handleListenerDockerAccess(writer, request, identifier)
+			return
+		}
+		if action == "docker-access" && identifier != "" {
+			s.handleListenerDockerAccess(writer, request, identifier)
+			return
+		}
 		if action == "rotate-share" && identifier != "" {
 			if request.Method != http.MethodPost {
 				methodNotAllowed(writer, request, http.MethodPost)

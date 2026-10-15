@@ -267,6 +267,7 @@ var optionalAdminRoutes = []string{
 	"/api/v1/residential/presets", "/api/v1/residential/providers",
 	"/api/v1/residential/channels",
 	"/api/v1/settings", "/api/v1/routing-rules",
+	"/api/v1/docker-access",
 }
 
 // observedOnlyRoutes are registered management routes the catalog deliberately

@@ -2,6 +2,9 @@
 
 Status: implemented
 
+The dead-end refusal for loopback / WS / unauthenticated services is superseded by
+.agents/notes/implemented/feature/2026-10-15-docker-access-entry.md.
+
 ## Problem
 
 A container cannot dial the host listener at its own loopback address or at an unspecified bind address. A public domain can resolve to an edge rather than this host.
