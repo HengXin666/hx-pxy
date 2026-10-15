@@ -13,6 +13,8 @@ import type {
   GlobalSettings,
   ListenerList,
   ListenerRecord,
+  DockerAccessAssessment,
+  DockerAccessLink,
   NetworkAddresses,
   NodeCheckResult,
   NodeCheckList,
@@ -796,6 +798,26 @@ export const api = {
       )
     }
     return response.text()
+  },
+
+  dockerAccess(id: string, gateway?: string): Promise<DockerAccessAssessment> {
+    const query = gateway ? `?gateway=${encodeURIComponent(gateway)}` : ""
+    return request(`/api/v1/listeners/${encodeURIComponent(id)}/docker-access${query}`, { method: "GET" })
+  },
+
+  applyDockerAccess(id: string, payload: { plan_id: string; gateway?: string; confirm: true }): Promise<DockerAccessAssessment> {
+    return request(`/api/v1/listeners/${encodeURIComponent(id)}/docker-access`, {
+      method: "POST",
+      body: JSON.stringify(payload),
+    })
+  },
+
+  revokeDockerAccess(id: string): Promise<void> {
+    return request(`/api/v1/listeners/${encodeURIComponent(id)}/docker-access`, { method: "DELETE" })
+  },
+
+  dockerAccessLinks(): Promise<{ items: DockerAccessLink[] }> {
+    return request("/api/v1/docker-access", { method: "GET" })
   },
 
   deleteListener(id: string, version: number): Promise<void> {
