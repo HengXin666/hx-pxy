@@ -325,9 +325,17 @@ export interface ProxyGroupSourceSpec {
   retain?: { margin?: number; min_dwell_seconds?: number }
 }
 
+/**
+ * Residential channel groups and subscription groups are both proxy groups but
+ * different products; the server stamps the type and `GET /api/v1/proxy-groups?type=`
+ * filters on it.
+ */
+export type ProxyGroupType = "residential" | "subscription" | "custom"
+
 export interface ProxyGroup {
   id: string
   name: string
+  type: ProxyGroupType
   strategy: ProxyGroupStrategy
   source_spec: ProxyGroupSourceSpec
   enabled: boolean
@@ -406,6 +414,8 @@ export interface ListenerRecord {
    * list and never offers it for editing or deletion.
    */
   shared_inbound_aggregate?: boolean
+  /** Source listener id when this row is a Docker entry created for container access. */
+  docker_access_for?: string
   enabled: boolean
   version: number
   created_at: string
@@ -901,7 +911,7 @@ export type DockerAccessState = "ready" | "needs_entry" | "client_landing" | "bl
 export type DockerAccessReason =
   | "direct" | "companion_entry" | "service_disabled" | "residential_channel" | "websocket_protocol"
   | "loopback_bind" | "missing_auth" | "no_share_export" | "no_reachable_address" | "no_docker_bridge"
-  | "entry_disabled" | "entry_unreachable"
+  | "entry_disabled" | "entry_unreachable" | "no_free_port" | "shared_entry_disabled"
 
 export interface DockerBridge {
   interface: string

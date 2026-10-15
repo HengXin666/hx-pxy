@@ -404,7 +404,8 @@ v1 优先提供适合反向代理和 CDN 的成熟协议模板：
 - [x] Listener 页：创建、编辑和删除 HTTP/SOCKS/Mixed/VLESS-WS/VMess-WS/Trojan-WS 入口，配置绑定、认证、域名，并展示连接、流量与实时日志。
 - [x] 服务器节点：在代理服务页提供 DIRECT 出口、服务端协议模板、公开域名和客户端订阅导出。
 - [x] 代理服务行提供「复制 Docker 使用地址」：使用宿主网桥 / LAN 候选 IP、实际共享端口和认证生成完整 URI；剪贴板不可用时弹窗支持手动复制，WS 提供订阅与客户端落地说明，不伪造 HTTP 代理。地址由 GET /api/v1/system/network 提供，仍需验证容器网络和防火墙。
-- [x] 「Docker 使用方式」改为服务端判定（ready / needs_entry / client_landing / blocked）：环回、无认证或 WS 服务不再止于报错，预览并一键创建与源服务同出口的 Mixed「Docker 入口」（共享 Mixed 成员或仅绑定所选网桥网关，绝不 0.0.0.0），可撤销；只有可直连入口才显示复制按钮。见 docs/NETWORK_OPERATIONS.md。
+- [x] 代理组 API 返回 `type`（residential / subscription / custom），`GET /api/v1/proxy-groups?type=` 可筛选；住宅渠道组与订阅组严格区分。
+- [x] 「Docker 使用方式」改为服务端判定（ready / needs_entry / client_landing / blocked）：环回、无认证或 WS 服务不再止于报错，预览并一键创建与源服务同出口的 Mixed「Docker 入口」（共享 Mixed 成员或仅绑定所选网桥网关，绝不 0.0.0.0），可撤销；只有可直连入口才显示代理 URI 复制按钮（住宅渠道 client_landing 仍提供订阅 URL 复制）。见 docs/NETWORK_OPERATIONS.md。
 - [ ] 统计：近 24 小时趋势已完成，7 天和 30 天前端视图仍待补齐。
 - [x] 告警页：当前告警、历史、确认与 SMTP 邮件设置；静默与维护窗口待后续。
 - [x] 关于页：控制面版本、数据面版本、GitHub 仓库、解析协议边界、一行升级命令，以及页面内可输入 6 位 TOTP 完成 2FA step-up 的一键更新。

@@ -77,7 +77,7 @@ func capabilityEndpoints() []CapabilityEndpoint {
 				{Name: "source_spec.protocols", Type: "array<string>", Description: "Protocol filters.", Enum: "node_protocol"},
 				{Name: "source_spec.states", Type: "array<string>", Description: "Probe state filters.", Enum: "node_state"},
 				{Name: "source_spec.max_latency_ms", Type: "integer", Description: "Drop members slower than this. 0..60000; 0 disables the filter."},
-				{Name: "source_spec.retain", Type: "object", Description: "Keep last apply's members between Sort and Limit: {margin, min_dwell_seconds}. A newcomer replaces an incumbent only when better by more than margin (ms for latency order, points for score order) and the incumbent has held its seat for min_dwell_seconds. Requires limit > 0 and subscription_ids (subscription pools only; residential channel groups are refused). Quarantined members are never retained."},
+				{Name: "source_spec.retain", Type: "object", Description: "Keep last apply's members between Sort and Limit: {margin, min_dwell_seconds}. A newcomer replaces an incumbent only when better by more than margin and the incumbent has held its seat for min_dwell_seconds. margin is in milliseconds for latency order (sort_by latency, the default) or score points when the group's stored rule pipeline sorts by score; with sort_by name nothing is ever replaced, incumbents only leave when they stop passing the filters. Requires limit > 0 and subscription_ids (subscription groups only; residential channel groups are refused). Quarantined members are never retained."},
 				{Name: "source_spec.sort_by", Type: "string", Enum: "sort_by", Default: "latency", Description: "Member ordering. Defaults to latency when a subscription is used."},
 				{Name: "source_spec.limit", Type: "integer", Description: "Keep at most this many members. 0..500."},
 				{Name: "source_spec.include_direct", Type: "boolean", Description: "Append a DIRECT member."},
@@ -257,6 +257,17 @@ func capabilityEndpoints() []CapabilityEndpoint {
 			SeeAlso:     []string{"node.list"},
 		},
 		{
+			ID:          "proxy_group.list",
+			Method:      http.MethodGet,
+			Path:        "/api/v1/proxy-groups",
+			Summary:     "List proxy groups. Every group carries type: residential (owned by a residential channel; exits rotate through /ctl/ leases), subscription (selects nodes imported from subscriptions) or custom (explicit nodes, group compositions, DIRECT). Filter with ?type=residential or a comma-separated list.",
+			Auth:        "api-key",
+			ResponseRef: "items[]: id, name, type, strategy, source_spec, enabled, version.",
+			Fields: []CapabilityField{
+				{Name: "type", Type: "string", Description: "Optional filter: residential, subscription, custom, or a comma-separated combination. Unknown values are rejected with 422."},
+			},
+		},
+		{
 			ID:      "proxy_group.create",
 			Method:  http.MethodPost,
 			Path:    "/api/v1/proxy-groups",
@@ -309,7 +320,7 @@ func capabilityEndpoints() []CapabilityEndpoint {
 			ID:      "listener.docker_access.preview",
 			Method:  http.MethodGet,
 			Path:    "/api/v1/listeners/<id>/docker-access",
-			Summary: "Answer how a container dials this service. state=ready returns entry (listener_id, share_path, host, port, schemes); state=needs_entry returns a plan previewing the companion Mixed entry that would make it dialable (on the shared Mixed entry when reachable, otherwise on one Docker bridge gateway, never 0.0.0.0).",
+			Summary: "Answer how a container dials this service. state=ready returns entry (listener_id, share_path, host, port, schemes); state=needs_entry returns a plan previewing the companion Mixed entry that would make it dialable (on the shared Mixed entry when reachable, otherwise on one Docker bridge gateway, never 0.0.0.0); state=client_landing is a residential channel, which containers use through its subscription / control URL; state=blocked names in reason what the operator must change first (service_disabled, no_docker_bridge, no_free_port, entry_disabled, entry_unreachable), with revocable=true when an existing entry can still be removed.",
 			Auth:    "api-key",
 			Fields: []CapabilityField{
 				{Name: "gateway", Type: "string", Description: "Bridge gateway address to plan against; defaults to docker0, then br-* compose bridges."},

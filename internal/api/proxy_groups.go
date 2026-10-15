@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"strings"
@@ -97,7 +98,14 @@ func containsString(items []string, want string) bool {
 func (s *Server) handleProxyGroups(writer http.ResponseWriter, request *http.Request) {
 	switch request.Method {
 	case http.MethodGet:
-		items, err := s.proxyGroups.List(request.Context())
+		// ?type=residential|subscription|custom (comma-separated) filters by
+		// group type; an unknown value is a 422, never silently ignored.
+		filter, err := proxygroup.ParseTypeFilter(request.URL.Query().Get("type"))
+		if err != nil {
+			s.handleError(writer, request, err)
+			return
+		}
+		items, err := s.listProxyGroups(request.Context(), filter)
 		if err != nil {
 			s.handleError(writer, request, err)
 			return
@@ -188,4 +196,21 @@ func isProxyGroupError(err error) bool {
 	return errors.Is(err, proxygroup.ErrNotFound) ||
 		errors.Is(err, proxygroup.ErrConflict) ||
 		errors.Is(err, proxygroup.ErrInvalid)
+}
+
+// listProxyGroups lists groups, keeping only the types in filter (nil = all).
+// Residential channel groups and subscription groups share the resource but
+// must be separable by every caller; see proxygroup/group_type.go.
+func (s *Server) listProxyGroups(ctx context.Context, filter map[string]bool) ([]proxygroup.Group, error) {
+	items, err := s.proxyGroups.List(ctx)
+	if err != nil || filter == nil {
+		return items, err
+	}
+	kept := make([]proxygroup.Group, 0, len(items))
+	for _, item := range items {
+		if filter[item.Type] {
+			kept = append(kept, item)
+		}
+	}
+	return kept, nil
 }

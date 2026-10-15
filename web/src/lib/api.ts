@@ -15,6 +15,7 @@ import type {
   ListenerRecord,
   DockerAccessAssessment,
   DockerAccessLink,
+  ProxyGroupType,
   NetworkAddresses,
   NodeCheckResult,
   NodeCheckList,
@@ -714,8 +715,9 @@ export const api = {
     )
   },
 
-  listProxyGroups(): Promise<ProxyGroupList> {
-    return request("/api/v1/proxy-groups")
+  listProxyGroups(types?: ProxyGroupType[]): Promise<ProxyGroupList> {
+    const query = types && types.length > 0 ? `?type=${types.map(encodeURIComponent).join(",")}` : ""
+    return request(`/api/v1/proxy-groups${query}`)
   },
 
   createProxyGroup(payload: CreateProxyGroupRequest): Promise<ProxyGroup> {

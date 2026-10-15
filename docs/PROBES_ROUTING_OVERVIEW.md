@@ -48,7 +48,11 @@
 
 ### 3.1 代理组成员保留（Retain）
 
-带 `limit` 的代理组可设置 `source_spec.retain = {margin, min_dwell_seconds}`，在 Sort 与 Limit 之间加入 Retain 阶段：上一次成功应用的成员只要仍满足全部筛选条件且未被隔离 / 停用 / 退役，就优先保留；新节点必须比最弱的可替换成员好出 `margin`（延迟排序单位为毫秒，评分排序为分值，名称排序不替换），且该成员已在组内满 `min_dwell_seconds`，才会替换它。成员记录在 `group_members`（按节点指纹），只在 Mihomo 接受新配置后写入；成员不变时编译结果不变，数据面不会重新加载。未设置 retain 的组行为不变。
+**订阅来源**且带 `limit` 的代理组可设置 `source_spec.retain = {margin, min_dwell_seconds}`（住宅渠道组与无订阅来源的组会被拒绝），在 Sort 与 Limit 之间加入 Retain 阶段：上一次成功应用的成员只要仍满足全部筛选条件且未被隔离 / 停用 / 退役，就优先保留；新节点必须比最弱的可替换成员好出 `margin`（延迟排序单位为毫秒；自定义规则按评分排序时为分值；名称排序不替换），且该成员已在组内满 `min_dwell_seconds`，才会替换它。分桶上限在 Retain 内执行。成员记录在 `group_members`（按节点指纹），只在 Mihomo 接受新配置后写入，写入失败时保留在内存中继续作为下次编译的基线。成员保留减少的是由成员替换引起的配置变化与重载；节点配置本身变化仍会改变编译结果。
+
+### 3.2 代理组类型
+
+`GET /api/v1/proxy-groups` 的每个组都带 `type`：`residential`（由住宅渠道拥有，出口经 `/ctl/` 租约轮换）、`subscription`（从订阅节点中选择）、`custom`（显式节点、组合、DIRECT）。`?type=residential` 或逗号分隔的多个值可筛选，未知值返回 422。
 
 ## 4. 实时总览
 
