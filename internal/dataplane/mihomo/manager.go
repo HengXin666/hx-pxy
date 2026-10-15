@@ -233,6 +233,19 @@ func (m *Manager) Apply(ctx context.Context) error {
 		m.recordFailureLocked(err)
 		return err
 	}
+	if err := m.applyCompiledLocked(ctx, compiled); err != nil {
+		return err
+	}
+	// Only a configuration Mihomo actually accepted becomes the previous
+	// membership the Retain stage keeps. A failed record never undoes the
+	// apply; the next compile simply retains from older state.
+	if err := m.compiler.recordMembers(ctx, compiled, time.Now()); err != nil {
+		m.logger.Warn("record proxy group members failed", "component", "dataplane", "error", err)
+	}
+	return nil
+}
+
+func (m *Manager) applyCompiledLocked(ctx context.Context, compiled Compiled) error {
 	if m.status.Running && bytes.Equal(compiled.YAML, m.lastCompiled.YAML) {
 		m.status.ListenerCount = len(compiled.Endpoints)
 		m.status.ProxyCount = compiled.ProxyCount

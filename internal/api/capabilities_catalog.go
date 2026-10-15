@@ -77,6 +77,7 @@ func capabilityEndpoints() []CapabilityEndpoint {
 				{Name: "source_spec.protocols", Type: "array<string>", Description: "Protocol filters.", Enum: "node_protocol"},
 				{Name: "source_spec.states", Type: "array<string>", Description: "Probe state filters.", Enum: "node_state"},
 				{Name: "source_spec.max_latency_ms", Type: "integer", Description: "Drop members slower than this. 0..60000; 0 disables the filter."},
+				{Name: "source_spec.retain", Type: "object", Description: "Keep last apply's members between Sort and Limit: {margin, min_dwell_seconds}. A newcomer replaces an incumbent only when better by more than margin (ms for latency order, points for score order) and the incumbent has held its seat for min_dwell_seconds. Requires limit > 0 and subscription_ids (subscription pools only; residential channel groups are refused). Quarantined members are never retained."},
 				{Name: "source_spec.sort_by", Type: "string", Enum: "sort_by", Default: "latency", Description: "Member ordering. Defaults to latency when a subscription is used."},
 				{Name: "source_spec.limit", Type: "integer", Description: "Keep at most this many members. 0..500."},
 				{Name: "source_spec.include_direct", Type: "boolean", Description: "Append a DIRECT member."},

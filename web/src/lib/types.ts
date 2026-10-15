@@ -321,6 +321,8 @@ export interface ProxyGroupSourceSpec {
   include_direct: boolean
   test_url?: string
   interval_seconds?: number
+  /** Retain stage: keep last apply's members unless a newcomer is better by more than margin. Requires limit > 0. */
+  retain?: { margin?: number; min_dwell_seconds?: number }
 }
 
 export interface ProxyGroup {

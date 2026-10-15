@@ -88,5 +88,6 @@ func isEmptySourceSpec(spec proxygroup.SourceSpec) bool {
 		spec.Limit == 0 &&
 		!spec.IncludeDirect &&
 		spec.TestURL == "" &&
-		spec.IntervalSeconds == 0
+		spec.IntervalSeconds == 0 &&
+		spec.Retain == nil
 }

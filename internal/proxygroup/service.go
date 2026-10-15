@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/HengXin666/hx-pxy/internal/pipeline"
 	"slices"
 	"sort"
 	"strings"
@@ -69,6 +70,9 @@ type SourceSpec struct {
 	IncludeDirect   bool     `json:"include_direct"`
 	TestURL         string   `json:"test_url,omitempty"`
 	IntervalSeconds int      `json:"interval_seconds,omitempty"`
+	// Retain keeps last apply's members between Sort and Limit; only
+	// meaningful with Limit > 0. See retain.go in this package.
+	Retain *pipeline.RetainSpec `json:"retain,omitempty"`
 }
 
 type Group struct {
@@ -219,7 +223,11 @@ func (s *Service) Members(ctx context.Context, id string) (MembersView, error) {
 	if err != nil {
 		return MembersView{}, err
 	}
-	resolution, err := ResolveMembers(spec, record.RulePipelineJSON, candidates)
+	incumbents, err := s.incumbents(ctx, record.ID)
+	if err != nil {
+		return MembersView{}, err
+	}
+	resolution, err := resolveMembers(spec, record.RulePipelineJSON, candidates, incumbents)
 	if err != nil {
 		return MembersView{}, err
 	}
@@ -397,6 +405,9 @@ func (s *Service) normalize(
 	strategy = strings.ToLower(strings.TrimSpace(strategy))
 	if !validStrategy(strategy) {
 		return normalizedGroup{}, fmt.Errorf("%w: unsupported strategy %q", ErrInvalid, strategy)
+	}
+	if err := validateRetain(spec); err != nil {
+		return normalizedGroup{}, err
 	}
 	spec.NodeIDs = deduplicateIDs(spec.NodeIDs)
 	spec.GroupIDs = deduplicateIDs(spec.GroupIDs)
