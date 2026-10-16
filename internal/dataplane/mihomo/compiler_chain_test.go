@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/HengXin666/hx-pxy/internal/store"
 )
@@ -101,13 +102,13 @@ func TestValidateResidentialDialerChainsRejectsDirectAndNestedCycles(t *testing.
 		"group-upstream":    "upstream",
 		"group-nested":      "nested",
 	}
-	if err := validateResidentialDialerChains(groups, nodeRecords, nodes, nil, groupNames); err == nil {
+	if err := validateResidentialDialerChains(groups, nodeRecords, nodes, newMemberResolver(nil, nil, time.Time{}), groupNames); err == nil {
 		t.Fatal("validateResidentialDialerChains() = nil, want nested cycle error")
 	}
 
 	groups[1].SourceSpecJSON = `{"node_ids":["node-foreign"]}`
 	groups[2].SourceSpecJSON = `{"node_ids":["node-foreign"]}`
-	if err := validateResidentialDialerChains(groups, nodeRecords, nodes, nil, groupNames); err != nil {
+	if err := validateResidentialDialerChains(groups, nodeRecords, nodes, newMemberResolver(nil, nil, time.Time{}), groupNames); err != nil {
 		t.Fatalf("validateResidentialDialerChains() valid chain error = %v", err)
 	}
 }

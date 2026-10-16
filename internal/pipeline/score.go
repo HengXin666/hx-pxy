@@ -3,6 +3,7 @@ package pipeline
 import (
 	"context"
 	"fmt"
+	"math"
 	"sort"
 )
 
@@ -13,6 +14,10 @@ const (
 	MissingNeutral = "neutral" // assume 0.5 on the normalized scale
 	MissingZero    = "zero"    // assume the worst value
 )
+
+// MaxScoreWeight bounds a component weight. Weights are relative, so a larger
+// bound adds nothing but the risk of overflowing the weighted sum.
+const MaxScoreWeight = 1e6
 
 const (
 	defaultLatencyCeilingMS = 2000
@@ -51,8 +56,10 @@ func newWeightedScorer(spec ScoreSpec) (*weightedScorer, error) {
 		if name != componentLatency && name != componentAvailability {
 			return nil, fmt.Errorf("unknown score component %q", name)
 		}
-		if weight < 0 {
-			return nil, fmt.Errorf("score component %q has a negative weight", name)
+		// A bounded, finite weight keeps the weighted sum finite, so Retain
+		// never compares NaN or infinite scores.
+		if math.IsNaN(weight) || weight < 0 || weight > MaxScoreWeight {
+			return nil, fmt.Errorf("score component %q weight must be between 0 and %g", name, float64(MaxScoreWeight))
 		}
 	}
 	ceiling := spec.LatencyCeilingMS

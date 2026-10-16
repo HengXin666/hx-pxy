@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/HengXin666/hx-pxy/internal/listener"
 	"github.com/HengXin666/hx-pxy/internal/proxygroup"
@@ -46,6 +47,13 @@ type Compiled struct {
 	Endpoints        []Endpoint
 	ProxyCount       int
 	ControllerSocket string
+	// GroupMembers is group id -> fingerprints of the nodes each enabled
+	// group carries in this document. It is recorded after a successful
+	// apply and feeds the Retain stage of the next compile.
+	GroupMembers map[string][]string
+	// WithheldEntries are Docker companion entries left out of this
+	// document (see compiler_docker_entries.go).
+	WithheldEntries []WithheldEntry
 }
 
 type Compiler struct {
@@ -53,6 +61,12 @@ type Compiler struct {
 	cipher           Cipher
 	controllerSocket string
 	egressInterface  string
+	now              func() time.Time
+	// hostAddressPresent is replaced in tests; nil checks host interfaces.
+	hostAddressPresent func(string) bool
+	// pendingMembers is the membership of the last applied document when
+	// recording it failed; it overrides stored history until a write succeeds.
+	pendingMembers *pendingMembership
 }
 
 func NewCompiler(repository Repository, cipher Cipher) (*Compiler, error) {
@@ -90,6 +104,10 @@ func (c *Compiler) Compile(ctx context.Context) (Compiled, error) {
 	if err != nil {
 		return Compiled{}, err
 	}
+	listeners, withheldEntries, err := c.gateDockerEntries(ctx, listeners)
+	if err != nil {
+		return Compiled{}, err
+	}
 	enabledGroups := make(map[string]store.ProxyGroupRecord)
 	groupNames := make(map[string]string)
 	for _, group := range groups {
@@ -114,6 +132,12 @@ func (c *Compiler) Compile(ctx context.Context) (Compiled, error) {
 	if err != nil {
 		return Compiled{}, err
 	}
+	incumbents, err := c.loadIncumbents(ctx)
+	if err != nil {
+		return Compiled{}, err
+	}
+	members := newMemberResolver(candidates, incumbents, c.clock())
+	members.addFingerprints(nodeRecords)
 	clientRoutes, err := c.repository.ListResidentialClientRoutes(ctx)
 	if err != nil {
 		return Compiled{}, err
@@ -131,7 +155,7 @@ func (c *Compiler) Compile(ctx context.Context) (Compiled, error) {
 		nodeNameByID[record.ID] = proxyName
 		proxies = append(proxies, config)
 	}
-	if err := validateResidentialDialerChains(groups, nodeRecords, nodeByID, candidates, groupNameByID); err != nil {
+	if err := validateResidentialDialerChains(groups, nodeRecords, nodeByID, members, groupNameByID); err != nil {
 		return Compiled{}, err
 	}
 	// Backstop for rows that never went through the service validator: a chain
@@ -149,7 +173,7 @@ func (c *Compiler) Compile(ctx context.Context) (Compiled, error) {
 		if !record.Enabled {
 			continue
 		}
-		compiledGroup, err := compileGroup(record, nodeByID, candidates, groupNameByID, derived)
+		compiledGroup, err := compileGroup(record, nodeByID, members, groupNameByID, derived)
 		if err != nil {
 			return Compiled{}, err
 		}
@@ -338,6 +362,8 @@ func (c *Compiler) Compile(ctx context.Context) (Compiled, error) {
 		Endpoints:        endpoints,
 		ProxyCount:       len(proxies),
 		ControllerSocket: c.controllerSocket,
+		GroupMembers:     members.memberships(groupNameByID),
+		WithheldEntries:  withheldEntries,
 	}, nil
 }
 
@@ -447,26 +473,10 @@ func sortGroupsByDependency(groups []store.ProxyGroupRecord) []store.ProxyGroupR
 	return ordered
 }
 
-// groupNodeIDs is the one resolution of "which nodes does this group carry".
-// Both the emitted member list and the dialer-chain validator call it, because a
-// second copy of this derivation is exactly how a chain check drifts away from
-// the graph it is supposed to be checking (this repository has already been bitten
-// once by a stale predicate surviving in a second location).
-func groupNodeIDs(
-	record store.ProxyGroupRecord,
-	candidates []store.GroupNodeCandidate,
-) ([]string, error) {
-	spec, err := decodeSourceSpec(record.SourceSpecJSON)
-	if err != nil {
-		return nil, fmt.Errorf("decode group %q source spec: %w", record.Name, err)
-	}
-	return proxygroup.ResolveNodeIDs(spec, candidates), nil
-}
-
 func compileGroup(
 	record store.ProxyGroupRecord,
 	nodes map[string]compiledNode,
-	candidates []store.GroupNodeCandidate,
+	resolver *memberResolver,
 	groupNameByID map[string]string,
 	derived *derivedProxySet,
 ) (map[string]any, error) {
@@ -486,7 +496,10 @@ func compileGroup(
 		}
 		dialerName = name
 	}
-	resolvedNodeIDs := proxygroup.ResolveNodeIDs(spec, candidates)
+	resolvedNodeIDs, err := resolver.nodeIDs(record)
+	if err != nil {
+		return nil, err
+	}
 	members := make([]string, 0, len(spec.GroupIDs)+len(resolvedNodeIDs)+1)
 	seen := make(map[string]struct{}, len(spec.GroupIDs)+len(resolvedNodeIDs)+1)
 	for _, groupID := range spec.GroupIDs {

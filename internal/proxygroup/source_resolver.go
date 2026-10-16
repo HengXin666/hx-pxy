@@ -31,7 +31,14 @@ type Resolution struct {
 // historical behavior: explicitly pinned node IDs always come first and skip
 // filtering; dynamic selection only runs when subscriptions are referenced.
 func ResolveNodeIDs(spec SourceSpec, candidates []store.GroupNodeCandidate) []string {
-	resolution, err := ResolveMembers(spec, "", candidates)
+	return ResolveNodeIDsRetaining(spec, candidates, pipeline.Incumbents{})
+}
+
+// ResolveNodeIDsRetaining is ResolveNodeIDs with the group's previous
+// membership available to the Retain stage (spec.Retain). Without incumbents
+// or without a retain spec it is identical to ResolveNodeIDs.
+func ResolveNodeIDsRetaining(spec SourceSpec, candidates []store.GroupNodeCandidate, incumbents pipeline.Incumbents) []string {
+	resolution, err := resolveMembers(spec, "", candidates, incumbents)
 	if err != nil {
 		// A SourceSpec already validated by the service cannot produce an
 		// invalid derived pipeline; keep pinned nodes if it somehow does.
@@ -45,6 +52,10 @@ func ResolveNodeIDs(spec SourceSpec, candidates []store.GroupNodeCandidate) []st
 // rulePipelineJSON optionally extends the pipeline derived from the source
 // spec with stored custom rules (proxy_groups.rule_pipeline_json).
 func ResolveMembers(spec SourceSpec, rulePipelineJSON string, candidates []store.GroupNodeCandidate) (Resolution, error) {
+	return resolveMembers(spec, rulePipelineJSON, candidates, pipeline.Incumbents{})
+}
+
+func resolveMembers(spec SourceSpec, rulePipelineJSON string, candidates []store.GroupNodeCandidate, incumbents pipeline.Incumbents) (Resolution, error) {
 	resolved := deduplicateIDs(spec.NodeIDs)
 	if len(spec.SubscriptionIDs) == 0 {
 		return Resolution{NodeIDs: resolved}, nil
@@ -61,7 +72,7 @@ func ResolveMembers(spec SourceSpec, rulePipelineJSON string, candidates []store
 	for _, candidate := range candidates {
 		nodes = append(nodes, candidateToNode(candidate))
 	}
-	result, err := built.Run(context.Background(), nodes)
+	result, err := built.RunRetaining(context.Background(), nodes, incumbents)
 	if err != nil {
 		return Resolution{}, err
 	}
@@ -87,7 +98,8 @@ func derivePipelineSpec(spec SourceSpec, rulePipelineJSON string) (pipeline.Spec
 		Predicates: []pipeline.RuleSpec{
 			mustRule("subscriptions", map[string]any{"values": spec.SubscriptionIDs}),
 		},
-		Limit: pipeline.LimitSpec{Total: spec.Limit},
+		Limit:  pipeline.LimitSpec{Total: spec.Limit},
+		Retain: spec.Retain,
 	}
 	if len(spec.Protocols) > 0 {
 		derived.Predicates = append(derived.Predicates, mustRule("protocols", map[string]any{"values": spec.Protocols}))
@@ -128,6 +140,9 @@ func derivePipelineSpec(spec SourceSpec, rulePipelineJSON string) (pipeline.Spec
 	}
 	if custom.Limit.Total > 0 {
 		derived.Limit.Total = custom.Limit.Total
+	}
+	if custom.Retain != nil {
+		derived.Retain = custom.Retain
 	}
 	if custom.Limit.PerBucket > 0 {
 		derived.Limit.PerBucket = custom.Limit.PerBucket

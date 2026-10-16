@@ -1,6 +1,6 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import { dockerEndpoint, dockerProxyURI } from "../src/lib/docker-endpoint.ts"
+import { dockerEndpoint, dockerProxyURI, dockerProxyURIs } from "../src/lib/docker-endpoint.ts"
 
 test("container copy respects bind and protocol instead of public domain", () => {
   const listener = { kind: "mixed", bind_address: "0.0.0.0", port: 7890 }
@@ -19,4 +19,13 @@ test("Docker URI retains escaped authentication and drops public TLS, path and f
   assert.throws(() => dockerProxyURI("172.17.0.1:7890", "http", "http://example.com:7890", true))
   assert.throws(() => dockerProxyURI("172.17.0.1:7890", "http", "vless://id@example.com", true))
   assert.throws(() => dockerProxyURI("172.17.0.1:7890", "http", "<html>not a subscription</html>", true))
+})
+
+test("assessed Mixed entry yields HTTP and remote-DNS SOCKS URIs", () => {
+  const content = "http://docker-ab12:secret@1.2.3.4:7890\nsocks5://docker-ab12:secret@1.2.3.4:7890\n"
+  const uris = dockerProxyURIs({ host: "172.17.0.1", port: 17890, schemes: ["http", "socks5h"] }, content)
+  assert.deepEqual(uris, [
+    { scheme: "http", uri: "http://docker-ab12:secret@172.17.0.1:17890" },
+    { scheme: "socks5h", uri: "socks5h://docker-ab12:secret@172.17.0.1:17890" },
+  ])
 })

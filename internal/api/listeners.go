@@ -16,6 +16,10 @@ func (s *Server) handleListeners(writer http.ResponseWriter, request *http.Reque
 			s.handleError(writer, request, err)
 			return
 		}
+		if err := s.markDockerEntries(request, items); err != nil {
+			s.handleError(writer, request, err)
+			return
+		}
 		writeJSON(writer, http.StatusOK, map[string]any{"items": items})
 	case http.MethodPost:
 		var createRequest listener.CreateRequest
@@ -126,6 +130,10 @@ func (s *Server) handleListener(writer http.ResponseWriter, request *http.Reques
 		return
 	}
 	if identifier, action, found := strings.Cut(path, "/"); found {
+		if action == "docker-access" && identifier != "" {
+			s.handleListenerDockerAccess(writer, request, identifier)
+			return
+		}
 		if action == "rotate-share" && identifier != "" {
 			if request.Method != http.MethodPost {
 				methodNotAllowed(writer, request, http.MethodPost)
@@ -169,7 +177,16 @@ func (s *Server) handleListener(writer http.ResponseWriter, request *http.Reques
 			s.writeAPIError(writer, request, http.StatusBadRequest, "invalid_request", err.Error())
 			return
 		}
-		if err := s.listeners.Delete(request.Context(), id, version); err != nil {
+		// A Docker entry exists only to reach this service, so the Docker
+		// access service deletes both: it rejects a stale version before
+		// touching anything and removes the companion only after the source
+		// delete succeeded.
+		if s.dockerAccess != nil {
+			err = s.dockerAccess.DeleteSource(request.Context(), id, version)
+		} else {
+			err = s.listeners.Delete(request.Context(), id, version)
+		}
+		if err != nil {
 			s.handleError(writer, request, err)
 			return
 		}

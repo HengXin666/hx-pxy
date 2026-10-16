@@ -46,6 +46,14 @@
 
 保存流程会校验规则值、动作引用和代理组引用，生成稳定优先级顺序的完整候选配置，并在 Mihomo Apply 失败时回滚。最终兜底规则固定为 `MATCH,DIRECT`。
 
+### 3.1 代理组成员保留（Retain）
+
+**订阅来源**且带 `limit` 的代理组可设置 `source_spec.retain = {margin, min_dwell_seconds}`（住宅渠道组与无订阅来源的组会被拒绝），在 Sort 与 Limit 之间加入 Retain 阶段：上一次成功应用的成员只要仍满足全部筛选条件且未被隔离 / 停用 / 退役，就优先保留；新节点必须比最弱的可替换成员好出 `margin`（延迟排序单位为毫秒；自定义规则按评分排序时为分值；名称排序不替换），且该成员已在组内满 `min_dwell_seconds`，才会替换它。分桶上限在 Retain 内执行。成员记录在 `group_members`（按节点指纹），只在 Mihomo 接受新配置后写入，写入失败时保留在内存中继续作为下次编译的基线。成员保留减少的是由成员替换引起的配置变化与重载；节点配置本身变化仍会改变编译结果。
+
+### 3.2 代理组类型
+
+`GET /api/v1/proxy-groups` 的每个组都带 `type`：`residential`（由住宅渠道拥有，出口经 `/ctl/` 租约轮换）、`subscription`（从订阅节点中选择）、`custom`（显式节点、组合、DIRECT）。`?type=residential` 或逗号分隔的多个值可筛选，未知值返回 422。
+
 ## 4. 实时总览
 
 总览页组合 Listener、Proxy Group、规则集和流量汇总 API，展示当前入口到代理组、策略、有效规则集以及入口累计/今日流量的关系。`GET /api/v1/overview/stream` 提供只读 SSE：

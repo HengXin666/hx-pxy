@@ -18,3 +18,12 @@ export function dockerProxyURI(address: string, kind: string, content: string, a
   const credentials = source.username || source.password ? `${source.username}:${source.password}@` : ""
   return `${scheme}://${credentials}${address}`
 }
+
+// Builds every container URI an assessed entry supports (Mixed offers both).
+// socks5h (not socks5) keeps DNS resolution on the proxy side, which is what
+// a container behind a bridge usually needs.
+export function dockerProxyURIs(endpoint: { host: string; port: number; schemes: string[] }, content: string, authRequired = true): Array<{ scheme: string; uri: string }> {
+  const host = endpoint.host.includes(":") ? `[${endpoint.host}]` : endpoint.host
+  const address = `${host}:${endpoint.port}`
+  return endpoint.schemes.map(scheme => ({ scheme, uri: dockerProxyURI(address, scheme === "socks5h" ? "socks" : "http", content, authRequired) }))
+}

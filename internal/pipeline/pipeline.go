@@ -1,5 +1,5 @@
 // Package pipeline implements the fixed-stage node rule pipeline:
-// Normalize -> Enrich -> Predicate -> Score -> Bucket -> Sort -> Limit.
+// Normalize -> Enrich -> Predicate -> Score -> Bucket -> Sort -> [Retain] -> Limit.
 //
 // Every stage is a small interface resolved through an explicit registry.
 // Each rule emits traces (hit / miss / modified / excluded / error) so the UI
@@ -136,6 +136,7 @@ type Pipeline struct {
 	bucketer    namedRule[Bucketer]
 	sortKeys    []string
 	limit       LimitSpec
+	retain      *RetainSpec
 }
 
 // Run executes all stages. Rule errors are recorded as traces and never abort
@@ -143,6 +144,10 @@ type Pipeline struct {
 // previous values, and a failing predicate keeps the node (fail-open) so a
 // broken rule cannot silently empty the data plane configuration.
 func (p *Pipeline) Run(ctx context.Context, nodes []*Node) (Result, error) {
+	return p.run(ctx, nodes, p.limit)
+}
+
+func (p *Pipeline) run(ctx context.Context, nodes []*Node, limit LimitSpec) (Result, error) {
 	if err := ctx.Err(); err != nil {
 		return Result{}, err
 	}
@@ -162,7 +167,7 @@ func (p *Pipeline) Run(ctx context.Context, nodes []*Node) (Result, error) {
 		result.Nodes = append(result.Nodes, nodeCtx)
 	}
 	sortContexts(result.Nodes, p.sortKeys)
-	p.applyLimit(&result)
+	applyLimit(&result, limit)
 	return result, nil
 }
 
@@ -244,16 +249,17 @@ func (p *Pipeline) runBucket(ctx context.Context, nodeCtx *NodeContext, result *
 	nodeCtx.Bucket = bucket
 }
 
-func (p *Pipeline) applyLimit(result *Result) {
-	if p.limit.PerBucket > 0 {
+func applyLimit(result *Result, limit LimitSpec) {
+	total := limit.Total
+	if limit.PerBucket > 0 {
 		counts := make(map[string]int)
 		kept := result.Nodes[:0]
 		for _, nodeCtx := range result.Nodes {
 			counts[nodeCtx.Bucket]++
-			if counts[nodeCtx.Bucket] > p.limit.PerBucket {
+			if counts[nodeCtx.Bucket] > limit.PerBucket {
 				result.Excluded = append(result.Excluded, Exclusion{
 					NodeID: nodeCtx.Node.ID, Stage: StageLimit, Rule: "per-bucket-limit",
-					Reason: fmt.Sprintf("bucket %q already has %d nodes", nodeCtx.Bucket, p.limit.PerBucket),
+					Reason: fmt.Sprintf("bucket %q already has %d nodes", nodeCtx.Bucket, limit.PerBucket),
 				})
 				continue
 			}
@@ -261,14 +267,14 @@ func (p *Pipeline) applyLimit(result *Result) {
 		}
 		result.Nodes = kept
 	}
-	if p.limit.Total > 0 && len(result.Nodes) > p.limit.Total {
-		for _, nodeCtx := range result.Nodes[p.limit.Total:] {
+	if total > 0 && len(result.Nodes) > total {
+		for _, nodeCtx := range result.Nodes[total:] {
 			result.Excluded = append(result.Excluded, Exclusion{
 				NodeID: nodeCtx.Node.ID, Stage: StageLimit, Rule: "total-limit",
-				Reason: fmt.Sprintf("beyond the first %d nodes", p.limit.Total),
+				Reason: fmt.Sprintf("beyond the first %d nodes", total),
 			})
 		}
-		result.Nodes = result.Nodes[:p.limit.Total]
+		result.Nodes = result.Nodes[:total]
 	}
 }
 

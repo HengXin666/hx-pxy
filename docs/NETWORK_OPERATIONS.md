@@ -54,18 +54,36 @@ main 表本身被其他代理改写、基于防火墙重定向或无原生 IPv6 
 
 ## Docker 地址与诊断
 
-服务行的「复制 Docker 使用地址」打开使用说明：普通 HTTP/SOCKS/Mixed 入口使用宿主网桥
-候选 IP 和实际共享入口端口，复制**包含认证的完整 URI**，不会退回 Cloudflare 公网域名。
-`0.0.0.0` 只是绑定范围，不是客户端连接地址；共享入口必须用认证用户名选择代理服务。
-浏览器拒绝剪贴板权限或使用非安全 HTTP 页面时，可在弹窗中选中文本手动复制。
+服务行的「Docker 使用方式」由服务端判定（`internal/dockeraccess`），不会停在“不能直连”的提示上：
 
-- HTTP/Mixed：把同一个 `http://用户名:密码@网桥IP:固定端口` 填入 `HTTP_PROXY` 和
-  `HTTPS_PROXY`。HTTPS 目标通过 CONNECT 访问，不能把源站入口改成 `https://`。
-- SOCKS：把 `socks5h://用户名:密码@网桥IP:固定端口` 填入支持 SOCKS 的应用的 `ALL_PROXY`。
-- WS：弹窗提供 Mihomo 订阅 URL 与客户端落地说明。将订阅导入容器内或 sidecar 的 Mihomo，
-  客户端配置 `mixed-port: 7890`。共享网络命名空间时应用使用 `http://127.0.0.1:7890`；
-  不同容器使用私有 Docker 网络的 `http://mihomo:7890`，此时客户端需 `allow-lan: true`。
-  这是客户端自己的端口，不改变服务端固定入口。订阅、控制 URL 和 WS 路径都不是 HTTP 代理。
+- **可直连**（`state=ready`）：带认证、非环回的 HTTP/SOCKS/Mixed 入口（含共享 Mixed 成员）。弹窗用
+  宿主网桥候选 IP 和实际端口复制**包含认证的完整 URI**，不会退回 Cloudflare 公网域名。Mixed
+  同时给出 `http://`（填 `HTTP_PROXY` 与 `HTTPS_PROXY`，HTTPS 走 CONNECT）和 `socks5h://`
+  （填 `ALL_PROXY`，由代理解析 DNS）。`0.0.0.0` 只是绑定范围，不是客户端连接地址。
+- **需要 Docker 入口**（`state=needs_entry`）：环回绑定、无认证或 VLESS/VMess/Trojan 服务。弹窗预览
+  一个与本服务出口完全相同（同代理组 / 固定节点）的 Mixed「Docker 入口」：共享 Mixed 入口已启用
+  且非环回时作为其成员（新用户名，不新开端口）；否则只绑定所选 Docker 网桥网关地址
+  （docker0 优先，可切换到 compose 的 br-*），端口取 17890–17989 中空闲者，绝不绑 0.0.0.0。
+  确认后才创建，凭据随机生成；同一窗口可一键撤销。删除源服务时一并删除其 Docker 入口。
+- **住宅渠道**（`client_landing`）：沿用订阅 / 自动化控制 URL。WS 服务也可展开“在容器里用 Mihomo
+  客户端落地订阅”：客户端配置 `mixed-port: 7890`，共享网络命名空间用 `http://127.0.0.1:7890`，
+  不同容器用私有网络的 `http://mihomo:7890` 并开启 `allow-lan: true`。
+- **无法自动处理**（`blocked`）：服务已停用（已有 Docker 入口时仍可在弹窗撤销）；需要新建入口但本机
+  没有 Docker 网桥（`no_docker_bridge`；已绑定通配地址且带认证的服务仍可用 LAN 地址直连）；所选网桥上
+  17890–17989 已无空闲端口（`no_free_port`）；或 Docker 入口所在网桥已消失 / 共享入口已关闭
+  （`entry_unreachable`，撤销后按当前网络重建）。弹窗说明需要先做什么，不提供代理 URI 复制按钮。
+- 数据面只编译仍有效的 Docker 入口：源服务停用或网桥地址已不在本机时，该入口不会进入配置，
+  不会拖垮其他服务的应用。被剔除的网桥入口每 30 秒复查一次，网桥地址出现（例如 dockerd 晚于
+  hx-pxyd 启动）后自动重新应用；在此之前弹窗报告 `entry_pending`，不给复制按钮。
+  `GET /api/v1/listeners` 用 `docker_access_for` 标出 Docker 入口行，用
+  `docker_access_withheld: true` 标出当前未被数据面加载的入口（消费者不应把它当作可用出口）。
+  通过 API 删除源服务时先按 `version` 校验，过期返回 409 且不动 Docker 入口；源服务删除成功后
+  再删除其 Docker 入口。
+
+API：`GET /api/v1/listeners/{id}/docker-access[?gateway=IP]` 返回判定与预览（`plan.id`）；
+`POST` 同路径 `{plan_id, gateway, confirm:true}` 创建，预览过期返回 409；`DELETE` 撤销；
+`GET /api/v1/docker-access` 列出源服务 → Docker 入口的关联。浏览器拒绝剪贴板权限时可在弹窗中
+选中文本手动复制。控制面不修改宿主防火墙；连接超时时弹窗给出仅放行该网桥子网 → 该端口的示例命令。
 
 认证 URI 和订阅 URL 都是敏感凭据，不要放进公开截图、日志或仓库。需要可达的监听绑定和
 允许访问的防火墙；环回入口不能供独立网络命名空间中的容器直连。自定义网桥、隔离网络、

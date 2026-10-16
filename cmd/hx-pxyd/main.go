@@ -24,6 +24,7 @@ import (
 	"github.com/HengXin666/hx-pxy/internal/bundle"
 	"github.com/HengXin666/hx-pxy/internal/config"
 	"github.com/HengXin666/hx-pxy/internal/dataplane/mihomo"
+	"github.com/HengXin666/hx-pxy/internal/dockeraccess"
 	"github.com/HengXin666/hx-pxy/internal/fleet"
 	"github.com/HengXin666/hx-pxy/internal/instance"
 	"github.com/HengXin666/hx-pxy/internal/listener"
@@ -435,6 +436,11 @@ func run(logger *slog.Logger) error {
 	if err != nil {
 		return err
 	}
+	dockerAccessService, err := dockeraccess.NewService(database, listenerService, settingsService, proxyService,
+		dockeraccess.WithWithheld(func(id string) bool { _, withheld := mihomoManager.DockerEntryWithheld(id); return withheld }))
+	if err != nil {
+		return err
+	}
 	apiServer, err := api.NewServer(
 		transfers,
 		logger,
@@ -443,6 +449,7 @@ func run(logger *slog.Logger) error {
 		api.WithProxyGroups(proxyGroupService),
 		api.WithListeners(listenerService),
 		api.WithProxyServices(proxyService),
+		api.WithDockerAccess(dockerAccessService),
 		api.WithQuickstart(quickstartService),
 		api.WithResidential(residentialService),
 		api.WithFleet(fleetService),
@@ -538,8 +545,8 @@ func run(logger *slog.Logger) error {
 		serverErrors <- nil
 	}()
 
-	// 6 个 scheduler/service 后台任务 + 日志保留清理 = 7。
-	const backgroundTasks = 7
+	// 6 个 scheduler/service 后台任务 + 日志保留清理 + Docker 入口网桥观察 = 8。
+	const backgroundTasks = 8
 	backgroundErrors := make(chan error, backgroundTasks)
 	runBackground := func(name string, task func(context.Context) error) {
 		go func() {
@@ -568,6 +575,7 @@ func run(logger *slog.Logger) error {
 	runBackground("fleet_scheduler", fleetService.Run)
 	runBackground("traffic_service", trafficService.Run)
 	runBackground("log_retention", logRetentionRunner.Run)
+	runBackground("docker_entry_watch", mihomoManager.RunDockerEntryWatch)
 	drainBackground := func(alreadyRead int) error {
 		var joined error
 		for index := alreadyRead; index < backgroundTasks; index++ {

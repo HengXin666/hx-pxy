@@ -14,7 +14,7 @@ func validateResidentialDialerChains(
 	groups []store.ProxyGroupRecord,
 	nodeRecords []store.NodeConfigRecord,
 	nodes map[string]compiledNode,
-	candidates []store.GroupNodeCandidate,
+	resolver *memberResolver,
 	groupNameByID map[string]string,
 ) error {
 	groupIDByName := make(map[string]string, len(groupNameByID))
@@ -36,7 +36,7 @@ func validateResidentialDialerChains(
 		// A duplicate derivation here would let the graph this validator walks
 		// drift from the graph the document actually emits, and a cycle check
 		// against the wrong graph passes exactly when it must fail.
-		resolved, err := groupNodeIDs(record, candidates)
+		resolved, err := resolver.nodeIDs(record)
 		if err != nil {
 			return err
 		}

@@ -38,6 +38,11 @@ func (f *fakeListeners) EnsureSharedInbounds(context.Context, listener.SharedInb
 
 type fakeRepository struct {
 	channels []store.ResidentialChannelRecord
+	entries  []store.DockerAccessEntryRecord
+}
+
+func (f fakeRepository) ListDockerAccessEntries(context.Context) ([]store.DockerAccessEntryRecord, error) {
+	return f.entries, nil
 }
 
 func (f fakeRepository) ListResidentialChannels(context.Context) ([]store.ResidentialChannelRecord, error) {
@@ -166,5 +171,23 @@ func TestReconcileIsANoOpWhenSharedInboundIsDisabled(t *testing.T) {
 	}
 	if result.Migrated != 0 || len(listeners.updates) != 0 {
 		t.Fatalf("per-service mode was modified: %+v", result)
+	}
+}
+
+func TestReconcileLeavesDockerAccessEntriesOnTheirBridge(t *testing.T) {
+	listeners := &fakeListeners{items: []listener.Listener{
+		{ID: "companion", Name: "svc · Docker", Kind: "mixed", BindAddress: "172.17.0.1", Port: 17890, AuthConfigured: true, Version: 1, Enabled: true},
+	}}
+	repository := fakeRepository{entries: []store.DockerAccessEntryRecord{{ListenerID: "svc", EntryListenerID: "companion"}}}
+	service, err := NewService(repository, listeners, fakeSettings{spec: sharedSpec(), enabled: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := service.Reconcile(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Migrated != 0 || len(listeners.updates) != 0 {
+		t.Fatalf("docker entry was migrated: %+v", listeners.updates)
 	}
 }

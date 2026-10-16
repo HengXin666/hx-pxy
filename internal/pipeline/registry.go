@@ -28,6 +28,8 @@ type Spec struct {
 	Bucket     *RuleSpec  `json:"bucket,omitempty"`
 	Sort       []string   `json:"sort,omitempty"`
 	Limit      LimitSpec  `json:"limit,omitempty"`
+	// Retain keeps previous members between Sort and Limit; see retain.go.
+	Retain *RetainSpec `json:"retain,omitempty"`
 }
 
 type (
@@ -138,6 +140,13 @@ func (r *Registry) Build(spec Spec) (*Pipeline, error) {
 		}
 	}
 	pipeline.sortKeys = spec.Sort
+	if spec.Retain != nil {
+		if err := spec.Retain.Validate(); err != nil {
+			return nil, err
+		}
+		retain := *spec.Retain
+		pipeline.retain = &retain
+	}
 	return pipeline, nil
 }
 

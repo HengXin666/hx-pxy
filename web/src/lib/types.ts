@@ -321,11 +321,21 @@ export interface ProxyGroupSourceSpec {
   include_direct: boolean
   test_url?: string
   interval_seconds?: number
+  /** Retain stage: keep last apply's members unless a newcomer is better by more than margin. Requires limit > 0. */
+  retain?: { margin?: number; min_dwell_seconds?: number }
 }
+
+/**
+ * Residential channel groups and subscription groups are both proxy groups but
+ * different products; the server stamps the type and `GET /api/v1/proxy-groups?type=`
+ * filters on it.
+ */
+export type ProxyGroupType = "residential" | "subscription" | "custom"
 
 export interface ProxyGroup {
   id: string
   name: string
+  type: ProxyGroupType
   strategy: ProxyGroupStrategy
   source_spec: ProxyGroupSourceSpec
   enabled: boolean
@@ -404,6 +414,10 @@ export interface ListenerRecord {
    * list and never offers it for editing or deletion.
    */
   shared_inbound_aggregate?: boolean
+  /** Source listener id when this row is a Docker entry created for container access. */
+  docker_access_for?: string
+  /** True when the running data plane does not serve this Docker entry (source disabled, bridge missing). */
+  docker_access_withheld?: boolean
   enabled: boolean
   version: number
   created_at: string
@@ -890,4 +904,61 @@ export interface AddFleetAccountRequest {
   email: string
   cf_account_id: string
   api_token: string
+}
+
+// Docker access assessment. See internal/dockeraccess and
+// .agents/notes/implemented/feature/2026-10-15-docker-access-entry.md.
+// The UI branches on `state` and `reason`, never on message text.
+export type DockerAccessState = "ready" | "needs_entry" | "client_landing" | "blocked"
+export type DockerAccessReason =
+  | "direct" | "companion_entry" | "service_disabled" | "residential_channel" | "websocket_protocol"
+  | "loopback_bind" | "missing_auth" | "no_share_export" | "no_reachable_address" | "no_docker_bridge"
+  | "entry_disabled" | "entry_unreachable" | "entry_pending" | "no_free_port" | "shared_entry_disabled"
+
+export interface DockerBridge {
+  interface: string
+  address: string
+  subnet: string
+}
+
+export interface DockerAccessEndpoint {
+  listener_id: string
+  kind: ListenerKind
+  share_path: string
+  host: string
+  port: number
+  schemes: Array<"http" | "socks5h">
+  companion: boolean
+}
+
+export interface DockerAccessPlan {
+  id: string
+  placement: "shared" | "bridge"
+  name: string
+  kind: ListenerKind
+  bind_address: string
+  port: number
+  dial_host: string
+  gateway: string
+  new_port: boolean
+}
+
+export interface DockerAccessAssessment {
+  listener_id: string
+  state: DockerAccessState
+  reason: DockerAccessReason
+  gateway?: string
+  bridges: DockerBridge[]
+  entry?: DockerAccessEndpoint
+  plan?: DockerAccessPlan
+  revocable: boolean
+  client_landing: boolean
+}
+
+export interface DockerAccessLink {
+  listener_id: string
+  entry_listener_id: string
+  bind_target: string
+  created_at: string
+  withheld: boolean
 }

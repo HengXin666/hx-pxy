@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/HengXin666/hx-pxy/internal/pipeline"
 	"slices"
 	"sort"
 	"strings"
@@ -69,11 +70,16 @@ type SourceSpec struct {
 	IncludeDirect   bool     `json:"include_direct"`
 	TestURL         string   `json:"test_url,omitempty"`
 	IntervalSeconds int      `json:"interval_seconds,omitempty"`
+	// Retain keeps last apply's members between Sort and Limit; only
+	// meaningful with Limit > 0. See retain.go in this package.
+	Retain *pipeline.RetainSpec `json:"retain,omitempty"`
 }
 
 type Group struct {
-	ID            string     `json:"id"`
-	Name          string     `json:"name"`
+	ID   string `json:"id"`
+	Name string `json:"name"`
+	// Type is residential, subscription or custom; see group_type.go.
+	Type          string     `json:"type"`
 	Strategy      string     `json:"strategy"`
 	SourceSpec    SourceSpec `json:"source_spec"`
 	Enabled       bool       `json:"enabled"`
@@ -219,7 +225,11 @@ func (s *Service) Members(ctx context.Context, id string) (MembersView, error) {
 	if err != nil {
 		return MembersView{}, err
 	}
-	resolution, err := ResolveMembers(spec, record.RulePipelineJSON, candidates)
+	incumbents, err := s.incumbents(ctx, record.ID)
+	if err != nil {
+		return MembersView{}, err
+	}
+	resolution, err := resolveMembers(spec, record.RulePipelineJSON, candidates, incumbents)
 	if err != nil {
 		return MembersView{}, err
 	}
@@ -256,7 +266,7 @@ func (s *Service) Get(ctx context.Context, id string) (Group, error) {
 	if err != nil {
 		return Group{}, mapStoreError(err)
 	}
-	return fromRecord(record), nil
+	return s.classifyOne(ctx, fromRecord(record))
 }
 
 func (s *Service) List(ctx context.Context) ([]Group, error) {
@@ -267,6 +277,9 @@ func (s *Service) List(ctx context.Context) ([]Group, error) {
 	groups := make([]Group, 0, len(records))
 	for _, record := range records {
 		groups = append(groups, fromRecord(record))
+	}
+	if err := s.classify(ctx, groups); err != nil {
+		return nil, err
 	}
 	return groups, nil
 }
@@ -298,7 +311,7 @@ func (s *Service) Update(ctx context.Context, id string, request UpdateRequest) 
 	if err := s.reconciler.Apply(ctx); err != nil {
 		return fromRecord(updated), fmt.Errorf("%w: %v", ErrApplyFailed, err)
 	}
-	return fromRecord(updated), nil
+	return s.classifyOne(ctx, fromRecord(updated))
 }
 
 func (s *Service) Delete(ctx context.Context, id string, version int) error {
@@ -401,6 +414,11 @@ func (s *Service) normalize(
 	spec.NodeIDs = deduplicateIDs(spec.NodeIDs)
 	spec.GroupIDs = deduplicateIDs(spec.GroupIDs)
 	spec.SubscriptionIDs = deduplicateIDs(spec.SubscriptionIDs)
+	// Validated after normalisation: a blank subscription id must not satisfy
+	// "subscription-sourced" and then vanish.
+	if err := validateRetain(spec); err != nil {
+		return normalizedGroup{}, err
+	}
 	if len(spec.NodeIDs) == 0 && len(spec.GroupIDs) == 0 && len(spec.SubscriptionIDs) == 0 && !spec.IncludeDirect && !spec.AllowEmpty {
 		return normalizedGroup{}, fmt.Errorf("%w: at least one node, group, subscription, or DIRECT is required", ErrInvalid)
 	}
@@ -619,6 +637,7 @@ func fromRecord(record store.ProxyGroupRecord) Group {
 	return Group{
 		ID:                 record.ID,
 		Name:               record.Name,
+		Type:               typeFromSpec(spec),
 		Strategy:           record.Strategy,
 		SourceSpec:         spec,
 		Enabled:            record.Enabled,

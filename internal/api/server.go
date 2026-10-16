@@ -359,6 +359,7 @@ type Server struct {
 	overviewInterval  time.Duration
 	edgeSlots         chan struct{}
 	quickstart        QuickstartService
+	dockerAccess      DockerAccessService
 }
 
 type errorResponse struct {
@@ -457,6 +458,9 @@ func (s *Server) routes() *http.ServeMux {
 	if s.listeners != nil {
 		mux.HandleFunc("/api/v1/listeners", s.handleListeners)
 		mux.HandleFunc("/api/v1/listeners/", s.handleListener)
+		if s.dockerAccess != nil {
+			mux.HandleFunc(DockerAccessPath, s.handleDockerAccessLinks)
+		}
 		// Public WebSocket proxy routes use a reserved namespace and are
 		// resolved to loopback Mihomo listeners by the edge relay.
 		mux.HandleFunc(listener.WebSocketPathPrefix, s.handleEdgeRelay)

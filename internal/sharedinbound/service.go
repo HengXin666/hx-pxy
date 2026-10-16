@@ -28,6 +28,11 @@ import (
 // Repository reads the rows the migration has to reason about.
 type Repository interface {
 	ListResidentialChannels(context.Context) ([]store.ResidentialChannelRecord, error)
+	// ListDockerAccessEntries names the companion entries created for
+	// container access. A companion bound to a bridge gateway exists precisely
+	// because the shared entry was not reachable, so folding it back onto the
+	// shared entry would undo the operator's confirmed fix.
+	ListDockerAccessEntries(context.Context) ([]store.DockerAccessEntryRecord, error)
 }
 
 // ListenerService reads and rewrites the managed listeners.
@@ -184,7 +189,14 @@ func (s *Service) residentialListeners(ctx context.Context) (map[string]struct{}
 	if err != nil {
 		return nil, err
 	}
-	skip := make(map[string]struct{}, len(channels)*2)
+	entries, err := s.repository.ListDockerAccessEntries(ctx)
+	if err != nil {
+		return nil, err
+	}
+	skip := make(map[string]struct{}, len(channels)*2+len(entries))
+	for _, entry := range entries {
+		skip[entry.EntryListenerID] = struct{}{}
+	}
 	for _, channel := range channels {
 		if channel.ListenerID != "" {
 			skip[channel.ListenerID] = struct{}{}

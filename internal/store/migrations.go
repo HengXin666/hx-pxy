@@ -1152,6 +1152,47 @@ CREATE INDEX nodes_due_probe ON nodes(next_probe_at)
     WHERE lifecycle_state NOT IN ('disabled', 'retired');
 `,
 	},
+	{
+		version: 40,
+		name:    "docker_access_entries",
+		// A Docker access entry is a companion listener created on demand so a
+		// container can reach a service that is not directly dialable (a
+		// loopback bind, a WebSocket protocol, or no credentials). The link is
+		// a separate table rather than a listeners column so the listener row
+		// keeps one meaning; both sides cascade so deleting either listener
+		// never leaves a dangling link. entry_listener_id is UNIQUE: one
+		// companion serves exactly one source service.
+		// See .agents/notes/implemented/feature/2026-10-15-docker-access-entry.md.
+		sql: `
+CREATE TABLE docker_access_entries (
+    listener_id TEXT PRIMARY KEY REFERENCES listeners(id) ON DELETE CASCADE,
+    entry_listener_id TEXT NOT NULL UNIQUE REFERENCES listeners(id) ON DELETE CASCADE,
+    bind_target TEXT NOT NULL,
+    created_at TEXT NOT NULL
+) STRICT;
+`,
+	},
+	{
+		version: 41,
+		name:    "group_members",
+		// The membership each enabled group was last applied with, keyed by
+		// node fingerprint (a refresh can re-create a node row for the same
+		// physical node). The Retain pipeline stage reads it so a capped group
+		// keeps its members unless a newcomer is clearly better; joined_at
+		// drives min_dwell. Written only after a successful data plane apply,
+		// so it always describes what Mihomo actually serves.
+		// See .agents/notes/implemented/feature/2026-10-16-group-member-retain.md.
+		sql: `
+CREATE TABLE group_members (
+    group_id TEXT NOT NULL REFERENCES proxy_groups(id) ON DELETE CASCADE,
+    node_fp TEXT NOT NULL,
+    joined_at TEXT NOT NULL,
+    last_kept_at TEXT NOT NULL,
+    reason TEXT NOT NULL DEFAULT 'selected',
+    PRIMARY KEY (group_id, node_fp)
+) STRICT;
+`,
+	},
 }
 
 func (s *Store) migrate(ctx context.Context) error {
