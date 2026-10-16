@@ -49,6 +49,23 @@ func TestSystemdUnitKeepsManagementAPIPrivate(t *testing.T) {
 	}
 }
 
+// TestControlPlaneUnitCanEnumerateHostInterfaces guards the 2026-10-17 report
+// in which a host with ten Docker bridges was told it had none: Go reads the
+// link table over NETLINK_ROUTE, so a unit that restricts address families to
+// AF_UNIX/AF_INET/AF_INET6 makes net.Interfaces() fail and every bridge / LAN
+// discovery silently return empty.
+// See .agents/notes/implemented/bug-fix/2026-10-17-control-plane-must-enumerate-interfaces.md.
+func TestControlPlaneUnitCanEnumerateHostInterfaces(t *testing.T) {
+	t.Parallel()
+	content, err := os.ReadFile("deploy/systemd/hx-pxy.service")
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+	if !strings.Contains(string(content), "RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK") {
+		t.Error("control plane unit must allow AF_NETLINK: without it net.Interfaces() fails and no Docker bridge is ever detected")
+	}
+}
+
 func TestPrivilegedTerminalSystemdUnitIsRootOnlyAndSocketScoped(t *testing.T) {
 	t.Parallel()
 	content, err := os.ReadFile("deploy/systemd/hx-pxy-terminal.service")

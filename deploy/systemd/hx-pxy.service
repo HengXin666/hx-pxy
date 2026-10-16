@@ -39,7 +39,12 @@ RestrictNamespaces=true
 LockPersonality=true
 MemoryDenyWriteExecute=true
 SystemCallArchitectures=native
-RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+# AF_NETLINK is required: Go's net.Interfaces()/net.InterfaceAddrs() read the
+# link table over NETLINK_ROUTE. Without it the control plane silently sees
+# zero interfaces, so Docker bridge / LAN discovery reports "no bridge" on a
+# host that has them, and companion entries are withheld as unreachable.
+# The data plane's optional TUN drop-in grants the same family for Mihomo.
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
 CapabilityBoundingSet=
 AmbientCapabilities=
 ReadWritePaths=/var/lib/hx-pxy

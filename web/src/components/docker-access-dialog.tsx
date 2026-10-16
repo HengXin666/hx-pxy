@@ -25,6 +25,7 @@ const reasonText: Record<DockerAccessReason, string> = {
   no_share_export: "该服务没有可读取的认证信息。",
   no_reachable_address: "本机没有可供容器连接的地址。",
   no_docker_bridge: "本机未检测到 Docker 网桥（docker0 或 compose 的 br-*）。请先在本机启动 Docker 或创建 compose 网络，再重新打开此窗口。",
+  bridge_scan_failed: "控制面读不到本机的网络接口列表（systemd 沙箱缺少 AF_NETLINK，或控制面运行在容器网络命名空间里），所以无法判断有没有 Docker 网桥。请检查控制面的部署配置，而不是 Docker 是否在运行。",
   entry_disabled: "该服务的 Docker 入口已停用。撤销后可重新创建。",
   entry_unreachable: "该服务的 Docker 入口已无法从容器访问（网桥被删除、地址变化或共享入口已关闭）。撤销后可按当前网络重新创建。",
   entry_pending: "Docker 网桥已就绪，但数据面尚未加载该入口（启动时网桥还不存在）。约 30 秒内会自动生效，之后重新打开此窗口即可复制连接。",

@@ -21,7 +21,8 @@ sudo systemctl restart hx-pxy-dataplane
 ```
 
 此 drop-in 只给 Mihomo 开放 `/dev/net/tun`、AF_NETLINK、CAP_NET_ADMIN/CAP_NET_RAW；
-不会给控制面授权。内核需支持 TUN，容器部署还需要宿主显式传入设备和能力。
+不会给控制面授权。控制面自己的 unit 本来就带 AF_NETLINK：Go 通过 NETLINK_ROUTE 读取接口表，
+去掉它控制面会看到 0 个接口，Docker 网桥 / LAN 发现和 Docker 入口编译会全部失效。内核需支持 TUN，容器部署还需要宿主显式传入设备和能力。
 页面显示的设备可见性来自控制面沙箱，不能代替数据面权限验证。
 回退：先在页面关闭 TUN 并应用，再移除上述 `tun.conf`、daemon-reload、重启数据面。
 远程操作前保留备用管理连接。不要在未验证路由的情况下同时开启多个 TUN。
@@ -69,9 +70,11 @@ main 表本身被其他代理改写、基于防火墙重定向或无原生 IPv6 
   客户端落地订阅”：客户端配置 `mixed-port: 7890`，共享网络命名空间用 `http://127.0.0.1:7890`，
   不同容器用私有网络的 `http://mihomo:7890` 并开启 `allow-lan: true`。
 - **无法自动处理**（`blocked`）：服务已停用（已有 Docker 入口时仍可在弹窗撤销）；需要新建入口但本机
-  没有 Docker 网桥（`no_docker_bridge`；已绑定通配地址且带认证的服务仍可用 LAN 地址直连）；所选网桥上
-  17890–17989 已无空闲端口（`no_free_port`）；或 Docker 入口所在网桥已消失 / 共享入口已关闭
-  （`entry_unreachable`，撤销后按当前网络重建）。弹窗说明需要先做什么，不提供代理 URI 复制按钮。
+  没有 Docker 网桥（`no_docker_bridge`；已绑定通配地址且带认证的服务仍可用 LAN 地址直连）；控制面
+  读不到本机接口表（`bridge_scan_failed`，此时不能断言没有网桥——应检查控制面部署，而不是 Docker
+  是否在运行）；所选网桥上 17890–17989 已无空闲端口（`no_free_port`）；或 Docker 入口所在网桥已消失
+  / 共享入口已关闭（`entry_unreachable`，撤销后按当前网络重建）。弹窗说明需要先做什么，不提供代理
+  URI 复制按钮。
 - 数据面只编译仍有效的 Docker 入口：源服务停用或网桥地址已不在本机时，该入口不会进入配置，
   不会拖垮其他服务的应用。被剔除的网桥入口每 30 秒复查一次，网桥地址出现（例如 dockerd 晚于
   hx-pxyd 启动）后自动重新应用；在此之前弹窗报告 `entry_pending`，不给复制按钮。

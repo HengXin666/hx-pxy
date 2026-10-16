@@ -184,3 +184,25 @@ func TestAssessReportsExhaustedPortWindowSeparately(t *testing.T) {
 		t.Fatalf("assessment = %+v", got)
 	}
 }
+
+func TestAssessFailedBridgeScanIsNotReportedAsNoBridge(t *testing.T) {
+	got := Assess(Input{Source: service("http", "127.0.0.1", false), BridgeScanFailed: true})
+	if got.State != StateBlocked || got.Reason != ReasonBridgeScanFailed || got.Plan != nil {
+		t.Fatalf("assessment = %+v", got)
+	}
+}
+
+func TestAssessFailedBridgeScanStillPlansWhenBridgesWereRead(t *testing.T) {
+	got := Assess(Input{Source: service("http", "127.0.0.1", false), Bridges: []Bridge{docker0}, BridgeScanFailed: true, AllocatedPort: 17890})
+	if got.State != StateNeedsEntry || got.Plan == nil || got.Plan.Placement != PlacementBridge {
+		t.Fatalf("assessment = %+v", got)
+	}
+}
+
+func TestAssessFailedBridgeScanDoesNotStrandBridgeCompanion(t *testing.T) {
+	entry := listener.Listener{ID: "entry", Name: "svc · Docker", Kind: "mixed", BindAddress: "172.17.0.1", Port: 17890, AuthConfigured: true, SharePath: "/sub/entry", Enabled: true, Version: 1, ProxyGroupID: "group"}
+	got := Assess(Input{Source: service("http", "127.0.0.1", false), Entry: &entry, BridgeScanFailed: true})
+	if got.State != StateBlocked || got.Reason != ReasonBridgeScanFailed || !got.Revocable {
+		t.Fatalf("assessment = %+v", got)
+	}
+}

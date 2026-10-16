@@ -78,7 +78,7 @@ type Service struct {
 	listeners  Listeners
 	settings   SettingsReader
 	converger  SharedConverger
-	bridges    func() []Bridge
+	bridges    func() ([]Bridge, error)
 	lan        func() []string
 	portFree   func(host string, port int) bool
 	now        func() time.Time
@@ -93,8 +93,14 @@ type Service struct {
 // Option customises the host-facing probes; tests replace them.
 type Option func(*Service)
 
-func WithBridges(source func() []Bridge) Option { return func(s *Service) { s.bridges = source } }
-func WithLAN(source func() []string) Option     { return func(s *Service) { s.lan = source } }
+// WithBridges replaces the host bridge probe. The probe reports its failure
+// instead of returning an empty list, so the assessment can tell "no Docker
+// bridge here" apart from "the host link table could not be read".
+func WithBridges(source func() ([]Bridge, error)) Option {
+	return func(s *Service) { s.bridges = source }
+}
+
+func WithLAN(source func() []string) Option { return func(s *Service) { s.lan = source } }
 
 // WithWithheld wires the data plane's view of which companion entries the
 // running document leaves out, so Assess never reports one as ready.
@@ -278,8 +284,9 @@ func (s *Service) input(ctx context.Context, listenerID, gateway string) (Input,
 		taken[item.Name] = struct{}{}
 		usedPorts[item.Port] = struct{}{}
 	}
+	bridges, bridgeErr := s.bridges()
 	in := Input{
-		Source: source, Residential: residential, Entry: entry, Bridges: s.bridges(), LAN: s.lan(), Gateway: gateway,
+		Source: source, Residential: residential, Entry: entry, Bridges: bridges, BridgeScanFailed: bridgeErr != nil, LAN: s.lan(), Gateway: gateway,
 		Shared: SharedEntry{
 			Enabled: settings.SharedInbound.Enabled(), Bind: settings.SharedInbound.MixedBindAddress, Port: settings.SharedInbound.MixedPort,
 		},

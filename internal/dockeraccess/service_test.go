@@ -97,7 +97,7 @@ type fakeConverger struct{ calls int }
 
 func (f *fakeConverger) ConvergeSharedInbound(context.Context) error { f.calls++; return nil }
 
-func newTestService(t *testing.T, mode systemsettings.SharedInboundMode, bind string) (*Service, *fakeRepo, *fakeListenerService, *fakeConverger) {
+func newTestService(t *testing.T, mode systemsettings.SharedInboundMode, bind string, extra ...Option) (*Service, *fakeRepo, *fakeListenerService, *fakeConverger) {
 	t.Helper()
 	source := listener.Listener{ID: "svc", Name: "svc", Kind: "vless", BindAddress: "127.0.0.1", Port: 7891, AuthConfigured: true, SharePath: "/sub/svc", Enabled: true, Version: 2, ProxyGroupID: "group", NodeID: "node-1"}
 	listeners := &fakeListenerService{items: map[string]listener.Listener{"svc": source}}
@@ -108,11 +108,12 @@ func newTestService(t *testing.T, mode systemsettings.SharedInboundMode, bind st
 	settings.SharedInbound.WSPort = 7891
 	repo := &fakeRepo{}
 	converger := &fakeConverger{}
-	service, err := NewService(repo, listeners, fakeSettingsReader{settings}, converger,
-		WithBridges(func() []Bridge { return []Bridge{docker0} }),
+	options := append([]Option{
+		WithBridges(func() ([]Bridge, error) { return []Bridge{docker0}, nil }),
 		WithLAN(func() []string { return nil }),
 		WithPortProbe(func(host string, port int) bool { return port != 17890 }),
-	)
+	}, extra...)
+	service, err := NewService(repo, listeners, fakeSettingsReader{settings}, converger, options...)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -197,5 +198,30 @@ func TestApplyRollsBackCompanionWhenLinkFails(t *testing.T) {
 	}
 	if _, exists := listeners.items["companion"]; exists {
 		t.Fatal("companion listener must be removed when the link cannot be stored")
+	}
+}
+
+// TestAssessReportsUnreadableLinkTableInsteadOfMissingBridge covers the
+// 2026-10-17 report "明明就是有，凭什么说没有": the host had ten Docker bridges
+// and the dialog still said none existed. The link table could not be read at
+// all (sandbox without AF_NETLINK), and the assessment must say that instead
+// of claiming the host has no bridge.
+func TestAssessReportsUnreadableLinkTableInsteadOfMissingBridge(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	service, _, _, _ := newTestService(t, systemsettings.SharedInboundPerService, "0.0.0.0",
+		WithBridges(func() ([]Bridge, error) {
+			return nil, errors.New("route ip+net: netlinkrib: address family not supported by protocol")
+		}),
+	)
+	got, err := service.Assess(ctx, "svc", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.State != StateBlocked || got.Reason != ReasonBridgeScanFailed {
+		t.Fatalf("assessment = %+v", got)
+	}
+	if len(got.Bridges) != 0 || got.Plan != nil {
+		t.Fatalf("bridges=%+v plan=%+v", got.Bridges, got.Plan)
 	}
 }

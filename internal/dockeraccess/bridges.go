@@ -21,10 +21,17 @@ type Bridge struct {
 // bridges (docker0 first, then br-* compose networks by name). It reads
 // interface state only; it does not prove that a given container can reach the
 // address, which depends on the container's network and the host firewall.
-func DiscoverBridges() []Bridge {
+//
+// The error is returned rather than folded into an empty list: an empty list
+// means "this host has no Docker bridge", and claiming that after failing to
+// read the link table is how a host with ten bridges was told it had none. The
+// read goes through NETLINK_ROUTE, so a sandbox that drops AF_NETLINK (see
+// deploy/systemd/hx-pxy.service) fails here. See
+// .agents/notes/implemented/bug-fix/2026-10-17-control-plane-must-enumerate-interfaces.md.
+func DiscoverBridges() ([]Bridge, error) {
 	interfaces, err := net.Interfaces()
 	if err != nil {
-		return []Bridge{}
+		return nil, err
 	}
 	bridges := make([]Bridge, 0, 2)
 	for _, iface := range interfaces {
@@ -52,7 +59,7 @@ func DiscoverBridges() []Bridge {
 		}
 	}
 	SortBridges(bridges)
-	return bridges
+	return bridges, nil
 }
 
 // SortBridges orders candidates deterministically: the default docker0

@@ -913,6 +913,7 @@ export type DockerAccessState = "ready" | "needs_entry" | "client_landing" | "bl
 export type DockerAccessReason =
   | "direct" | "companion_entry" | "service_disabled" | "residential_channel" | "websocket_protocol"
   | "loopback_bind" | "missing_auth" | "no_share_export" | "no_reachable_address" | "no_docker_bridge"
+  | "bridge_scan_failed"
   | "entry_disabled" | "entry_unreachable" | "entry_pending" | "no_free_port" | "shared_entry_disabled"
 
 export interface DockerBridge {

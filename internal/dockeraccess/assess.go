@@ -45,16 +45,20 @@ const (
 
 // Reason codes. They are part of the API contract.
 const (
-	ReasonDirect           = "direct"
-	ReasonCompanion        = "companion_entry"
-	ReasonServiceDisabled  = "service_disabled"
-	ReasonResidential      = "residential_channel"
-	ReasonWebSocket        = "websocket_protocol"
-	ReasonLoopbackBind     = "loopback_bind"
-	ReasonMissingAuth      = "missing_auth"
-	ReasonNoShareExport    = "no_share_export"
-	ReasonNoAddress        = "no_reachable_address"
-	ReasonNoBridge         = "no_docker_bridge"
+	ReasonDirect          = "direct"
+	ReasonCompanion       = "companion_entry"
+	ReasonServiceDisabled = "service_disabled"
+	ReasonResidential     = "residential_channel"
+	ReasonWebSocket       = "websocket_protocol"
+	ReasonLoopbackBind    = "loopback_bind"
+	ReasonMissingAuth     = "missing_auth"
+	ReasonNoShareExport   = "no_share_export"
+	ReasonNoAddress       = "no_reachable_address"
+	ReasonNoBridge        = "no_docker_bridge"
+	// ReasonBridgeScanFailed: the host's interfaces could not be read at all,
+	// so "no bridge" is unknown, not observed. See
+	// .agents/notes/implemented/bug-fix/2026-10-17-control-plane-must-enumerate-interfaces.md.
+	ReasonBridgeScanFailed = "bridge_scan_failed"
 	ReasonNoFreePort       = "no_free_port"
 	ReasonSharedDisabled   = "shared_entry_disabled"
 	ReasonEntryDisabled    = "entry_disabled"
@@ -84,6 +88,10 @@ type Input struct {
 	Residential bool
 	Shared      SharedEntry
 	Bridges     []Bridge
+	// BridgeScanFailed is true when the host's interfaces could not be read
+	// (for example a sandbox without AF_NETLINK). An empty Bridges list then
+	// means "unknown", never "this host has no Docker bridge".
+	BridgeScanFailed bool
 	// LAN lists non-bridge host addresses, used only to name a dial target for
 	// a service that already binds a wildcard address.
 	LAN []string
@@ -168,9 +176,20 @@ func Assess(in Input) Assessment {
 			return result
 		}
 		endpoint, _ := direct(*in.Entry, in.Shared, result.Gateway, in.LAN)
-		if endpoint == nil || !bridgeStillPresent(*in.Entry, in.Bridges) {
-			// The companion was valid when created; a missing bridge or a
-			// changed shared bind can strand it. Revoke and recreate fixes it.
+		bridgeMissing := !bridgeStillPresent(*in.Entry, in.Bridges)
+		switch {
+		case endpoint == nil:
+			// The companion was valid when created; a changed shared bind can
+			// strand it. Revoke and recreate fixes it.
+			result.State, result.Reason = StateBlocked, ReasonEntryUnreachable
+			return result
+		case bridgeMissing && in.BridgeScanFailed && len(in.Bridges) == 0:
+			// Its bind address may still be there: the host link table could
+			// not be read at all. Never report a bridge as gone without having
+			// looked. See ReasonBridgeScanFailed.
+			result.State, result.Reason = StateBlocked, ReasonBridgeScanFailed
+			return result
+		case bridgeMissing:
 			result.State, result.Reason = StateBlocked, ReasonEntryUnreachable
 			return result
 		}
@@ -191,6 +210,12 @@ func Assess(in Input) Assessment {
 	result.Reason = reason
 	plan := planEntry(in, result.Gateway)
 	if plan == nil {
+		if in.BridgeScanFailed && len(in.Bridges) == 0 {
+			// "This host has no Docker bridge" is a claim about the host, and
+			// it may only be made after reading the host.
+			result.State, result.Reason = StateBlocked, ReasonBridgeScanFailed
+			return result
+		}
 		result.State, result.Reason = StateBlocked, ReasonNoBridge
 		if result.Gateway != "" {
 			result.Reason = ReasonNoFreePort
