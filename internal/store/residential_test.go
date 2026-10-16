@@ -292,3 +292,88 @@ func TestResidentialSessionPoolReplaceAndCandidates(t *testing.T) {
 		t.Fatalf("pool still contains %d nodes after delete", len(pooled))
 	}
 }
+
+// TestSubscriptionRefreshNeverRetiresResidentialNodes is the regression test
+// for the 2026-10-15 gh-pool incident.
+//
+// A residential node is materialized by the residential channel allocation
+// path and is never linked into subscription_nodes. Before the origin guard,
+// every subscription refresh ran a global retire sweep that retired it: the
+// channel's proxy group was republished with zero members, Mihomo compiled the
+// group as REJECT, and every consumer of that group failed with
+// "组 <group> 内无可选节点" until the next rotation allocated a fresh node.
+//
+// The test drives the real CommitParsedSubscriptionSnapshot path and asserts
+// the residential node survives while a genuinely orphaned subscription node
+// is still retired.
+func TestSubscriptionRefreshNeverRetiresResidentialNodes(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	storage := openTestStore(t)
+	now := time.Now().UTC()
+
+	if _, err := storage.db.ExecContext(ctx, `
+INSERT INTO nodes(
+    id, fingerprint, display_name, protocol, canonical_config_encrypted,
+    lifecycle_state, first_seen_at, last_seen_at, retired_at, version, origin, origin_ref
+) VALUES ('node-residential-live', 'fp-resi-live', 'linkup session s01', 'http', X'00',
+          'healthy', ?, ?, NULL, 1, 'residential', 'channel-1')
+`, now.Format(time.RFC3339Nano), now.Format(time.RFC3339Nano)); err != nil {
+		t.Fatalf("seed residential node: %v", err)
+	}
+	// An orphaned subscription node that the sweep is SUPPOSED to retire: it is
+	// not present in any active snapshot.
+	if _, err := storage.db.ExecContext(ctx, `
+INSERT INTO nodes(
+    id, fingerprint, display_name, protocol, canonical_config_encrypted,
+    lifecycle_state, first_seen_at, last_seen_at, retired_at, version, origin
+) VALUES ('node-sub-orphan', 'fp-sub-orphan', 'orphan', 'http', X'00',
+          'healthy', ?, ?, NULL, 1, 'subscription')
+`, now.Format(time.RFC3339Nano), now.Format(time.RFC3339Nano)); err != nil {
+		t.Fatalf("seed orphan node: %v", err)
+	}
+
+	if _, err := storage.db.ExecContext(ctx, SUBSCRIPTION_SEED_SQL, now.Format(time.RFC3339Nano), now.Format(time.RFC3339Nano)); err != nil {
+		t.Fatalf("seed subscription: %v", err)
+	}
+
+	record := SubscriptionSnapshotRecord{
+		ID:             "snap-refresh-1",
+		SubscriptionID: "sub-1",
+		ContentHash:    "hash-1",
+		FetchedAt:      now,
+		NodeCount:      1,
+		CreatedAt:      now,
+	}
+	imports := []NodeImportRecord{{
+		ID:                       "node-sub-fresh",
+		Fingerprint:              "fp-sub-fresh",
+		DisplayName:              "fresh",
+		Protocol:                 "http",
+		CanonicalConfigEncrypted: []byte{0x00},
+		SourceName:               "src",
+	}}
+	if err := storage.CommitParsedSubscriptionSnapshot(ctx, record, imports); err != nil {
+		t.Fatalf("CommitParsedSubscriptionSnapshot() error = %v", err)
+	}
+
+	residential, err := storage.GetNode(ctx, "node-residential-live")
+	if err != nil {
+		t.Fatalf("GetNode(residential) error = %v", err)
+	}
+	if residential.LifecycleState == "retired" {
+		t.Fatalf("subscription refresh retired the residential node: %+v", residential)
+	}
+	orphan, err := storage.GetNode(ctx, "node-sub-orphan")
+	if err != nil {
+		t.Fatalf("GetNode(orphan) error = %v", err)
+	}
+	if orphan.LifecycleState != "retired" {
+		t.Fatalf("orphaned subscription node lifecycle = %q, want retired", orphan.LifecycleState)
+	}
+}
+
+const SUBSCRIPTION_SEED_SQL = "INSERT INTO subscriptions(id, name, source_type, source_class," +
+	" source_config_encrypted, enabled, refresh_interval_seconds, refresh_cron," +
+	" consecutive_failures, version, created_at, updated_at)" +
+	" VALUES ('sub-1', 'sub one', 'remote', 'subscription', X'00', 1, 3600, '', 0, 1, ?, ?)"

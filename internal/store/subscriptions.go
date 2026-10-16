@@ -206,18 +206,10 @@ func (s *Store) DeleteSubscription(ctx context.Context, id string, expectedVersi
 		return ErrConflict
 	}
 
+	// Agent Note: ../../.agents/notes/implemented/bug-fix/2026-10-15-subscription-refresh-must-not-retire-residential.md
+	// 共用清扫判据 (origin 分流), 判据只有一处 —— 见 retireDisappearedNodesSQL 的说明。
 	retiredAt := time.Now().UTC().Format(time.RFC3339Nano)
-	if _, err := transaction.ExecContext(ctx, `
-UPDATE nodes
-SET lifecycle_state = 'retired', retired_at = ?, version = version + 1
-WHERE lifecycle_state NOT IN ('disabled', 'retired')
-  AND NOT EXISTS (
-      SELECT 1
-      FROM subscription_nodes sn
-      JOIN subscription_snapshots ss ON ss.id = sn.snapshot_id
-      WHERE sn.node_id = nodes.id AND ss.status = 'active'
-  )
-`, retiredAt); err != nil {
+	if _, err := transaction.ExecContext(ctx, retireDisappearedNodesSQL, retiredAt); err != nil {
 		return fmt.Errorf("retire orphaned nodes after subscription delete: %w", err)
 	}
 	if err := transaction.Commit(); err != nil {

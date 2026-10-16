@@ -94,6 +94,38 @@ ORDER BY s.name ASC, sn.subscription_id ASC
 	return records, nil
 }
 
+// retireDisappearedNodesSQL retires every node that no longer belongs to any
+// ACTIVE subscription snapshot.
+//
+// Agent Note: ../../.agents/notes/implemented/bug-fix/2026-10-15-subscription-refresh-must-not-retire-residential.md
+//
+// ⚠️ The origin guard is load-bearing, not defensive. A node whose origin is
+// 'residential' is materialized by the residential channel's own allocation
+// path (UpsertResidentialSessionNode / ReplaceResidentialSessionPool) and is
+// NEVER a member of subscription_nodes. Without the guard this statement
+// retires it on the next subscription refresh — the only exit of a sticky
+// residential channel disappears, the group is republished as REJECT, and
+// every consumer of that group fails until the next rotation happens to
+// allocate a fresh node. That was the 2026-10-15 gh-pool incident: the hourly
+// refresh at 21:26:47 retired the live session node and registrations died
+// with "组 residential-linkup 内无可选节点" for the following ~10 minutes.
+//
+// Residential node lifetime belongs to the residential service: it retires a
+// node when the session that owns it is deleted or replaced, never because a
+// subscription snapshot did not mention it.
+const retireDisappearedNodesSQL = `
+UPDATE nodes
+SET lifecycle_state = 'retired', retired_at = ?, version = version + 1
+WHERE lifecycle_state NOT IN ('disabled', 'retired')
+  AND origin <> 'residential'
+  AND NOT EXISTS (
+      SELECT 1
+      FROM subscription_nodes sn
+      JOIN subscription_snapshots ss ON ss.id = sn.snapshot_id
+      WHERE sn.node_id = nodes.id AND ss.status = 'active'
+  )
+`
+
 func (s *Store) CommitParsedSubscriptionSnapshot(
 	ctx context.Context,
 	record SubscriptionSnapshotRecord,
@@ -121,17 +153,7 @@ func (s *Store) CommitParsedSubscriptionSnapshot(
 			return err
 		}
 	}
-	if _, err := transaction.ExecContext(ctx, `
-UPDATE nodes
-SET lifecycle_state = 'retired', retired_at = ?, version = version + 1
-WHERE lifecycle_state NOT IN ('disabled', 'retired')
-  AND NOT EXISTS (
-      SELECT 1
-      FROM subscription_nodes sn
-      JOIN subscription_snapshots ss ON ss.id = sn.snapshot_id
-      WHERE sn.node_id = nodes.id AND ss.status = 'active'
-  )
-`, record.FetchedAt.UTC().Format(time.RFC3339Nano)); err != nil {
+	if _, err := transaction.ExecContext(ctx, retireDisappearedNodesSQL, record.FetchedAt.UTC().Format(time.RFC3339Nano)); err != nil {
 		return fmt.Errorf("retire disappeared nodes: %w", err)
 	}
 	if err := activateSubscriptionAfterSnapshot(ctx, transaction, record); err != nil {
@@ -333,17 +355,7 @@ WHERE id = ? AND subscription_id = ?
 			return err
 		}
 	}
-	if _, err := transaction.ExecContext(ctx, `
-UPDATE nodes
-SET lifecycle_state = 'retired', retired_at = ?, version = version + 1
-WHERE lifecycle_state NOT IN ('disabled', 'retired')
-  AND NOT EXISTS (
-      SELECT 1
-      FROM subscription_nodes sn
-      JOIN subscription_snapshots ss ON ss.id = sn.snapshot_id
-      WHERE sn.node_id = nodes.id AND ss.status = 'active'
-  )
-`, record.FetchedAt.UTC().Format(time.RFC3339Nano)); err != nil {
+	if _, err := transaction.ExecContext(ctx, retireDisappearedNodesSQL, record.FetchedAt.UTC().Format(time.RFC3339Nano)); err != nil {
 		return fmt.Errorf("retire disappeared nodes after activation: %w", err)
 	}
 	if err := activateSubscriptionAfterSnapshot(ctx, transaction, record); err != nil {
