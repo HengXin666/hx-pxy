@@ -797,6 +797,8 @@ func (s *Server) handleError(writer http.ResponseWriter, request *http.Request, 
 		s.writeAPIError(writer, request, http.StatusUnprocessableEntity, "secret_export_disabled", err.Error())
 	case errors.Is(err, node.ErrInvalidSettings):
 		s.writeAPIError(writer, request, http.StatusUnprocessableEntity, "validation_failed", err.Error())
+	case errors.Is(err, listener.ErrUsernameTaken):
+		s.writeAPIError(writer, request, http.StatusConflict, "shared_inbound_username_taken", err.Error())
 	case errors.Is(err, proxygroup.ErrInvalid), errors.Is(err, listener.ErrInvalid), errors.Is(err, routingrules.ErrInvalid):
 		s.writeAPIError(writer, request, http.StatusUnprocessableEntity, "validation_failed", err.Error())
 	case errors.Is(err, residential.ErrProviderUnreachable):

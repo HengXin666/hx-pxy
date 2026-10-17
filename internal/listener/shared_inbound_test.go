@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -59,7 +60,9 @@ func sharedSpec() SharedInboundSpec {
 
 func createSharedMember(t *testing.T, service *Service, name, kind string) Listener {
 	t.Helper()
-	auth := &Auth{Username: "hx-user", Password: "hx-pass"}
+	// The username is per member: two members of one family may not share it,
+	// which is what the compiler and the service now both enforce.
+	auth := &Auth{Username: "u-" + name, Password: "hx-pass"}
 	if kind == "vless" || kind == "vmess" {
 		auth.Password = "11111111-1111-1111-1111-111111111111"
 	}
@@ -300,6 +303,94 @@ func TestSharedInboundCarrierKind(t *testing.T) {
 	}
 	if IsSharedInboundMemberKind(SharedInboundWebSocketOwner, "http") {
 		t.Fatal("an HTTP listener is not a WebSocket-family member")
+	}
+}
+
+// TestCreateRejectsDuplicateSharedInboundUsername pins the boundary that used
+// to be discovered only by the compiler: two members of one family with the
+// same username refuse the whole configuration, so the create must fail before
+// the row is written and rolled back again.
+func TestCreateRejectsDuplicateSharedInboundUsername(t *testing.T) {
+	service, _, _ := newSharedInboundService(t)
+	first := createSharedMember(t, service, "service-a", "mixed")
+
+	_, err := service.Create(context.Background(), CreateRequest{
+		Name: "service-b", Kind: "mixed", BindAddress: "127.0.0.1", Port: 7890,
+		ProxyGroupID:  "group-a",
+		Auth:          &Auth{Username: "u-service-a", Password: "hx-pass"},
+		SharedInbound: SharedInboundStandardOwner,
+	})
+	if !errors.Is(err, ErrUsernameTaken) {
+		t.Fatalf("Create() error = %v, want ErrUsernameTaken", err)
+	}
+	if !strings.Contains(err.Error(), first.Name) {
+		t.Fatalf("error does not name the listener holding the username: %v", err)
+	}
+}
+
+// TestSameUsernameAcrossFamiliesIsAllowed keeps the check keyed by the carrier
+// that publishes the member, exactly like the compiler: the standard Mixed
+// entry and each WebSocket protocol are separate listeners, so their usernames
+// live in separate namespaces.
+func TestSameUsernameAcrossFamiliesIsAllowed(t *testing.T) {
+	service, _, _ := newSharedInboundService(t)
+	createSharedMember(t, service, "service-a", "mixed")
+
+	_, err := service.Create(context.Background(), CreateRequest{
+		Name: "ws-vless", Kind: "vless", BindAddress: "127.0.0.1", Port: 19999,
+		ProxyGroupID:  "group-a",
+		Auth:          &Auth{Username: "u-service-a", Password: "11111111-1111-1111-1111-111111111111"},
+		SharedInbound: SharedInboundWebSocketOwner,
+		Transport:     Transport{Type: "ws", WSPath: SharedInboundRoutePath()},
+		PublicEndpoint: PublicEndpoint{
+			Host: "proxy.example.com", Port: 443, TLS: true,
+		},
+	})
+	if err != nil {
+		t.Fatalf("Create() error = %v, want the same username to be reusable in another family", err)
+	}
+}
+
+// TestUpdateKeepsItsOwnUsername guards the self-exclusion: re-saving a member
+// without changing its credential must not collide with itself.
+func TestUpdateKeepsItsOwnUsername(t *testing.T) {
+	service, _, _ := newSharedInboundService(t)
+	member := createSharedMember(t, service, "service-a", "mixed")
+
+	updated, err := service.Update(context.Background(), member.ID, UpdateRequest{
+		Version: member.Version, Name: member.Name, Kind: member.Kind,
+		BindAddress: member.BindAddress, Port: member.Port,
+		ProxyGroupID:  member.ProxyGroupID,
+		SharedInbound: SharedInboundStandardOwner,
+		Enabled:       true,
+		Auth:          &Auth{Username: "u-service-a", Password: "hx-pass"},
+	})
+	if err != nil {
+		t.Fatalf("Update() error = %v", err)
+	}
+	if updated.ID != member.ID {
+		t.Fatalf("Update() returned %q, want %q", updated.ID, member.ID)
+	}
+}
+
+// TestUpdateRejectsDuplicateSharedInboundUsername is the edit-side half of the
+// same invariant: renaming a member onto another member's username must be
+// refused before it reaches the data plane.
+func TestUpdateRejectsDuplicateSharedInboundUsername(t *testing.T) {
+	service, _, _ := newSharedInboundService(t)
+	createSharedMember(t, service, "service-a", "mixed")
+	second := createSharedMember(t, service, "service-b", "mixed")
+
+	_, err := service.Update(context.Background(), second.ID, UpdateRequest{
+		Version: second.Version, Name: second.Name, Kind: second.Kind,
+		BindAddress: second.BindAddress, Port: second.Port,
+		ProxyGroupID:  second.ProxyGroupID,
+		SharedInbound: SharedInboundStandardOwner,
+		Enabled:       true,
+		Auth:          &Auth{Username: "u-service-a", Password: "hx-pass"},
+	})
+	if !errors.Is(err, ErrUsernameTaken) {
+		t.Fatalf("Update() error = %v, want ErrUsernameTaken", err)
 	}
 }
 

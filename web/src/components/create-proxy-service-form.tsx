@@ -28,6 +28,16 @@ interface CreateProxyServiceFormProps {
 }
 
 /**
+ * 共享入口按用户名分流: 同一族内重名会让整份配置编译失败, 所以默认用户名必须
+ * 每次唯一 (与密码一样随机), 否则第二个用默认值新建的服务必然撞上第一个。
+ * 用户仍可以改成自己想要的名字。
+ * 见 .agents/notes/implemented/bug-fix/2026-10-17-shared-inbound-username-unique-at-write.md。
+ */
+function uniqueUsername() {
+  return `hx-${crypto.randomUUID().slice(0, 8)}`
+}
+
+/**
  * 新建代理服务。
  *
  * 弹窗而非页面内的常驻表单: 创建是一次性动作, 而这张表单有十几项 (名称/来源/
@@ -57,7 +67,7 @@ export function CreateProxyServiceForm({ nodes, subscriptions, residentialChanne
   const [kind, setKind] = useState<"mixed" | "http" | "socks" | "vless" | "vmess" | "trojan">("mixed")
   const [bindAddress, setBindAddress] = useState(sharedInbound?.mixed_bind_address || "0.0.0.0")
   const [authEnabled, setAuthEnabled] = useState(true)
-  const [username, setUsername] = useState("hx-user")
+  const [username, setUsername] = useState<string>(uniqueUsername)
   const [password, setPassword] = useState<string>(crypto.randomUUID())
   const [publicHost, setPublicHost] = useState("")
   const [publicTLS, setPublicTLS] = useState(false)
@@ -156,7 +166,7 @@ export function CreateProxyServiceForm({ nodes, subscriptions, residentialChanne
     if (nextAdvanced) {
       setBindAddress("127.0.0.1")
       setAuthEnabled(true)
-      if (!username) setUsername("hx-user")
+      if (!username) setUsername(uniqueUsername())
       if ((next === "vless" || next === "vmess") && !password) setPassword(crypto.randomUUID())
     } else {
       setBindAddress(sharedInbound?.mixed_bind_address || "0.0.0.0")

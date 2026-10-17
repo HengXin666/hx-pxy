@@ -20,6 +20,11 @@ var (
 	ErrConflict    = errors.New("listener conflict")
 	ErrInvalid     = errors.New("invalid listener")
 	ErrApplyFailed = errors.New("listener apply failed")
+	// ErrUsernameTaken reports a shared-inbound member whose username is
+	// already claimed by another member of the same carrier family. The data
+	// plane keys membership on the username, so this is a request-level
+	// conflict rather than a data-plane failure.
+	ErrUsernameTaken = errors.New("shared-inbound username already in use")
 )
 
 type Repository interface {
@@ -214,6 +219,9 @@ func (s *Service) Create(ctx context.Context, request CreateRequest) (Listener, 
 	if err := s.assureMemberCredentials(&normalized, sharedInbound); err != nil {
 		return Listener{}, err
 	}
+	if err := s.assureUniqueMemberUsername(ctx, &normalized, sharedInbound); err != nil {
+		return Listener{}, err
+	}
 	shareToken, err := newShareToken()
 	if err != nil {
 		return Listener{}, err
@@ -299,6 +307,9 @@ func (s *Service) Update(ctx context.Context, id string, request UpdateRequest) 
 	}
 	s.convergeMemberEndpoint(&normalized, sharedInbound)
 	if err := s.assureMemberCredentials(&normalized, sharedInbound); err != nil {
+		return Listener{}, err
+	}
+	if err := s.assureUniqueMemberUsername(ctx, &normalized, sharedInbound); err != nil {
 		return Listener{}, err
 	}
 	// Capture the pre-update record (with a defensive copy of the auth
@@ -808,6 +819,89 @@ func (s *Service) assureMemberCredentials(normalized *normalizedListener, owner 
 	normalized.AuthMode = "userpass"
 	normalized.AuthConfigEncrypted = sealed
 	return nil
+}
+
+// assureUniqueMemberUsername rejects a member whose username another member of
+// the same carrier family already claims.
+//
+// Membership is demultiplexed by IN-USER, so the compiler refuses the entire
+// configuration when two members of one family share a username:
+//
+//	two shared-inbound services for the standard family use the same username "hx-user"
+//
+// Without this check the caller learns about the collision from an apply
+// failure — after the row was written and rolled back again — and the HTTP
+// status says the data plane failed although the request was the problem.
+//
+// The compiler keeps its own check: it is the only boundary that also covers
+// rows written by migrations and by callers that bypass this service. Both
+// sides must agree on what counts as a claim, so this compares exactly what the
+// compiler compiles: enabled members whose group is enabled, keyed by the
+// carrier that publishes them.
+//
+// See .agents/notes/implemented/bug-fix/2026-10-17-shared-inbound-username-unique-at-write.md.
+func (s *Service) assureUniqueMemberUsername(ctx context.Context, normalized *normalizedListener, owner string) error {
+	if owner == "" || !normalized.Enabled || normalized.AuthMode != "userpass" || len(normalized.AuthConfigEncrypted) == 0 {
+		return nil
+	}
+	username, err := s.memberUsername(normalized.AuthConfigEncrypted, normalized.selfID)
+	if err != nil {
+		return err
+	}
+	records, err := s.repository.ListListeners(ctx)
+	if err != nil {
+		return err
+	}
+	groups, err := s.repository.ListProxyGroups(ctx)
+	if err != nil {
+		return err
+	}
+	enabledGroups := make(map[string]struct{}, len(groups))
+	for _, group := range groups {
+		if group.Enabled {
+			enabledGroups[group.ID] = struct{}{}
+		}
+	}
+	key := SharedInboundCarrierKey(owner, normalized.Kind)
+	for _, record := range records {
+		if record.ID == normalized.selfID || !record.Enabled {
+			continue
+		}
+		if SharedInboundCarrierKey(SharedInboundOwnerOf(record), record.Kind) != key {
+			continue
+		}
+		if _, ok := enabledGroups[record.ProxyGroupID]; !ok {
+			continue
+		}
+		if record.AuthMode != "userpass" || len(record.AuthConfigEncrypted) == 0 {
+			continue
+		}
+		other, err := s.memberUsername(record.AuthConfigEncrypted, record.ID)
+		if err != nil {
+			return err
+		}
+		if other == username {
+			return fmt.Errorf(
+				"%w: username %q is already used by listener %q on the %s shared inbound; choose a different username",
+				ErrUsernameTaken, username, record.Name, owner,
+			)
+		}
+	}
+	return nil
+}
+
+// memberUsername decrypts the credential of a stored member so the caller can
+// compare it with the compiler's own view (which trims the value).
+func (s *Service) memberUsername(sealed []byte, id string) (string, error) {
+	plaintext, err := s.cipher.Open(sealed, associatedData(id))
+	if err != nil {
+		return "", fmt.Errorf("decrypt listener %q auth: %w", id, err)
+	}
+	var auth Auth
+	if err := json.Unmarshal(plaintext, &auth); err != nil {
+		return "", fmt.Errorf("decode listener %q auth: %w", id, err)
+	}
+	return strings.TrimSpace(auth.Username), nil
 }
 
 func normalizeSharedInboundOwner(owner string) (string, error) {
