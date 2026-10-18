@@ -76,6 +76,22 @@ type ListenerCreateRequest struct {
 	//
 	// See .agents/notes/implemented/feature/2026-10-14-reuse-existing-group-for-an-entry.md.
 	ProxyGroupID string `json:"proxy_group_id,omitempty"`
+	// NodeID publishes this service on exactly one node and creates no group of
+	// its own: the listener pins the node and fills the row's NOT NULL group
+	// column with the family anchor.
+	//
+	// This exists so "one service, one node" is one call. Before it, the only
+	// way to reach a single node from this endpoint was to build a one-member
+	// group around it — the exact shape the group service now refuses. A remedy
+	// that requires a second endpoint is a remedy nobody takes.
+	//
+	// Omit name, strategy, source_spec, enabled, empty_behavior and
+	// dialer_proxy_group_id when using it: a pinned service has no group policy,
+	// and accepting those fields while ignoring them is the silent divergence
+	// this repository has already paid for.
+	//
+	// See .agents/notes/implemented/architecture/2026-10-18-a-group-is-not-a-node-handle.md.
+	NodeID string `json:"node_id,omitempty"`
 }
 
 type ListenerUpdateRequest struct {
@@ -154,6 +170,12 @@ func (s *Service) Create(ctx context.Context, request CreateRequest) (ServiceRec
 	reuseGroupID := strings.TrimSpace(request.Listener.ProxyGroupID)
 	reusing := reuseGroupID != ""
 	var group proxygroup.Group
+	if pinned := strings.TrimSpace(request.Listener.NodeID); pinned != "" {
+		if reusing {
+			return ServiceRecord{}, fmt.Errorf("%w: listener.node_id pins this service to one node and listener.proxy_group_id reuses a group; send only one", proxygroup.ErrInvalid)
+		}
+		return s.createPinned(ctx, request)
+	}
 	if reusing {
 		reused, err := s.reuseGroup(ctx, request, reuseGroupID)
 		if err != nil {
@@ -228,6 +250,7 @@ func (s *Service) createListener(ctx context.Context, groupID string, request Li
 			BindAddress:    request.BindAddress,
 			Port:           request.Port,
 			ProxyGroupID:   groupID,
+			NodeID:         request.NodeID,
 			Auth:           request.Auth,
 			Transport:      request.Transport,
 			PublicEndpoint: request.PublicEndpoint,
@@ -243,6 +266,7 @@ func (s *Service) createListener(ctx context.Context, groupID string, request Li
 		BindAddress:    bindAddress,
 		Port:           port,
 		ProxyGroupID:   groupID,
+		NodeID:         request.NodeID,
 		Auth:           request.Auth,
 		Transport:      listener.Transport{Type: "ws", WSPath: listener.SharedInboundRoutePath()},
 		PublicEndpoint: request.PublicEndpoint,
@@ -422,6 +446,11 @@ func (s *Service) Update(ctx context.Context, request UpdateRequest) (ServiceRec
 			EmptyBehavior:    original.EmptyBehavior,
 			FallbackTarget:   original.FallbackTargetID,
 			DialerProxyGroup: original.DialerProxyGroupID,
+			// Restoring the spec that was already stored must never be refused by
+			// the one-node rule: the row may be a legacy single-node group, and a
+			// rollback that cannot run turns a recoverable listener error into a
+			// group left on the new spec.
+			AllowSingleNode: true,
 		}); rollbackErr != nil {
 			return ServiceRecord{}, errors.Join(err, fmt.Errorf("restore proxy group after failed listener update: %w", rollbackErr))
 		}

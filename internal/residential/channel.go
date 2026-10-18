@@ -171,6 +171,11 @@ func (s *Service) CreateChannel(ctx context.Context, request CreateChannelReques
 		},
 		Enabled:       &enabled,
 		EmptyBehavior: "fail-closed",
+		// A channel group's members are vendor sessions, not an operator's node
+		// list: passthrough materialises exactly one, sticky starts empty. Refusing
+		// that would break the product to enforce a rule about operator intent.
+		// See internal/proxygroup/single_node_rule.go.
+		AllowSingleNode: true,
 	})
 	if err != nil {
 		if group.ID != "" {

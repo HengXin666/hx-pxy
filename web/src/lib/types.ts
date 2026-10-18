@@ -495,6 +495,17 @@ export type CreateProxyServiceRequest =
        */
       listener: CreateProxyServiceListener & { proxy_group_id: string }
     }
+  | {
+      /**
+       * Pins this service to one node and creates no proxy group at all. This is
+       * the one-call way to publish a single-node service: building a
+       * one-member group for it is refused by the server. Omit every
+       * group-creation field — sending them is a 422, not a silent no-op.
+       *
+       * See .agents/notes/implemented/architecture/2026-10-18-a-group-is-not-a-node-handle.md.
+       */
+      listener: CreateProxyServiceListener & { node_id: string }
+    }
 
 export interface UpdateProxyServiceRequest {
   group_id: string

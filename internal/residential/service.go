@@ -477,6 +477,10 @@ func (s *Service) RefreshChannelPool(ctx context.Context, channelID string) erro
 		SourceSpec:    proxygroup.SourceSpec{NodeIDs: nodeIDs, AllowEmpty: record.Mode == ModeSticky},
 		Enabled:       groupRecord.Enabled,
 		EmptyBehavior: groupRecord.EmptyBehavior,
+		// Republishing a channel pool can legitimately leave one session (or
+		// none while sticky). Same exemption as the channel create; see
+		// internal/proxygroup/single_node_rule.go.
+		AllowSingleNode: true,
 	}); err != nil {
 		if provider.RotationMode == RotationHXCFWsPxy {
 			s.destroyWsPxyNodes(ctx, provider.APIURL, newPool)
@@ -542,6 +546,10 @@ func (s *Service) restoreResidentialPoolAndGroup(
 		SourceSpec:    proxygroup.SourceSpec{NodeIDs: nodeIDs, AllowEmpty: record.Mode == ModeSticky},
 		Enabled:       groupRecord.Enabled,
 		EmptyBehavior: groupRecord.EmptyBehavior,
+		// Republishing a channel pool can legitimately leave one session (or
+		// none while sticky). Same exemption as the channel create; see
+		// internal/proxygroup/single_node_rule.go.
+		AllowSingleNode: true,
 	}); err != nil {
 		return err
 	}

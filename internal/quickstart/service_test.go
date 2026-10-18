@@ -216,8 +216,16 @@ func TestCreateValidatesSourceExclusivity(t *testing.T) {
 		},
 		{
 			name:    "missing name",
-			request: Request{NodeIDs: []string{"node-1"}},
+			request: Request{NodeIDs: []string{"node-1", "node-2"}},
 			want:    "name is required",
+		},
+		{
+			// One node is a pin, not a group. Quickstart would have to build a
+			// group around it, which is the shape the group rule refuses; the
+			// error has to point at listener.node_id instead.
+			name:    "single node is not a group",
+			request: Request{Name: "pool", NodeIDs: []string{"node-1"}},
+			want:    "listener.node_id",
 		},
 	}
 	for _, testCase := range cases {
@@ -294,7 +302,7 @@ func TestCreateDefaultsToLoopback(t *testing.T) {
 
 	service, _, services := newTestService(t)
 	if _, err := service.Create(context.Background(), Request{
-		Name: "pool", NodeIDs: []string{"node-1"},
+		Name: "pool", NodeIDs: []string{"node-1", "node-2"},
 	}); err != nil {
 		t.Fatalf("Create() error = %v", err)
 	}

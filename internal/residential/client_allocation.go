@@ -101,6 +101,9 @@ func (s *Service) republishClientSessionGroup(ctx context.Context, channel store
 		Version: group.Version, Name: group.Name, Strategy: group.Strategy,
 		SourceSpec: proxygroup.SourceSpec{NodeIDs: nodeIDs, AllowEmpty: channel.Mode == ModeSticky},
 		Enabled:    group.Enabled, EmptyBehavior: group.EmptyBehavior,
+		// A passthrough channel's pool holds exactly one session by design; a
+		// sticky one may hold none until a client is allocated.
+		AllowSingleNode: true,
 	})
 	if err != nil {
 		return err

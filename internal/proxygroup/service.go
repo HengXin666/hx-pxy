@@ -105,6 +105,16 @@ type CreateRequest struct {
 	FallbackTarget string     `json:"fallback_target_id,omitempty"`
 	// DialerProxyGroup is the group id whose exit this group's traffic uses.
 	DialerProxyGroup string `json:"dialer_proxy_group_id,omitempty"`
+	// AllowSingleNode exempts a create from the "a group is not a handle for one
+	// node" rule in rejectSingleNodeGroup.
+	//
+	// It is deliberately outside the HTTP contract (json:"-"): a caller that could
+	// send it would simply send it, and the rule would be advisory. The only
+	// legitimate user is a managed group whose membership is decided by another
+	// aggregate — a residential channel publishes a pool of vendor sessions and
+	// may legitimately hold exactly one (see internal/residential/channel.go).
+	// That is not an operator wrapping a node into a group.
+	AllowSingleNode bool `json:"-"`
 }
 
 type UpdateRequest struct {
@@ -117,6 +127,11 @@ type UpdateRequest struct {
 	FallbackTarget string     `json:"fallback_target_id,omitempty"`
 	// DialerProxyGroup is the group id whose exit this group's traffic uses.
 	DialerProxyGroup string `json:"dialer_proxy_group_id,omitempty"`
+	// AllowSingleNode is CreateRequest.AllowSingleNode for an update. An update can
+	// shrink a group to one member, which is the same shape the create rule
+	// refuses; leaving updates open would make the rule a two-call suggestion.
+	// See single_node_rule.go.
+	AllowSingleNode bool `json:"-"`
 }
 
 type Service struct {
@@ -144,7 +159,7 @@ func (s *Service) Create(ctx context.Context, request CreateRequest) (Group, err
 	if err != nil {
 		return Group{}, err
 	}
-	normalized, err := s.normalize(ctx, id, request.Name, request.Strategy, request.SourceSpec, enabled, request.EmptyBehavior, request.FallbackTarget, request.DialerProxyGroup)
+	normalized, err := s.normalize(ctx, id, request.Name, request.Strategy, request.SourceSpec, enabled, request.EmptyBehavior, request.FallbackTarget, request.DialerProxyGroup, request.AllowSingleNode)
 	if err != nil {
 		return Group{}, err
 	}
@@ -288,13 +303,14 @@ func (s *Service) Update(ctx context.Context, id string, request UpdateRequest) 
 	if request.Version < 1 {
 		return Group{}, fmt.Errorf("%w: version must be positive", ErrInvalid)
 	}
-	normalized, err := s.normalize(ctx, id, request.Name, request.Strategy, request.SourceSpec, request.Enabled, request.EmptyBehavior, request.FallbackTarget, request.DialerProxyGroup)
-	if err != nil {
-		return Group{}, err
-	}
 	existing, err := s.repository.GetProxyGroup(ctx, id)
 	if err != nil {
 		return Group{}, mapStoreError(err)
+	}
+	allowSingleNode := updateMayKeepSingleNode(request, existing.SourceSpecJSON)
+	normalized, err := s.normalize(ctx, id, request.Name, request.Strategy, request.SourceSpec, request.Enabled, request.EmptyBehavior, request.FallbackTarget, request.DialerProxyGroup, allowSingleNode)
+	if err != nil {
+		return Group{}, err
 	}
 	existing.Name = normalized.Name
 	existing.Strategy = normalized.Strategy
@@ -390,6 +406,7 @@ func (s *Service) normalize(
 	emptyBehavior string,
 	fallbackTarget string,
 	dialerProxyGroup string,
+	allowSingleNode bool,
 ) (normalizedGroup, error) {
 	name = strings.TrimSpace(name)
 	if len(name) < 1 || len(name) > 128 {
@@ -421,6 +438,45 @@ func (s *Service) normalize(
 	}
 	if len(spec.NodeIDs) == 0 && len(spec.GroupIDs) == 0 && len(spec.SubscriptionIDs) == 0 && !spec.IncludeDirect && !spec.AllowEmpty {
 		return normalizedGroup{}, fmt.Errorf("%w: at least one node, group, subscription, or DIRECT is required", ErrInvalid)
+	}
+	// A group id in node_ids is a category error, not a membership problem, and
+	// it has to be reported as one before the count is judged: "a group needs
+	// more than one node" would send the caller looking for a second node.
+	// See reference_kind.go.
+	if err := rejectMisplacedReferences(spec); err != nil {
+		return normalizedGroup{}, err
+	}
+	// Node existence is checked before the size rule: "this id is not a node"
+	// and "this group has one member" are different answers, and the size rule
+	// would otherwise mask a stale or invented id behind "add another node".
+	if len(spec.NodeIDs) > 0 {
+		nodes, err := s.repository.ListNodeConfigs(ctx, spec.NodeIDs)
+		if err != nil {
+			return normalizedGroup{}, err
+		}
+		if len(nodes) != len(spec.NodeIDs) {
+			// Name the ones that are missing: a caller that pasted a stale or
+			// invented id cannot act on "one or more".
+			found := make(map[string]bool, len(nodes))
+			for _, node := range nodes {
+				found[node.ID] = true
+			}
+			missing := make([]string, 0, len(spec.NodeIDs))
+			for _, id := range spec.NodeIDs {
+				if !found[id] {
+					missing = append(missing, id)
+				}
+			}
+			return normalizedGroup{}, fmt.Errorf(
+				"%w: node_ids 里有 %d 个节点不存在或已停用（node_ids 只接受 GET /api/v1/nodes 返回的节点 id）: %s",
+				ErrInvalid, len(missing), strings.Join(missing, ", "),
+			)
+		}
+	}
+	// Checked after NodeIDs are deduplicated, so ["n1","n1"] counts as the
+	// one-node group it really is. See single_node_rule.go.
+	if err := rejectSingleNodeGroup(spec, allowSingleNode); err != nil {
+		return normalizedGroup{}, err
 	}
 	// Reject a chained group that also offers DIRECT: DIRECT is a builtin and
 	// cannot carry a dialer, so that member would genuinely bypass the chain.
@@ -478,15 +534,6 @@ func (s *Service) normalize(
 				}
 			}
 			return normalizedGroup{}, fmt.Errorf("%w: group references form a cycle: %s", ErrInvalid, strings.Join(names, " -> "))
-		}
-	}
-	if len(spec.NodeIDs) > 0 {
-		nodes, err := s.repository.ListNodeConfigs(ctx, spec.NodeIDs)
-		if err != nil {
-			return normalizedGroup{}, err
-		}
-		if len(nodes) != len(spec.NodeIDs) {
-			return normalizedGroup{}, fmt.Errorf("%w: one or more nodes do not exist or are inactive", ErrInvalid)
 		}
 	}
 	for _, subscriptionID := range spec.SubscriptionIDs {

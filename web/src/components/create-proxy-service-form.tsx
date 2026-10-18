@@ -52,9 +52,15 @@ export function CreateProxyServiceForm({ nodes, subscriptions, residentialChanne
   const shared = sharedInbound?.mode === "shared"
   const [name, setName] = useState("")
   const [strategy, setStrategy] = useState<ProxyGroupStrategy>("manual")
-  const [sourceMode, setSourceMode] = useState<"direct" | "rule" | "manual" | "residential">("direct")
+  // "pinned" is a first-class source mode, not a hint: a group around one node
+  // is refused by the server, so the form has to be able to express the shape
+  // the server recommends. Without this the only reachable path for "one
+  // service, one node" would be the API.
+  const [sourceMode, setSourceMode] = useState<"direct" | "rule" | "manual" | "pinned" | "residential">("direct")
   const [selectedSubscriptions, setSelectedSubscriptions] = useState<string[]>([])
   const [selectedNodes, setSelectedNodes] = useState<string[]>([])
+  // 钉住的节点是单选: 一个服务只有一个出口节点。与「固定节点」的组内多选不同。
+  const [pinnedNode, setPinnedNode] = useState("")
   // 住宅渠道是单选: 一个服务复用一个渠道已建的代理组。
   const [selectedChannelID, setSelectedChannelID] = useState("")
   // 默认**不选地区** = 不限地区。
@@ -79,7 +85,7 @@ export function CreateProxyServiceForm({ nodes, subscriptions, residentialChanne
   // the number wrong in exactly the way the form was already wrong: see the
   // maxLatency note in lib/service-shape.ts.
   const shape = useMemo(
-    () => shapeForSelection(selectedSubscriptions, selectedNodes, sourceMode === "direct", subscriptions),
+    () => sourceMode === "pinned" ? "pinned" : shapeForSelection(selectedSubscriptions, selectedNodes, sourceMode === "direct", subscriptions),
     [selectedNodes, selectedSubscriptions, sourceMode, subscriptions],
   )
   const knobs = shapeMeta[shape].knobs
@@ -91,12 +97,12 @@ export function CreateProxyServiceForm({ nodes, subscriptions, residentialChanne
     () => residentialChannels.find((item) => item.id === selectedChannelID && item.enabled),
     [residentialChannels, selectedChannelID],
   )
-  const estimated = useMemo(() => sourceMode === "direct" ? 1 : sourceMode === "manual" ? selectedNodes.length : nodes.filter((node) => {
+  const estimated = useMemo(() => sourceMode === "direct" ? 1 : sourceMode === "pinned" ? (pinnedNode ? 1 : 0) : sourceMode === "manual" ? selectedNodes.length : nodes.filter((node) => {
     if (!node.sources.some((source) => selectedSubscriptions.includes(source.subscription_id))) return false
     if (knobs.maxLatency && (node.last_latency_ms == null || node.last_latency_ms > maxLatency)) return false
     if (knobs.regions && selectedRegions.length > 0 && !selectedRegions.some((region) => matchesRegion(node.display_name, region))) return false
     return true
-  }).slice(0, knobs.limit ? limit : undefined).length, [knobs.limit, knobs.maxLatency, knobs.regions, limit, maxLatency, nodes, selectedNodes.length, selectedRegions, selectedSubscriptions, sourceMode])
+  }).slice(0, knobs.limit ? limit : undefined).length, [knobs.limit, knobs.maxLatency, knobs.regions, limit, maxLatency, nodes, pinnedNode, selectedNodes.length, selectedRegions, selectedSubscriptions, sourceMode])
 
   // See .agents/notes/implemented/bug-fix/2026-10-15-fixed-ingress-port-controls.md.
   const advanced = kind === "vless" || kind === "vmess" || kind === "trojan"
@@ -131,6 +137,16 @@ export function CreateProxyServiceForm({ nodes, subscriptions, residentialChanne
         onCancel()
         return
       }
+      if (sourceMode === "pinned") {
+        // 一个节点 = 一个钉住的 listener, 不建组。服务端会拒绝为单节点建组, 而且
+        // 同时下发 name/strategy/source_spec 会被 422 拒绝 (字段没有效果就不该被接受)。
+        if (!pinnedNode) { onNotice("请选择要钉住的节点", "error"); return }
+        await api.createProxyService({ listener: { ...listener, node_id: pinnedNode } })
+        await onCreated()
+        onNotice(`代理服务已创建，出口钉死在节点「${nodes.find((item) => item.id === pinnedNode)?.display_name ?? pinnedNode}」`)
+        onCancel()
+        return
+      }
       // Only the knobs this shape has are sent. Sending an inapplicable one is
       // not a harmless no-op: `max_latency_ms` on a pool drops every member
       // that has never answered — i.e. the whole group. See lib/service-shape.ts.
@@ -158,7 +174,10 @@ export function CreateProxyServiceForm({ nodes, subscriptions, residentialChanne
   }
 
   const validSource = sourceMode === "direct"
-    || (sourceMode === "rule" ? selectedSubscriptions.length > 0 : sourceMode === "manual" ? selectedNodes.length > 0 : selectedChannel !== undefined)
+    || (sourceMode === "pinned" ? pinnedNode !== ""
+      : sourceMode === "rule" ? selectedSubscriptions.length > 0
+        : sourceMode === "manual" ? selectedNodes.length >= 2
+          : selectedChannel !== undefined)
   const nonLoopback = bindAddress.trim() !== "" && !["127.0.0.1", "::1", "localhost"].includes(bindAddress.trim())
   function changeKind(next: typeof kind) {
     setKind(next)
@@ -172,7 +191,7 @@ export function CreateProxyServiceForm({ nodes, subscriptions, residentialChanne
       setBindAddress(sharedInbound?.mixed_bind_address || "0.0.0.0")
     }
   }
-  function changeSourceMode(next: "direct" | "rule" | "manual" | "residential") {
+  function changeSourceMode(next: "direct" | "rule" | "manual" | "pinned" | "residential") {
     setSourceMode(next)
     if (next === "direct") setStrategy("manual")
   }
@@ -188,7 +207,7 @@ export function CreateProxyServiceForm({ nodes, subscriptions, residentialChanne
           </DialogHeader>
           <div className="space-y-4 px-5 py-4">
             <Field label="服务名称"><Input value={name} onChange={(event) => setName(event.target.value)} placeholder="例如：日本低延迟出口" maxLength={128} autoFocus required /></Field>
-            <Field label="节点来源"><ChipSet values={[{ value: "direct", label: "服务器直连" }, { value: "rule", label: "跨订阅规则" }, { value: "manual", label: "固定节点" }, { value: "residential", label: "住宅代理" }]} current={sourceMode} onChange={changeSourceMode} /></Field>
+            <Field label="节点来源"><ChipSet values={[{ value: "direct", label: "服务器直连" }, { value: "rule", label: "跨订阅规则" }, { value: "manual", label: "节点组" }, { value: "pinned", label: "单节点出口" }, { value: "residential", label: "住宅代理" }]} current={sourceMode} onChange={changeSourceMode} /></Field>
             {sourceMode === "direct" ? <div className="flex items-center gap-2 rounded-md border bg-muted/60 px-3 py-2 text-xs"><Server className="size-4 text-success" />流量使用当前服务器网络出口</div> : sourceMode === "residential" ? <>
               {/* 渠道不是订阅: 这里选的是一个**已经存在的代理组** (建渠道时一并创建),
                   不是一份节点快照, 所以没有地区/延迟/上限这些筛选。 */}
@@ -213,10 +232,21 @@ export function CreateProxyServiceForm({ nodes, subscriptions, residentialChanne
               {/* 池的成员大多从未测速过: 说明"不可用"与"没测过"不是一回事。 */}
               {!knobs.maxLatency && <p className="text-[11px] leading-4 text-muted-foreground">该来源不按延迟筛选：未测速的成员同样会被选中，实际可用性由数据面健康检查决定。</p>}
               <div className="flex items-center gap-2 rounded-md border bg-muted/60 px-3 py-2 text-xs"><Gauge className="size-4 text-info" />当前指标预计命中 {estimated} 个节点</div>
-            </> : <Field label={`固定节点（已选 ${selectedNodes.length}）`}><CheckList items={nodes.map((item) => ({ id: item.id, label: `${item.display_name} · ${item.last_latency_ms == null ? "未测试" : `${item.last_latency_ms}ms`}` }))} selected={selectedNodes} onChange={setSelectedNodes} empty="暂无活动节点" /></Field>}
+            </> : sourceMode === "pinned" ? <>
+              {/* 单节点出口: 钉住一个节点, 不建组。这是服务端推荐的形态, 也是
+                  「一个节点 = 一个组」被拒绝之后唯一还成立的一条路。 */}
+              <Field label="钉住的节点"><CheckList items={nodes.map((item) => ({ id: item.id, label: `${item.display_name} · ${item.last_latency_ms == null ? "未测试" : `${item.last_latency_ms}ms`}` }))} selected={pinnedNode ? [pinnedNode] : []} onChange={(ids) => setPinnedNode(ids.find((id) => id !== pinnedNode) ?? "")} empty="暂无活动节点" /></Field>
+              <div className="flex items-start gap-2 rounded-md border bg-muted/60 px-3 py-2 text-xs"><Server className="mt-0.5 size-4 shrink-0 text-success" /><span>这个服务固定从所选节点出网，<b>不会创建代理组</b>。节点消失或被停用时整份配置会编译失败并指名这个服务，不会静默换出口。</span></div>
+            </> : <>
+              <Field label={`固定节点（已选 ${selectedNodes.length}）`}><CheckList items={nodes.map((item) => ({ id: item.id, label: `${item.display_name} · ${item.last_latency_ms == null ? "未测试" : `${item.last_latency_ms}ms`}` }))} selected={selectedNodes} onChange={setSelectedNodes} empty="暂无活动节点" /></Field>
+              {/* 组是「在一批节点里选一个」, 不是「指向某个节点」的句柄: 单节点组会
+                  随服务数量线性膨胀 (2026-09-26 实测 57/61 个组都是单节点组)。要钉一个
+                  节点就不该建组, 服务端会用 listener.node_id 直接钉。 */}
+              {selectedNodes.length < 2 && <p className="text-[11px] leading-4 text-muted-foreground">节点组至少要选 2 个节点。只用一个节点请改用上面的「单节点出口」：它把服务钉到那个节点（listener.node_id），不创建任何代理组。不要为每个节点各建一个组。</p>}
+            </>}
             {/* 复用组时出站策略属于那个组, 不属于本服务: 一个改不了的选择器只会骗人。
                 表单因此既不显示它, 也不下发 strategy (见下方 submit)。 */}
-            {sourceMode !== "residential" && <Field label="出站策略"><ChipSet values={strategyChoicesForShape(shape)} current={effectiveStrategy} onChange={setStrategy} /></Field>}
+            {sourceMode !== "residential" && sourceMode !== "pinned" && <Field label="出站策略"><ChipSet values={strategyChoicesForShape(shape)} current={effectiveStrategy} onChange={setStrategy} /></Field>}
             <div className="border-t pt-4">
               <div className="mb-3 text-xs font-semibold">入口与登录</div>
               <div className="space-y-3">

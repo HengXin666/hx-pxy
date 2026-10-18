@@ -137,6 +137,19 @@ auth:     svc-... / ...           ← 已生成的凭据
   用后者时，被指向的节点消失/停用会让整份配置编译失败并**指名那条 Listener**，不会静默退化成别的出口。
   反例（别再这么干）：为一个节点建一个 `manual` 组、里面只放它一个 —— 那正是「组当句柄用」，
   实测本机一度积出 57 个单成员组却只指向 28 个不同节点。
+  **服务端现在直接拒绝**：`source_spec` 只含一个 `node_id`（且没有订阅、没有组引用、
+  没有 `include_direct`、没有 `allow_empty`）的建组/更新返回 422 `validation_failed`，
+  消息里给出 `node_id` 这条正确用法。不要试图绕过它（拆成两次调用也不行：
+  把两节点组改成一节点同样被拒）。`quickstart` 的 `node_ids` 也必须 ≥ 2。
+  见 `.agents/notes/implemented/architecture/2026-10-18-a-group-is-not-a-node-handle.md`。
+- **代理组和节点是两种对象，id 不能互换**。两者的 id 都长得像不透明字符串，字段名只差一个
+  复数 `s`，所以最容易犯的错是把 `GET /api/v1/proxy-groups` 拿到的 id 填进
+  `source_spec.node_ids`。判据看前缀：`node-…` 是节点（`GET /api/v1/nodes`）、`group-…`
+  是代理组（`GET /api/v1/proxy-groups`）、`sub-…` 是订阅、`listener-…` 是入口。
+  `source_spec.node_ids` 只收节点 id、`group_ids` 只收组 id、`subscription_ids` 只收订阅 id；
+  放错会被 422 点名「这是代理组 ID，应该放 group_ids」。**单数 `listener.node_id` = 这个服务
+  走这个节点（不建组）；复数 `source_spec.node_ids` = 这个组在这些节点里挑（至少 2 个）。**
+  机器可读版本在 `GET /api/v1/capabilities` 的 `object_model` 段。
 - 控制面**不承载流量**：它是控制面，数据面是 Mihomo 受管进程。
   它不会进入数据转发路径。
 - 控制面**不替你轮询/选点/排名**：哪些节点可用、延迟多少，取决于你要访问的目标，

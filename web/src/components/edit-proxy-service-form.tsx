@@ -50,7 +50,13 @@ export function EditProxyServiceForm({ listener, sharedInbound, group, nodes, su
   // A pinned service always has a valid source: the pin *is* the source. It
   // used to fall through to the multi-node branch, so the form refused to save
   // until the operator picked nodes that the update then ignored.
-  const validSource = pinned ? pin !== "" : mode === "direct" || (mode === "rule" ? subscriptionIDs.length > 0 : nodeIDs.length > 0)
+  // 组是「在一批节点里选一个」, 不是指向单个节点的句柄。历史上已经存在的单节点组
+  // 仍然要能改名/停用/换策略 (否则连收敛都做不到), 所以「成员没变」放行; 把一个多
+  // 节点组缩成一个才是要被拦下的动作。服务端有同样的判据, 这里只是提前说清楚。
+  const legacySingleNode = (group.source_spec.node_ids?.length ?? 0) === 1
+    && nodeIDs.length === 1 && nodeIDs[0] === group.source_spec.node_ids[0]
+  const validSource = pinned ? pin !== ""
+    : mode === "direct" || (mode === "rule" ? subscriptionIDs.length > 0 : nodeIDs.length >= 2 || legacySingleNode)
   const valid = name.trim() && port > 0 && port < 65536 && validSource && (!advanced || (publicHost.trim() && wsPath.startsWith("/"))) && (!replaceAuth || (username.trim() && password)) && (!nonLoopback || authConfigured)
 
   // 形态与可选项从同一张表取, 与创建表单和列表行同源。见 lib/service-shape.ts。
@@ -127,7 +133,11 @@ export function EditProxyServiceForm({ listener, sharedInbound, group, nodes, su
     </div>
     {pinned && <p className="text-[11px] leading-4 text-muted-foreground">该服务把出口钉死在这一个节点上，不参与任何组内选择；改名不会改变出口。清空节点会把它交回代理组选择。</p>}
     {!pinned && mode === "rule" && <div className="grid gap-3 md:grid-cols-[1fr_120px_140px]"><CheckGrid title="订阅" items={subscriptions.map((item) => ({ id: item.id, label: item.name }))} selected={subscriptionIDs} onChange={setSubscriptionIDs} />{editKnobs.limit && <Field label="最多节点"><Input type="number" min={0} max={500} value={limit} onChange={(event) => setLimit(Number(event.target.value))} /></Field>}{editKnobs.maxLatency && <Field label="最大延迟 ms"><Input type="number" min={0} max={60000} value={maxLatency} onChange={(event) => setMaxLatency(Number(event.target.value))} /></Field>}</div>}
-    {!pinned && mode === "manual" && <CheckGrid title="固定节点" items={nodes.map((item) => ({ id: item.id, label: `${item.display_name} · ${item.last_latency_ms == null ? "未测试" : `${item.last_latency_ms}ms`}` }))} selected={nodeIDs} onChange={setNodeIDs} />}
+    {!pinned && mode === "manual" && <>
+      <CheckGrid title="固定节点" items={nodes.map((item) => ({ id: item.id, label: `${item.display_name} · ${item.last_latency_ms == null ? "未测试" : `${item.last_latency_ms}ms`}` }))} selected={nodeIDs} onChange={setNodeIDs} />
+      {nodeIDs.length < 2 && !legacySingleNode && <p className="text-[11px] leading-4 text-muted-foreground">代理组至少要选 2 个节点。只用一个节点请别建组：改用上面的「钉死节点」（listener.node_id），不需要代理组；也不要为每个节点各建一个组。</p>}
+      {legacySingleNode && <p className="text-[11px] leading-4 text-muted-foreground">这是一个历史遗留的单节点组，现在仍可改名或停用，但不能再把别的组缩成一个节点。要固定单个出口请用「钉死节点」。</p>}
+    </>}
     <div className="border-t pt-4"><div className="mb-3 text-xs font-semibold">入口配置</div><div className="grid gap-3 md:grid-cols-4"><Field label="协议"><Select value={kind} onValueChange={(value) => setKind(value as ListenerKind)}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent>{["mixed", "http", "socks", "vless", "vmess", "trojan"].map((value) => <SelectItem key={value} value={value}>{value.toUpperCase()}{["vless", "vmess", "trojan"].includes(value) ? " WS" : ""}</SelectItem>)}</SelectContent></Select></Field><Field label="绑定 IP"><Input value={boundAddress} onChange={(event) => setBindAddress(event.target.value)} disabled={advanced || shared} />{nonLoopback && !authConfigured && <span className="block text-xs text-destructive">非环回监听地址（如 0.0.0.0）必须设置用户名/密码认证</span>}{nonLoopback && authConfigured && <span className="block text-xs text-muted-foreground">非环回地址监听 0.0.0.0，内网/Docker 容器可直接访问，公网由防火墙保护</span>}</Field><Field label="端口"><output className="block py-2 font-mono text-xs">{port}（固定）</output></Field><label className="flex h-8 items-center gap-2 self-end rounded-md border bg-card px-3 text-xs"><Checkbox checked={enabled} onCheckedChange={(value) => setEnabled(value === true)} />启用入口</label></div></div>
     {advanced && <div className="grid gap-3 md:grid-cols-2"><Field label="Cloudflare / 雷池域名"><Input value={publicHost} onChange={(event) => setPublicHost(event.target.value)} /></Field><Field label="WebSocket Path（固定前缀 /__hx-proxy__/）"><Input value={wsPath} onChange={(event) => setWSPath(event.target.value)} /></Field></div>}
     {!advanced && <div className="grid gap-3 md:grid-cols-2"><Field label="公网主机名 / IP（可选）"><Input value={publicHost} onChange={(event) => setPublicHost(event.target.value)} placeholder="VPS 公网地址" /></Field><Field label="公网端口"><output className="block py-2 font-mono text-xs">{publicPort}（固定）</output></Field><label className="flex items-center gap-2 rounded-md border bg-card px-3 py-2 text-xs md:col-span-2"><Checkbox checked={publicTLS} onCheckedChange={(value) => setPublicTLS(value === true)} />公网 HTTP 端点使用 TLS</label></div>}

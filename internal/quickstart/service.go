@@ -162,6 +162,13 @@ func (s *Service) Create(ctx context.Context, request Request) (result Result, r
 	if request.SubscriptionURL != "" && request.SubscriptionInline != "" {
 		return Result{}, fmt.Errorf("%w: subscription_url and subscription_inline are mutually exclusive", ErrInvalid)
 	}
+	// Rejected here, before any subscription is registered or refreshed, so the
+	// caller gets the remedy instead of a generic create failure from the group
+	// service two steps later. The rule itself lives in proxygroup; this is the
+	// quickstart-shaped explanation of it.
+	if len(request.SubscriptionIDs) == 0 && len(request.NodeIDs) == 1 {
+		return Result{}, fmt.Errorf("%w: node_ids must name at least two nodes: quickstart builds a proxy group, and a group is a selection, not a handle for one node. To publish exactly one node, create a listener with listener.node_id instead (POST /api/v1/listeners), which needs no group", ErrInvalid)
+	}
 	if (request.SubscriptionURL != "" || request.SubscriptionInline != "") && len(request.SubscriptionIDs) > 0 {
 		return Result{}, fmt.Errorf("%w: a new subscription and subscription_ids are mutually exclusive", ErrInvalid)
 	}

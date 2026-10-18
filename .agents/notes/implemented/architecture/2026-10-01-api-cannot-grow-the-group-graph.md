@@ -2,6 +2,11 @@
 
 Status: implemented
 
+本 note 中「不在 `proxygroup.Service.Create` 里按成员数拒绝」的那条判断已被推翻, 现在由
+.agents/notes/implemented/architecture/2026-10-18-a-group-is-not-a-node-handle.md
+在领域服务的 `normalize` 里拒绝单节点组。下面描述的 `guard.deny_api_group_create` 开关、
+`MachineCredential` 判据与三个建组路径的闸门**仍然有效**, 只是不再是唯一的防线。
+
 ## Problem
 
 **同一件事被禁止过两次, 两次都只落在文字上。**
@@ -161,5 +166,8 @@ healthy 住宅节点 `POST /api/v1/proxy-groups` 建一个单成员组, 再 `POS
   操作前端, 闸门不会拦 —— 但那条路径下操作员也在场, 正是闸门想放行的情形。
 - settings 读取失败时闸门**判为拦截** (fail-closed)。理由是一个守门机制静默失效比一个可恢复的
   500 更危险; 操作员会在响应里看到错误并去修存储。
-- 未做: 不允许 API Key **编辑**组使其退化成单成员。理由是"退化"需要历史对照才能判定, 且本闸门
-  的目标是止住**数量增长**, 不是把组的内容也管起来 —— 那会重新滑向"按内容判定"的死路。
+- 曾经未做、现已由
+  `implemented/architecture/2026-10-18-a-group-is-not-a-node-handle.md` 接管:
+  禁止把组**编辑**成单成员。当时的理由是"退化"需要历史对照才能判定; 现在的判据是
+  `sameSingleNode`(与库里已存的单节点组逐字节相同才放行), 因此存量行仍可收敛, 而从两节点
+  缩成一节点会被 422 拒绝。这条从"未做"变成"已做", 是在用户明确要求"默认拒绝 size=1"之后。

@@ -100,7 +100,12 @@ type CapabilityCatalog struct {
 	// NotSupported states the product boundary so an agent does not design
 	// around capabilities the control plane deliberately does not have.
 	NotSupported []string `json:"not_supported"`
-	Related      []string `json:"related"`
+	// ObjectModel states the type distinctions a caller must hold in mind. It
+	// exists because the ids are opaque strings and the field names differ by a
+	// plural `s`, which is exactly how an agent ends up putting a group id where
+	// a node id belongs. See capabilityObjectModel.
+	ObjectModel []string `json:"object_model"`
+	Related     []string `json:"related"`
 }
 
 // CapabilityAuth documents the credential an automating caller presents.
@@ -262,6 +267,7 @@ func (s *Server) CapabilityCatalog() CapabilityCatalog {
 		Endpoints:    append(capabilityEndpoints(), networkCapabilityEndpoints()...),
 		Workflows:    capabilityWorkflows(),
 		NotSupported: capabilityNotSupported(),
+		ObjectModel:  capabilityObjectModel(),
 		Related:      capabilityRelated(),
 	}
 }
