@@ -186,7 +186,7 @@ func (c *Compiler) Compile(ctx context.Context) (Compiled, error) {
 	listenerConfigs := make([]map[string]any, 0, len(listeners))
 	endpoints := make([]Endpoint, 0, len(listeners))
 	residentialFallbackRules := make([]string, 0)
-	sharedInboundRules := make([]string, 0)
+	sharedInboundRules := make([]sharedUserRule, 0)
 	// Dedicated listeners normally set `proxy`, which never consults rules.
 	// A YAML default removes that binding and, for default:proxy only, records
 	// an IN-NAME catch-all so unmatched traffic still reaches the same group.
@@ -249,12 +249,12 @@ func (c *Compiler) Compile(ctx context.Context) (Compiled, error) {
 		if err != nil {
 			return Compiled{}, err
 		}
-		// Only a group named by applies_to loses its forced proxy, and only
-		// when that listener is not pinned to a node. Every other dedicated
-		// listener keeps bypassing rules, so one browser document cannot
-		// retarget the rest of the instance.
+		// A YAML default removes `proxy` only for groups named by applies_to,
+		// and only when that listener is not pinned to a node. Empty default
+		// is a legacy document and must keep the binding even if applies_to
+		// was stored beside it.
 		_, inScope := scopeSet(routeConfig.AppliesTo)[record.ProxyGroupID]
-		if len(clientRoutesForListener) == 0 && strings.TrimSpace(record.NodeID) == "" && inScope {
+		if routeConfig.Default != "" && len(clientRoutesForListener) == 0 && strings.TrimSpace(record.NodeID) == "" && inScope {
 			delete(config, "proxy")
 			if routeConfig.Default == routingrules.DefaultProxy {
 				dedicatedFallbacks = append(dedicatedFallbacks, "IN-NAME,"+listenerConfigName(record.ID)+","+egressName)
@@ -323,26 +323,27 @@ func (c *Compiler) Compile(ctx context.Context) (Compiled, error) {
 	default:
 		return Compiled{}, fmt.Errorf("routing default %q is unsupported", routeConfig.Default)
 	}
-	pinnedUsers, groupedUsers := partitionSharedRules(sharedInboundRules, groupNames)
+	pinnedUsers, groupedUsers := splitSharedUsers(sharedInboundRules)
 	if routeConfig.Default == "" {
 		// Legacy documents: usernames win before site rules, and the
 		// residential listener fallback stays behind those site rules.
-		compiledRules = append(compiledRules, sharedInboundRules...)
+		compiledRules = append(compiledRules, sharedUserTexts(sharedInboundRules)...)
 		compiledRules = append(compiledRules, siteRules...)
 		compiledRules = append(compiledRules, residentialFallbackRules...)
 	} else {
-		// Unallocated residential sessions and node-pinned identities match
-		// before any YAML site rule. Group users (browser identities) match
-		// after it, so a destination can still leave their group. direct and
-		// reject drop that catch-all only for groups listed in applies_to.
+		// Residential fail-closed rules, node pins, and every group the
+		// document does not name match before site rules. Only applies_to
+		// groups follow the site rules, and only while default is proxy.
+		// direct and reject drop that catch-all. An empty applies_to therefore
+		// leaves every shared username where a legacy document puts it.
+		outside, inside := sharedUsersByScope(groupedUsers, scopeSet(routeConfig.AppliesTo))
 		compiledRules = append(compiledRules, residentialFallbackRules...)
-		compiledRules = append(compiledRules, pinnedUsers...)
+		compiledRules = append(compiledRules, sharedUserTexts(pinnedUsers)...)
+		compiledRules = append(compiledRules, sharedUserTexts(outside)...)
 		compiledRules = append(compiledRules, siteRules...)
-		grouped := groupedUsers
-		if routeConfig.Default == routingrules.DefaultDirect || routeConfig.Default == routingrules.DefaultReject {
-			grouped = withoutScopedGroups(groupedUsers, groupNames, scopeSet(routeConfig.AppliesTo))
+		if routeConfig.Default == routingrules.DefaultProxy {
+			compiledRules = append(compiledRules, sharedUserTexts(inside)...)
 		}
-		compiledRules = append(compiledRules, grouped...)
 		compiledRules = append(compiledRules, dedicatedFallbacks...)
 	}
 	tun, tunRule, err := compileTUN(settings, groups)

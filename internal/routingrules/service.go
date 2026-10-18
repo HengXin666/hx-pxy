@@ -118,11 +118,32 @@ func (s *Service) Get(ctx context.Context) (Config, error) {
 func (s *Service) Update(ctx context.Context, config Config) (Config, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	return s.persist(ctx, config)
+}
+
+// UpdateRuleSets replaces rule sets and keeps the stored YAML default and
+// applies_to. The read and the write share this lock, so a concurrent
+// ApplyYAML cannot be overwritten by a default the caller loaded earlier.
+// applies_to ids whose group was later disabled or deleted are dropped here;
+// a new YAML document still rejects those groups in TranslateYAML.
+func (s *Service) UpdateRuleSets(ctx context.Context, ruleSets []RuleSet) (Config, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	current, err := Load(ctx, s.repository)
+	if err != nil {
+		return Config{}, err
+	}
+	current.RuleSets = ruleSets
+	return s.persist(ctx, current)
+}
+
+func (s *Service) persist(ctx context.Context, config Config) (Config, error) {
 	normalize(&config)
 	groups, err := s.repository.ListProxyGroups(ctx)
 	if err != nil {
 		return Config{}, err
 	}
+	config.AppliesTo = enabledAppliesTo(config.AppliesTo, groups)
 	if err := Validate(config, groups); err != nil {
 		return Config{}, err
 	}
@@ -146,6 +167,22 @@ func (s *Service) Update(ctx context.Context, config Config) (Config, error) {
 	return config, nil
 }
 
+func enabledAppliesTo(ids []string, groups []store.ProxyGroupRecord) []string {
+	enabled := make(map[string]struct{}, len(groups))
+	for _, group := range groups {
+		if group.Enabled {
+			enabled[group.ID] = struct{}{}
+		}
+	}
+	kept := make([]string, 0, len(ids))
+	for _, id := range ids {
+		if _, ok := enabled[id]; ok {
+			kept = append(kept, id)
+		}
+	}
+	return kept
+}
+
 func save(ctx context.Context, repository Repository, config Config) error {
 	encoded, err := json.Marshal(config)
 	if err != nil {
@@ -159,6 +196,9 @@ func Validate(config Config, groups []store.ProxyGroupRecord) error {
 	case "", DefaultProxy, DefaultDirect, DefaultReject:
 	default:
 		return fmt.Errorf("%w: default must be proxy, direct or reject", ErrInvalid)
+	}
+	if config.Default == "" && len(config.AppliesTo) > 0 {
+		return fmt.Errorf("%w: applies_to requires a default of proxy, direct or reject", ErrInvalid)
 	}
 	groupIDs := make(map[string]struct{}, len(groups))
 	enabledIDs := make(map[string]struct{}, len(groups))

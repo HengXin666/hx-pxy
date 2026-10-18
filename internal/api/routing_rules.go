@@ -23,27 +23,10 @@ func (s *Server) handleRoutingRules(writer http.ResponseWriter, request *http.Re
 			s.writeAPIError(writer, request, http.StatusBadRequest, "invalid_request", err.Error())
 			return
 		}
-		config := routingrules.Config{RuleSets: body.RuleSets}
-		if body.Default != nil || body.AppliesTo != nil {
-			config.Default = stringOrEmpty(body.Default)
-			if body.AppliesTo != nil {
-				config.AppliesTo = *body.AppliesTo
-			}
-		}
-		if body.Default == nil || body.AppliesTo == nil {
-			current, err := s.routingRules.Get(request.Context())
-			if err != nil {
-				s.handleError(writer, request, err)
-				return
-			}
-			if body.Default == nil {
-				config.Default = current.Default
-			}
-			if body.AppliesTo == nil {
-				config.AppliesTo = current.AppliesTo
-			}
-		}
-		updated, err := s.routingRules.Update(request.Context(), config)
+		// default and applies_to are accepted so a stale rules page does not
+		// fail decoding, and ignored so that page cannot overwrite a YAML
+		// apply. UpdateRuleSets reloads the stored intent under the service lock.
+		updated, err := s.routingRules.UpdateRuleSets(request.Context(), body.RuleSets)
 		if err != nil {
 			s.handleError(writer, request, err)
 			return
@@ -81,18 +64,10 @@ func (s *Server) handleRoutingRulesApply(writer http.ResponseWriter, request *ht
 	writeJSON(writer, http.StatusOK, config)
 }
 
-// routingRulesPut distinguishes a missing default from an explicit empty one.
-// The rules UI sends rule_sets only; wiping Default on that save would put
-// browser inbounds back on the legacy proxy binding.
+// routingRulesPut decodes default and applies_to so an older rules page still
+// parses, but the handler never writes them. YAML apply owns those fields.
 type routingRulesPut struct {
 	Default   *string                `json:"default"`
 	AppliesTo *[]string              `json:"applies_to"`
 	RuleSets  []routingrules.RuleSet `json:"rule_sets"`
-}
-
-func stringOrEmpty(value *string) string {
-	if value == nil {
-		return ""
-	}
-	return *value
 }

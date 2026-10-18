@@ -1,12 +1,15 @@
 package mihomo
 
-import "strings"
-
-// A shared-inbound rule is "AND,((IN-NAME,...),(IN-USER,...)),<action>".
-// The action is a proxy group name, or a node proxy name when the listener
-// is pinned to one node. Pinning is an identity, not a browser default, so
-// those rules stay ahead of YAML site rules.
+// sharedUserRule is one shared-inbound IN-USER rule.
+// GroupID is the proxy group behind that username, or empty when the listener
+// is pinned to a node. Callers must not recover that from the rule text: a
+// group name may contain the "), " separator, and the last "), " is then not
+// the action boundary.
 // See .agents/notes/implemented/feature/2026-10-18-yaml-routing-intent.md.
+type sharedUserRule struct {
+	Text    string
+	GroupID string
+}
 
 func scopeSet(ids []string) map[string]struct{} {
 	set := make(map[string]struct{}, len(ids))
@@ -18,34 +21,37 @@ func scopeSet(ids []string) map[string]struct{} {
 	return set
 }
 
-func sharedRuleAction(rule string) string {
-	if index := strings.LastIndex(rule, "),"); index >= 0 {
-		return rule[index+2:]
-	}
-	return rule
-}
-
-func partitionSharedRules(rules []string, groupNameToID map[string]string) (pinned, grouped []string) {
+func splitSharedUsers(rules []sharedUserRule) (pinned, grouped []sharedUserRule) {
 	for _, rule := range rules {
-		if _, isGroup := groupNameToID[sharedRuleAction(rule)]; isGroup {
-			grouped = append(grouped, rule)
+		if rule.GroupID == "" {
+			pinned = append(pinned, rule)
 			continue
 		}
-		pinned = append(pinned, rule)
+		grouped = append(grouped, rule)
 	}
 	return pinned, grouped
 }
 
-func withoutScopedGroups(rules []string, groupNameToID map[string]string, scope map[string]struct{}) []string {
-	if len(scope) == 0 {
-		return rules
-	}
-	kept := make([]string, 0, len(rules))
+// sharedUsersByScope splits group users into those the YAML document names and
+// those it does not. An empty scope puts every user outside.
+func sharedUsersByScope(rules []sharedUserRule, scope map[string]struct{}) (outside, inside []sharedUserRule) {
 	for _, rule := range rules {
-		if _, drop := scope[groupNameToID[sharedRuleAction(rule)]]; drop {
+		if _, named := scope[rule.GroupID]; named {
+			inside = append(inside, rule)
 			continue
 		}
-		kept = append(kept, rule)
+		outside = append(outside, rule)
 	}
-	return kept
+	return outside, inside
+}
+
+func sharedUserTexts(rules []sharedUserRule) []string {
+	if len(rules) == 0 {
+		return nil
+	}
+	texts := make([]string, 0, len(rules))
+	for _, rule := range rules {
+		texts = append(texts, rule.Text)
+	}
+	return texts
 }

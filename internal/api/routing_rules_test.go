@@ -25,6 +25,10 @@ func (service *fakeRoutingRulesService) Update(_ context.Context, config routing
 	service.config = config
 	return config, nil
 }
+func (service *fakeRoutingRulesService) UpdateRuleSets(_ context.Context, ruleSets []routingrules.RuleSet) (routingrules.Config, error) {
+	service.config.RuleSets = ruleSets
+	return service.config, nil
+}
 func (service *fakeRoutingRulesService) ApplyYAML(_ context.Context, raw string) (routingrules.Config, error) {
 	service.applied = raw
 	service.config = routingrules.Config{RuleSets: []routingrules.RuleSet{{ID: "yaml-01", Name: "from-yaml", Enabled: true}}}
@@ -84,7 +88,7 @@ func TestRoutingRulesPutKeepsYAMLDefaultWhenOmitted(t *testing.T) {
 		t.Fatal(err)
 	}
 	recorder := httptest.NewRecorder()
-	request := httptest.NewRequest(http.MethodPut, "/api/v1/routing-rules", strings.NewReader(`{"rule_sets":[]}`))
+	request := httptest.NewRequest(http.MethodPut, "/api/v1/routing-rules", strings.NewReader(`{"default":"proxy","applies_to":["other"],"rule_sets":[]}`))
 	request.Header.Set("Content-Type", "application/json")
 	server.Handler().ServeHTTP(recorder, request)
 	if recorder.Code != http.StatusOK || service.config.Default != routingrules.DefaultReject || len(service.config.AppliesTo) != 1 {

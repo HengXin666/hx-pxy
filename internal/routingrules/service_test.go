@@ -2,6 +2,7 @@ package routingrules
 
 import (
 	"context"
+	"encoding/json"
 	"sync"
 	"testing"
 	"time"
@@ -54,6 +55,7 @@ func TestValidateRejectsUnsafeAndMissingReferences(t *testing.T) {
 		{RuleSets: []RuleSet{{ID: "bad", Name: "Bad", Enabled: true, Action: Action{Type: "reject"}, Rules: []Rule{{Type: "domain", Value: "example.com,REJECT"}}}}},
 		{RuleSets: []RuleSet{{ID: "bad", Name: "Bad", Enabled: true, AppliedGroupIDs: []string{"missing"}, Action: Action{Type: "direct"}, Rules: []Rule{{Type: "domain", Value: "example.com"}}}}},
 		{Default: "sideways", RuleSets: []RuleSet{{ID: "bad", Name: "Bad", Enabled: true, Action: Action{Type: "reject"}, Rules: []Rule{{Type: "domain", Value: "example.com"}}}}},
+		{AppliesTo: []string{"group-a"}, RuleSets: []RuleSet{{ID: "bad", Name: "Bad", Enabled: true, Action: Action{Type: "reject"}, Rules: []Rule{{Type: "domain", Value: "example.com"}}}}},
 	}
 	for index, config := range tests {
 		if err := Validate(config, groups); err == nil {
@@ -146,5 +148,110 @@ func TestUpdateDoesNotOverlapApply(t *testing.T) {
 	}
 	if applier.max != 1 {
 		t.Fatalf("concurrent applies = %d", applier.max)
+	}
+}
+
+func TestUpdateRejectsAppliesToWithoutDefault(t *testing.T) {
+	repository := &memoryRoutingRepository{groups: []store.ProxyGroupRecord{{ID: "group-a", Name: "A", Enabled: true}}}
+	service, err := NewService(repository, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = service.Update(context.Background(), Config{
+		AppliesTo: []string{"group-a"},
+		RuleSets: []RuleSet{{
+			ID: "ads", Name: "Ads", Enabled: true,
+			Action: Action{Type: "reject"},
+			Rules:  []Rule{{Type: "domain", Value: "example.com"}},
+		}},
+	})
+	if err == nil {
+		t.Fatal("empty default with applies_to was accepted")
+	}
+}
+
+func TestUpdateRuleSetsKeepsYAMLIntentAndDropsDisabledGroups(t *testing.T) {
+	repository := &memoryRoutingRepository{groups: []store.ProxyGroupRecord{
+		{ID: "group-a", Name: "A", Enabled: true},
+		{ID: "group-b", Name: "B", Enabled: false},
+	}}
+	service, err := NewService(repository, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stored := Config{
+		Default:   DefaultReject,
+		AppliesTo: []string{"group-a", "group-b"},
+		RuleSets: []RuleSet{{
+			ID: "old", Name: "Old", Enabled: true,
+			Action: Action{Type: "reject"},
+			Rules:  []Rule{{Type: "domain", Value: "old.example"}},
+		}},
+	}
+	encoded, err := json.Marshal(stored)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := repository.SetMetadata(context.Background(), MetadataKey, string(encoded)); err != nil {
+		t.Fatal(err)
+	}
+	updated, err := service.UpdateRuleSets(context.Background(), []RuleSet{{
+		ID: "ads", Name: "Ads", Enabled: true,
+		Action: Action{Type: "reject"},
+		Rules:  []Rule{{Type: "domain", Value: "example.com"}},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.Default != DefaultReject || len(updated.AppliesTo) != 1 || updated.AppliesTo[0] != "group-a" || updated.RuleSets[0].ID != "ads" {
+		t.Fatalf("updated = %+v", updated)
+	}
+}
+
+func TestUpdateRuleSetsWaitsForYAMLUpdate(t *testing.T) {
+	repository := &memoryRoutingRepository{groups: []store.ProxyGroupRecord{{ID: "group-a", Name: "A", Enabled: true}}}
+	applier := &gatingApplier{entered: make(chan struct{}, 2), release: make(chan struct{})}
+	service, err := NewService(repository, applier)
+	if err != nil {
+		t.Fatal(err)
+	}
+	yamlDoc := Config{
+		Default: DefaultReject, AppliesTo: []string{"group-a"},
+		RuleSets: []RuleSet{{
+			ID: "yaml-01", Name: "yaml", Enabled: true,
+			Action: Action{Type: "direct"},
+			Rules:  []Rule{{Type: "domain", Value: "keep.example"}},
+		}},
+	}
+	errCh := make(chan error, 2)
+	go func() { _, err := service.Update(context.Background(), yamlDoc); errCh <- err }()
+	<-applier.entered
+	go func() {
+		_, err := service.UpdateRuleSets(context.Background(), []RuleSet{{
+			ID: "ads", Name: "Ads", Enabled: true,
+			Action: Action{Type: "reject"},
+			Rules:  []Rule{{Type: "domain", Value: "ads.example"}},
+		}})
+		errCh <- err
+	}()
+	select {
+	case <-applier.entered:
+		t.Fatal("rule-set save overlapped the yaml apply")
+	case <-time.After(50 * time.Millisecond):
+	}
+	applier.release <- struct{}{}
+	<-applier.entered
+	applier.release <- struct{}{}
+	for index := 0; index < 2; index++ {
+		if err := <-errCh; err != nil {
+			t.Fatal(err)
+		}
+	}
+	got, err := service.Get(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Default != DefaultReject || len(got.AppliesTo) != 1 || len(got.RuleSets) != 1 || got.RuleSets[0].ID != "ads" {
+		t.Fatalf("stored = %+v", got)
 	}
 }

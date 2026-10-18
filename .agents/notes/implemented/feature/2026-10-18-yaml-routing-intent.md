@@ -16,17 +16,17 @@ Status: implemented
 
 一条 YAML 规则变成一个规则集, id 从 `yaml-01` 起, 优先级 10、20、30。`match` 恰好一个键。`domain_suffix` 去掉开头的点, `geoip` 大写, `network` 小写。`group` 先按 id 再按唯一的启用名称解析。
 
-`applies_to` 是这张默认值管到的代理组。不写它, `default: direct` 和 `default: reject` 不会拆掉其他监听器的 `proxy`, 也不会丢掉共享入口的用户名规则。写了它, 只有这些组的普通监听器去掉 `proxy` 改走规则, 也只有这些组里未钉节点的用户名会在 direct/reject 时去掉兜底。钉死到节点的用户名始终排在站点规则前面。
+`applies_to` 是这张默认值管到的代理组。不写它, 专用监听器的 `proxy` 保持原样, 共享入口上的用户名规则也全部留在站点规则前面, 所以 `default: direct` 和 `default: reject` 不会改到别的环境。写了它, 只有这些组的普通监听器去掉 `proxy` 改走规则; 也只有这些组里未钉节点的用户名排在站点规则后面, 从而能被 YAML 分流。`default: direct` 或 `reject` 时, 这些组的用户名兜底被去掉。钉死到节点的用户名始终排在站点规则前面。组身份在生成 `IN-USER` 时记在规则结构上, 不从规则文本里切, 因为组名本身可以含有 `),`。
 
-有 YAML `default` 时的顺序是: 住宅会话规则, 住宅监听器的 `IN-NAME` 兜底, 钉节点的 `IN-USER`, 站点规则, 其余组用户的 `IN-USER`, `applies_to` 里 `default: proxy` 的监听器兜底, TUN, 然后才是 `applies_to` 非空时的 tcp/udp REJECT, 最后 `MATCH,DIRECT`。没分配节点的住宅会话因此进失败关闭组, 不会先吃到 YAML 的 direct。旧 JSON 文档 `default` 为空, 顺序和 `proxy` 字段都保持原样。
+有 YAML `default` 时的顺序是: 住宅会话规则, 住宅监听器的 `IN-NAME` 兜底, 钉节点的 `IN-USER`, 不在 `applies_to` 里的组用户, 站点规则, `applies_to` 里且 `default: proxy` 的组用户, 这些组的专用监听器兜底, TUN, 然后才是 `applies_to` 非空且 `default: reject` 时的 tcp/udp REJECT, 最后 `MATCH,DIRECT`。没分配节点的住宅会话因此进失败关闭组, 不会先吃到 YAML 的 direct。`default` 为空是旧 JSON 文档, 顺序和 `proxy` 字段都保持原样; 空 `default` 再配非空 `applies_to` 直接拒绝, 编译器也不会因为这份组合删掉 `proxy`。
 
-管理页 PUT 只提交 `rule_sets`。请求里没有 `default` 或 `applies_to` 键时, 沿用已存的值。显式带上才覆盖。前端保存时把这两个字段原样带回去。
+管理页 PUT 只提交 `rule_sets`。服务在同一把锁里读出已存文档, 只换规则集, 并丢掉已经不存在或已停用的 `applies_to`。请求里就算带了 `default` 或 `applies_to` 也不写入, 避免过期页面盖掉刚应用的 YAML。新的 YAML 文档仍然拒绝停用、重名或找不到的组。
 
 ## Alternatives considered
 
 ### 让调用方继续 PUT JSON
 
-`PUT /api/v1/routing-rules` 已经能整份替换并回滚。否决把它当作这次的接口: 浏览器环境手里是 YAML。PUT 留着给管理页, 并且缺省字段不再把 YAML 的 default 清掉。
+`PUT /api/v1/routing-rules` 已经能整份替换并回滚。否决把它当作这次的接口: 浏览器环境手里是 YAML。PUT 留着给管理页改规则集。`default` 和 `applies_to` 只由 YAML 应用写入。
 
 ### 另写一个 Mihomo YAML 编译器
 
@@ -38,7 +38,7 @@ issue 初稿把翻译放在 `internal/compiler`。否决: 规则文本、作用�
 
 ### 不区分钉节点的身份和浏览器组
 
-把所有 `IN-USER` 都放在站点规则前面, YAML 对浏览器不生效。都放在后面, gh-pool 的 GitHub 流量会被站点规则抢走。现在只把动作是节点名、不是组名的那些规则留在站点规则前面。
+把所有 `IN-USER` 都放在站点规则前面, YAML 对浏览器不生效。都放在后面, 别的环境 (ps-pool) 和 gh-pool 的流量会被站点规则抢走。现在钉节点的身份, 以及不在 `applies_to` 里的组用户, 留在站点规则前面; 只有被点名的组排在后面。钉节点与否看生成规则时记下的组 id, 不看规则文本里最后一个 `),`。
 
 ### 只接受代理组 id
 
@@ -46,8 +46,8 @@ issue 初稿把翻译放在 `internal/compiler`。否决: 规则文本、作用�
 
 ## Consequences
 
-`process_name` 仍只能用 PUT JSON。`default` 不能写成一个组名。不写 `applies_to` 时, `default: direct` 不会把整个实例的未命中流量改成直连。空规则加 `default: proxy` 会清空已存规则。`GET /api/v1/proxy-groups` 仍然是组列表的 HTTP 形式, MCP 的 `list_groups` 读的是同一份。
+`process_name` 仍只能用 PUT JSON。`default` 不能写成一个组名。不写 `applies_to` 时, 站点规则碰不到已经有用户名兜底或 `proxy` 绑定的流量。空规则加 `default: proxy` 会清空已存规则。停用一个组不会让管理页的规则保存失败: 保存时会丢掉这个 id。`GET /api/v1/proxy-groups` 仍然是组列表的 HTTP 形式, MCP 的 `list_groups` 读的是同一份。
 
 ## Testing
 
-`yaml_test.go` 覆盖文档形状。`compiler_yaml_order_test.go` 覆盖未限定作用域时监听器仍带 `proxy`、`applies_to` 的兜底在站点规则之后、reject 只丢掉被点名的组、住宅兜底和 TUN 在拒绝规则之前、钉节点的身份在站点规则之前, 以及旧文档的原顺序。`routing_rules_test.go` 覆盖 PUT 省略 `default` 时保留原值, 以及 MCP 的 `apply_rules` 和 `tools/list`。
+`yaml_test.go` 覆盖文档形状。`compiler_yaml_order_test.go` 覆盖未限定作用域时监听器仍带 `proxy` 且别的组用户在站点规则前面、`applies_to` 的兜底在站点规则之后、reject 只丢掉被点名的组、住宅兜底和 TUN 在拒绝规则之前、钉节点的身份在站点规则之前、组名含 `),` 时仍按组 id 排在站点规则后面, 以及空 `default` 不删 `proxy`。`service_test.go` 覆盖空 `default` 加 `applies_to` 被拒绝, 规则保存丢掉已停用的组并留下 YAML 的 default, 以及这次保存不会和 YAML 热更新重叠。`routing_rules_test.go` 覆盖 PUT 带上过期的 `default` 时仍保留原值, 以及 MCP 的 `apply_rules` 和 `tools/list`。

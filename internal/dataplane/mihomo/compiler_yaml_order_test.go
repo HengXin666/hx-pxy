@@ -106,8 +106,8 @@ func TestYAMLDefaultProxyKeepsOtherListenersAndFollowsSiteRules(t *testing.T) {
 	site := indexOfRule(rules, "DOMAIN,keep.example,DIRECT")
 	shared := indexOfRule(rules, "AND,((IN-NAME,"+SharedListenerConfigName(listener.SharedInboundStandardOwner, "mixed")+"),(IN-USER,svc-b)),group-b")
 	fallback := indexOfRule(rules, "MATCH,DIRECT")
-	if site < 0 || shared < 0 || fallback < 0 || !(site < shared && shared < fallback) {
-		t.Fatalf("site rule must precede the group-user catch-all: %v", rules)
+	if site < 0 || shared < 0 || fallback < 0 || !(shared < site && site < fallback) {
+		t.Fatalf("unscoped default must keep the other group's user ahead of the site rule: %v", rules)
 	}
 }
 
@@ -129,9 +129,10 @@ func TestYAMLAppliesToScopesDedicatedFallbackAfterSiteRule(t *testing.T) {
 	}
 	site := indexOfRule(rules, "DOMAIN,keep.example,DIRECT")
 	ownGroup := indexOfRule(rules, "IN-NAME,"+listenerConfigName("listener-browser")+",group-a")
+	shared := indexOfRule(rules, "AND,((IN-NAME,"+SharedListenerConfigName(listener.SharedInboundStandardOwner, "mixed")+"),(IN-USER,svc-b)),group-b")
 	end := indexOfRule(rules, "MATCH,DIRECT")
-	if site < 0 || ownGroup < 0 || end < 0 || !(site < ownGroup && ownGroup < end) {
-		t.Fatalf("want site < own group < MATCH, rules = %v", rules)
+	if site < 0 || ownGroup < 0 || shared < 0 || end < 0 || !(shared < site && site < ownGroup && ownGroup < end) {
+		t.Fatalf("want other group < site < own group < MATCH, rules = %v", rules)
 	}
 }
 
@@ -154,8 +155,8 @@ func TestYAMLDirectAndRejectStayInsideAppliesTo(t *testing.T) {
 	if site < 0 || kept < 0 || reject < 0 || end < 0 || dropped >= 0 {
 		t.Fatalf("scoped reject rules = %v", rules)
 	}
-	if !(site < kept && kept < reject && reject < end) {
-		t.Fatalf("reject must follow the untouched group and precede MATCH: %v", rules)
+	if !(kept < site && site < reject && reject < end) {
+		t.Fatalf("untouched group must precede the site rule, and reject must precede MATCH: %v", rules)
 	}
 }
 
@@ -241,5 +242,51 @@ func TestLegacyRoutingKeepsListenerProxyAheadOfSiteRules(t *testing.T) {
 	shared := "AND,((IN-NAME," + SharedListenerConfigName(listener.SharedInboundStandardOwner, "mixed") + "),(IN-USER,svc-b)),group-b"
 	if indexOfRule(rules, shared) < 0 || indexOfRule(rules, shared) > indexOfRule(rules, "DOMAIN,keep.example,DIRECT") {
 		t.Fatalf("legacy shared user rule must stay ahead of site rules: %v", rules)
+	}
+}
+
+func TestEmptyDefaultKeepsListenerProxyDespiteAppliesTo(t *testing.T) {
+	document, _ := compileYAMLOrder(t, yamlOrderRepository{
+		routes:    routingrules.Config{AppliesTo: []string{"group-a"}, RuleSets: []routingrules.RuleSet{yamlSiteRule()}},
+		groups:    []store.ProxyGroupRecord{testGroup("group-a"), testGroup("group-b")},
+		listeners: browserListeners(t),
+	})
+	for _, entry := range listenersOf(t, document) {
+		if entry["name"] == listenerConfigName("listener-browser") && entry["proxy"] == "group-a" {
+			return
+		}
+	}
+	t.Fatalf("empty default dropped a listener proxy: %+v", listenersOf(t, document))
+}
+
+func TestSharedUserGroupIDWinsOverSeparatorInTheRuleText(t *testing.T) {
+	rule := sharedUserRule{Text: "AND,((IN-NAME,hx),(IN-USER,svc)),a),b", GroupID: "group-b"}
+	pinned, grouped := splitSharedUsers([]sharedUserRule{rule})
+	if len(pinned) != 0 || len(grouped) != 1 {
+		t.Fatalf("pinned = %+v, grouped = %+v", pinned, grouped)
+	}
+}
+
+func TestYAMLGroupNameSeparatorStaysBehindSiteRulesWhenScoped(t *testing.T) {
+	groupB := testGroup("group-b")
+	groupB.Name = "a),b"
+	_, rules := compileYAMLOrder(t, yamlOrderRepository{
+		routes: routingrules.Config{
+			Default: routingrules.DefaultProxy, AppliesTo: []string{"group-b"},
+			RuleSets: []routingrules.RuleSet{yamlSiteRule()},
+		},
+		groups: []store.ProxyGroupRecord{testGroup("group-a"), groupB},
+		listeners: []store.ListenerRecord{
+			aggregateListener("agg-standard", "mixed", listener.SharedInboundStandardOwner, 7890),
+			memberListener(t, "member-a", "service-a", "mixed", "group-a", "svc-a", "pass-a", listener.SharedInboundStandardOwner, 7890),
+			memberListener(t, "member-b", "service-b", "mixed", "group-b", "svc-b", "pass-b", listener.SharedInboundStandardOwner, 7890),
+		},
+	})
+	name := SharedListenerConfigName(listener.SharedInboundStandardOwner, "mixed")
+	other := indexOfRule(rules, "AND,((IN-NAME,"+name+"),(IN-USER,svc-a)),group-a")
+	site := indexOfRule(rules, "DOMAIN,keep.example,DIRECT")
+	named := indexOfRule(rules, "AND,((IN-NAME,"+name+"),(IN-USER,svc-b)),a),b")
+	if other < 0 || site < 0 || named < 0 || !(other < site && site < named) {
+		t.Fatalf("scoped group whose name contains '), ' must follow the site rule: %v", rules)
 	}
 }

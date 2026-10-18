@@ -446,13 +446,13 @@ function GroupRoutingPanel({ group, groups, config, onSaved, onNotice }: { group
   async function save() {
     setSaving(true)
     try {
-      const next: RoutingRulesConfig = { ...config, rule_sets: config.rule_sets.map((set) => {
+      const ruleSets = config.rule_sets.map((set) => {
         const routes = expandedRoutes(set, groups).filter((route) => route.proxy_group_id !== group.id)
         const action = actionFromValue(values[set.id] ?? "")
         if (action) routes.push({ proxy_group_id: group.id, action })
         return { ...set, routes, applied_group_ids: undefined, action: undefined }
-      }) }
-      const saved = await api.updateRoutingRules(next)
+      })
+      const saved = await api.updateRoutingRules({ rule_sets: ruleSets })
       onSaved(saved)
       onNotice(`${group.name} 的路由策略已应用`)
     } catch (error) { onNotice(error instanceof Error ? error.message : "应用路由策略失败", "error") }

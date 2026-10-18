@@ -140,6 +140,7 @@ type SettingsService interface {
 type RoutingRulesService interface {
 	Get(context.Context) (routingrules.Config, error)
 	Update(context.Context, routingrules.Config) (routingrules.Config, error)
+	UpdateRuleSets(context.Context, []routingrules.RuleSet) (routingrules.Config, error)
 	ApplyYAML(context.Context, string) (routingrules.Config, error)
 }
 

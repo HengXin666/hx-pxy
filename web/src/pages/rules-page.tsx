@@ -51,7 +51,7 @@ export function RulesPage({ onNotice }: RulesPageProps) {
 
   async function save() {
     setSaving(true)
-    try { setConfig(await api.updateRoutingRules(config)); onNotice("站点别名已保存并应用") }
+    try { setConfig(await api.updateRoutingRules({ rule_sets: config.rule_sets })); onNotice("站点别名已保存并应用") }
     catch (error) { onNotice(error instanceof Error ? error.message : "保存站点别名失败", "error") }
     finally { setSaving(false) }
   }
