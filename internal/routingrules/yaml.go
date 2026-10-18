@@ -3,6 +3,7 @@ package routingrules
 import (
 	"context"
 	"fmt"
+	"io"
 	"strings"
 
 	"github.com/HengXin666/hx-pxy/internal/store"
@@ -10,9 +11,8 @@ import (
 )
 
 // DefaultProxy is the YAML default that adds no rule. Unmatched traffic then
-// stays on the inbound's proxy group, because the Mihomo compiler already ends
-// the rule list with MATCH,DIRECT and the inbound listener's own rule sends
-// its traffic to that group.
+// stays on the inbound's proxy group through the compiler's listener fallback
+// rule.
 const (
 	DefaultProxy  = "proxy"
 	DefaultDirect = "direct"
@@ -41,9 +41,9 @@ type yamlRule struct {
 // Applying it replaces the stored document; it does not merge with it.
 //
 // default:proxy adds nothing. Unmatched traffic stays on the inbound's proxy
-// group because the Mihomo compiler ends every document with MATCH,DIRECT and
-// the inbound's own rule already sends its traffic to that group.
-// default:direct is that same MATCH,DIRECT, so it also adds nothing.
+// group through the compiler's listener fallback rule.
+// default:direct adds nothing as well, leaving unmatched traffic to the
+// compiler's final MATCH,DIRECT rule when no listener fallback applies.
 // default:reject becomes one final rule set (tcp and udp) compiled before
 // MATCH,DIRECT, so it wins without a second compiler and without editing the
 // hardcoded line. A default that names a proxy group is rejected: the inbound
@@ -54,6 +54,13 @@ func TranslateYAML(raw string, groups []store.ProxyGroupRecord) (Config, error) 
 	decoder := yaml.NewDecoder(strings.NewReader(raw))
 	decoder.KnownFields(true)
 	if err := decoder.Decode(&document); err != nil {
+		return Config{}, fmt.Errorf("%w: yaml: %v", ErrInvalid, err)
+	}
+	var extra yamlDocument
+	if err := decoder.Decode(&extra); err != io.EOF {
+		if err == nil {
+			return Config{}, fmt.Errorf("%w: yaml: multiple documents", ErrInvalid)
+		}
 		return Config{}, fmt.Errorf("%w: yaml: %v", ErrInvalid, err)
 	}
 	if document.Version != 1 {

@@ -119,10 +119,11 @@ func groupContainsNode(
 	return false
 }
 
-// compileResidentialClientRules runs before administrator routing rules so one
-// authenticated logical session always reaches its assigned residential slot
-// or DIRECT, independent of destination. Existing connections are explicitly
-// drained by the service when this action changes.
+// compileResidentialClientRules supplies the per-user fallback after
+// administrator routing rules. An authenticated logical session reaches its
+// assigned residential slot or DIRECT when no administrator rule matches.
+// Existing connections are explicitly drained by the service when this action
+// changes.
 func compileResidentialClientRules(
 	routes []store.ResidentialClientRouteRecord,
 	nodes map[string]compiledNode,

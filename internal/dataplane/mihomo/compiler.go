@@ -245,12 +245,10 @@ func (c *Compiler) Compile(ctx context.Context) (Compiled, error) {
 		if err != nil {
 			return Compiled{}, err
 		}
-		if len(clientRoutesForListener) > 0 {
-			residentialFallbackRules = append(
-				residentialFallbackRules,
-				"IN-NAME,"+listenerConfigName(record.ID)+","+egressName,
-			)
-		}
+		residentialFallbackRules = append(
+			residentialFallbackRules,
+			"IN-NAME,"+listenerConfigName(record.ID)+","+egressName,
+		)
 		listenerConfigs = append(listenerConfigs, config)
 		endpoints = append(endpoints, Endpoint{
 			ID:          record.ID,
@@ -298,7 +296,7 @@ func (c *Compiler) Compile(ctx context.Context) (Compiled, error) {
 		return Compiled{}, err
 	}
 
-	compiledRules, err := compileResidentialClientRules(clientRoutes, nodeByID)
+	compiledResidentialClientRules, err := compileResidentialClientRules(clientRoutes, nodeByID)
 	if err != nil {
 		return Compiled{}, err
 	}
@@ -306,8 +304,22 @@ func (c *Compiler) Compile(ctx context.Context) (Compiled, error) {
 	// username must always reach its own proxy group, whatever the
 	// destination, otherwise two services sharing one port would leak into
 	// each other's egress.
+	// Administrator routing must run before the username and listener fallback
+	// rules. This lets shared and standalone inbounds opt into YAML routing while
+	// preserving their existing egress when no YAML rule matches.
+	routeConfigWithoutFallback := routeConfig
+	fallbackConfig := routingrules.Config{}
+	routeConfigWithoutFallback.RuleSets = make([]routingrules.RuleSet, 0, len(routeConfig.RuleSets))
+	for _, set := range routeConfig.RuleSets {
+		if set.ID == "yaml-default" {
+			fallbackConfig.RuleSets = append(fallbackConfig.RuleSets, set)
+			continue
+		}
+		routeConfigWithoutFallback.RuleSets = append(routeConfigWithoutFallback.RuleSets, set)
+	}
+	compiledRules = routingrules.Compile(routeConfigWithoutFallback, groups, listeners, listenerConfigName)
 	compiledRules = append(compiledRules, sharedInboundRules...)
-	compiledRules = append(compiledRules, routingrules.Compile(routeConfig, groups, listeners, listenerConfigName)...)
+	compiledRules = append(compiledRules, compiledResidentialClientRules...)
 	compiledRules = append(compiledRules, residentialFallbackRules...)
 	tun, tunRule, err := compileTUN(settings, groups)
 	if err != nil {
@@ -316,6 +328,9 @@ func (c *Compiler) Compile(ctx context.Context) (Compiled, error) {
 	if tunRule != "" {
 		compiledRules = append(compiledRules, tunRule)
 	}
+	// Keep the YAML reject fallback after listener and TUN-specific rules, while
+	// retaining it before the final direct catch-all.
+	compiledRules = append(compiledRules, routingrules.Compile(fallbackConfig, groups, listeners, listenerConfigName)...)
 	// YAML default:proxy is not a rule: unmatched traffic stays on the inbound
 	// proxy group, and this line is what puts it there. default:direct is the
 	// same line. default:reject is a rule compiled above, so it wins first.
@@ -583,9 +598,6 @@ func (c *Compiler) compileListener(
 		"listen": record.BindAddress,
 		"port":   record.Port,
 		"users":  []any{},
-	}
-	if len(clientRoutes) == 0 {
-		config["proxy"] = groupName
 	}
 	if record.Kind == "http" || record.Kind == "socks" || record.Kind == "mixed" {
 		config["udp"] = true

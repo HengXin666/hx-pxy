@@ -113,7 +113,7 @@ func TestCompileListenerMapsResidentialVlessCredentialsToUUID(t *testing.T) {
 	}
 }
 
-func TestCompileListenerWithoutClientRoutesKeepsForcedProxy(t *testing.T) {
+func TestCompileListenerWithoutClientRoutesLeavesRoutingToRules(t *testing.T) {
 	t.Parallel()
 	compiler := &Compiler{cipher: benchmarkCipher{}}
 	config, err := compiler.compileListener(store.ListenerRecord{
@@ -123,8 +123,8 @@ func TestCompileListenerWithoutClientRoutesKeepsForcedProxy(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if config["proxy"] != "residential-group" {
-		t.Fatalf("listener proxy = %v, want residential-group", config["proxy"])
+	if _, exists := config["proxy"]; exists {
+		t.Fatalf("listener unexpectedly bypasses routing rules with proxy = %v", config["proxy"])
 	}
 }
 
