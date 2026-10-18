@@ -26,7 +26,7 @@ Status: implemented
 
 ### 让调用方继续 PUT JSON
 
-`PUT /api/v1/routing-rules` 已经能整份替换并回滚。否决把它当作这次的接口: 浏览器环境手里是 YAML。PUT 留着给管理页改规则集。`default` 和 `applies_to` 只由 YAML 应用写入。
+管理页的 `PUT /api/v1/routing-rules` 只替换 `rule_sets`。`default` 和 `applies_to` 留在已存文档里, 热更新和回滚仍走原来的锁。否决把 PUT 当作浏览器的接口: 调用方拿的是 YAML, 不是这份 JSON 规则集。整份意图由 `POST /api/v1/routing-rules/apply` 替换。
 
 ### 另写一个 Mihomo YAML 编译器
 
