@@ -191,9 +191,7 @@ func save(ctx context.Context, repository Repository, config Config) error {
 }
 
 func Validate(config Config, groups []store.ProxyGroupRecord) error {
-	switch config.Default {
-	case "", DefaultProxy, DefaultDirect, DefaultReject:
-	default:
+	if config.Default != "" && !knownDefault(config.Default) {
 		return fmt.Errorf("%w: default must be proxy, direct or reject", ErrInvalid)
 	}
 	if config.Default == "" && len(config.AppliesTo) > 0 {

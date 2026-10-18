@@ -8,6 +8,7 @@ import (
 	"github.com/HengXin666/hx-pxy/internal/nodeparse"
 	"github.com/HengXin666/hx-pxy/internal/proxygroup"
 	"github.com/HengXin666/hx-pxy/internal/residential"
+	"github.com/HengXin666/hx-pxy/internal/routingrules"
 	"github.com/HengXin666/hx-pxy/internal/subscription"
 )
 
@@ -211,6 +212,12 @@ func (s *Server) CapabilityCatalog() CapabilityCatalog {
 			Name:        "node_protocol",
 			Description: "Outbound protocol names accepted from native Mihomo YAML. Availability still depends on the installed Mihomo build.",
 			Values:      nodeparse.SupportedProtocols(),
+		},
+		{
+			Name:        "routing_default",
+			Description: "Unmatched traffic for the groups named by applies_to. proxy keeps that group's inbound, direct falls through to MATCH,DIRECT, and reject appends tcp and udp REJECT only when applies_to is non-empty.",
+			Values:      routingrules.SupportedDefaults(),
+			Default:     routingrules.DefaultProxy,
 		},
 	}
 	return CapabilityCatalog{

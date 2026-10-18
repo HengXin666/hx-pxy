@@ -21,6 +21,21 @@ const (
 	DefaultReject = "reject"
 )
 
+// SupportedDefaults is the closed set Validate and TranslateYAML accept.
+// The capability catalog publishes this list and nothing else.
+func SupportedDefaults() []string {
+	return []string{DefaultProxy, DefaultDirect, DefaultReject}
+}
+
+func knownDefault(value string) bool {
+	for _, candidate := range SupportedDefaults() {
+		if value == candidate {
+			return true
+		}
+	}
+	return false
+}
+
 // yamlDocument is the intent layer from issue #3. It is not a Mihomo document:
 // Translate turns it into the routing Config that Update already validates,
 // saves and applies.
@@ -246,12 +261,10 @@ func translateDefault(value string) (string, error) {
 	if value == "" {
 		value = DefaultProxy
 	}
-	switch value {
-	case DefaultProxy, DefaultDirect, DefaultReject:
-		return value, nil
-	default:
+	if !knownDefault(value) {
 		return "", fmt.Errorf("%w: default must be proxy, direct or reject", ErrInvalid)
 	}
+	return value, nil
 }
 
 // ApplyYAML translates a document and replaces the stored routing config

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -318,9 +319,7 @@ func (c *Compiler) Compile(ctx context.Context) (Compiled, error) {
 		return Compiled{}, err
 	}
 	siteRules := routingrules.Compile(routeConfig, groups, listeners, listenerConfigName)
-	switch routeConfig.Default {
-	case "", routingrules.DefaultProxy, routingrules.DefaultDirect, routingrules.DefaultReject:
-	default:
+	if routeConfig.Default != "" && !slices.Contains(routingrules.SupportedDefaults(), routeConfig.Default) {
 		return Compiled{}, fmt.Errorf("routing default %q is unsupported", routeConfig.Default)
 	}
 	pinnedUsers, groupedUsers := splitSharedUsers(sharedInboundRules)

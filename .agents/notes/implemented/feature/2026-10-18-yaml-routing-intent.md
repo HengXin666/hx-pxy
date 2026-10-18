@@ -18,7 +18,7 @@ Status: implemented
 
 `applies_to` 是这张默认值管到的代理组。不写它, 专用监听器的 `proxy` 保持原样, 共享入口上的用户名规则也全部留在站点规则前面, 所以 `default: direct` 和 `default: reject` 不会改到别的环境。写了它, 只有这些组的普通监听器去掉 `proxy` 改走规则; 也只有这些组里未钉节点的用户名排在站点规则后面, 从而能被 YAML 分流。`default: direct` 或 `reject` 时, 这些组的用户名兜底被去掉。钉死到节点的用户名始终排在站点规则前面。组身份在生成 `IN-USER` 时记在规则结构上, 不从规则文本里切, 因为组名本身可以含有 `),`。
 
-有 YAML `default` 时的顺序是: 住宅会话规则, 住宅监听器的 `IN-NAME` 兜底, 钉节点的 `IN-USER`, 不在 `applies_to` 里的组用户, 站点规则, `applies_to` 里且 `default: proxy` 的组用户, 这些组的专用监听器兜底, TUN, 然后才是 `applies_to` 非空且 `default: reject` 时的 tcp/udp REJECT, 最后 `MATCH,DIRECT`。没分配节点的住宅会话因此进失败关闭组, 不会先吃到 YAML 的 direct。`default` 为空是旧 JSON 文档, 顺序和 `proxy` 字段都保持原样; 空 `default` 再配非空 `applies_to` 直接拒绝, 编译器也不会因为这份组合删掉 `proxy`。
+有 YAML `default` 时的顺序是: 住宅会话规则, 住宅监听器的 `IN-NAME` 兜底, 钉节点的 `IN-USER`, 不在 `applies_to` 里的组用户, 站点规则, `applies_to` 里且 `default: proxy` 的组用户, 这些组的专用监听器兜底, TUN, 然后才是 `applies_to` 非空且 `default: reject` 时的 tcp/udp REJECT, 最后 `MATCH,DIRECT`。没分配节点的住宅会话因此进失败关闭组, 不会先吃到 YAML 的 direct。`default` 只能是 `proxy`、`direct` 或 `reject`。能力目录把这三项收成枚举 `routing_default`, 和 `SupportedDefaults` 是同一份列表。空的 `default` 是旧 JSON 文档, 顺序和 `proxy` 字段都保持原样; 空 `default` 再配非空 `applies_to` 直接拒绝, 编译器也不会因为这份组合删掉 `proxy`。
 
 管理页 PUT 只提交 `rule_sets`。服务在同一把锁里读出已存文档, 只换规则集。已经删除的 `applies_to` 组 id 会丢掉, 停用的组还留着, 重新启用后作用范围还在。请求里就算带了 `default` 或 `applies_to` 也不写入, 避免过期页面盖掉刚应用的 YAML。新的 YAML 文档仍然拒绝停用、重名或找不到的组。`applies_to` 的组名会去掉首尾空白。MCP 工具失败时, 只有校验错误会把原文返回给调用方, 其余记日志后回一句通用失败。
 
