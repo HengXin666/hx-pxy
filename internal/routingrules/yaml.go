@@ -232,7 +232,7 @@ func translateAppliesTo(values []string, groups []store.ProxyGroupRecord) ([]str
 	}
 	resolved := make([]string, 0, len(values))
 	for _, value := range values {
-		group, err := resolveGroup(value, groups)
+		group, err := resolveGroup(strings.TrimSpace(value), groups)
 		if err != nil {
 			return nil, fmt.Errorf("%w: applies_to: %v", ErrInvalid, err)
 		}

@@ -139,24 +139,32 @@ func TestYAMLAppliesToScopesDedicatedFallbackAfterSiteRule(t *testing.T) {
 func TestYAMLDirectAndRejectStayInsideAppliesTo(t *testing.T) {
 	listeners := browserListeners(t)
 	listeners = append(listeners, memberListener(t, "member-a", "service-a", "mixed", "group-a", "svc-a", "pass-a", listener.SharedInboundStandardOwner, 7890))
-	_, rules := compileYAMLOrder(t, yamlOrderRepository{
-		routes: routingrules.Config{
-			Default: routingrules.DefaultReject, AppliesTo: []string{"group-b"},
-			RuleSets: []routingrules.RuleSet{yamlSiteRule()},
-		},
-		groups:    []store.ProxyGroupRecord{testGroup("group-a"), testGroup("group-b")},
-		listeners: listeners,
-	})
-	site := indexOfRule(rules, "DOMAIN,keep.example,DIRECT")
-	kept := indexOfRule(rules, "AND,((IN-NAME,"+SharedListenerConfigName(listener.SharedInboundStandardOwner, "mixed")+"),(IN-USER,svc-a)),group-a")
-	dropped := indexOfRule(rules, "AND,((IN-NAME,"+SharedListenerConfigName(listener.SharedInboundStandardOwner, "mixed")+"),(IN-USER,svc-b)),group-b")
-	reject := indexOfRule(rules, "NETWORK,tcp,REJECT")
-	end := indexOfRule(rules, "MATCH,DIRECT")
-	if site < 0 || kept < 0 || reject < 0 || end < 0 || dropped >= 0 {
-		t.Fatalf("scoped reject rules = %v", rules)
-	}
-	if !(kept < site && site < reject && reject < end) {
-		t.Fatalf("untouched group must precede the site rule, and reject must precede MATCH: %v", rules)
+	for _, fallback := range []string{routingrules.DefaultDirect, routingrules.DefaultReject} {
+		_, rules := compileYAMLOrder(t, yamlOrderRepository{
+			routes: routingrules.Config{
+				Default: fallback, AppliesTo: []string{"group-b"},
+				RuleSets: []routingrules.RuleSet{yamlSiteRule()},
+			},
+			groups:    []store.ProxyGroupRecord{testGroup("group-a"), testGroup("group-b")},
+			listeners: listeners,
+		})
+		site := indexOfRule(rules, "DOMAIN,keep.example,DIRECT")
+		kept := indexOfRule(rules, "AND,((IN-NAME,"+SharedListenerConfigName(listener.SharedInboundStandardOwner, "mixed")+"),(IN-USER,svc-a)),group-a")
+		dropped := indexOfRule(rules, "AND,((IN-NAME,"+SharedListenerConfigName(listener.SharedInboundStandardOwner, "mixed")+"),(IN-USER,svc-b)),group-b")
+		end := indexOfRule(rules, "MATCH,DIRECT")
+		if site < 0 || kept < 0 || end < 0 || dropped >= 0 || !(kept < site && site < end) {
+			t.Fatalf("%s rules = %v", fallback, rules)
+		}
+		reject := indexOfRule(rules, "NETWORK,tcp,REJECT")
+		if fallback == routingrules.DefaultReject {
+			if reject < 0 || !(site < reject && reject < end) {
+				t.Fatalf("reject must follow the site rule and precede MATCH: %v", rules)
+			}
+			continue
+		}
+		if reject >= 0 {
+			t.Fatalf("direct added a reject rule: %v", rules)
+		}
 	}
 }
 

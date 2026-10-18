@@ -124,8 +124,9 @@ func (s *Service) Update(ctx context.Context, config Config) (Config, error) {
 // UpdateRuleSets replaces rule sets and keeps the stored YAML default and
 // applies_to. The read and the write share this lock, so a concurrent
 // ApplyYAML cannot be overwritten by a default the caller loaded earlier.
-// applies_to ids whose group was later disabled or deleted are dropped here;
-// a new YAML document still rejects those groups in TranslateYAML.
+// An applies_to id whose group was deleted is dropped. A disabled group stays,
+// so enabling it again keeps the scope. A new YAML document still rejects a
+// disabled, missing or ambiguous group in TranslateYAML.
 func (s *Service) UpdateRuleSets(ctx context.Context, ruleSets []RuleSet) (Config, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -143,7 +144,7 @@ func (s *Service) persist(ctx context.Context, config Config) (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
-	config.AppliesTo = enabledAppliesTo(config.AppliesTo, groups)
+	config.AppliesTo = knownAppliesTo(config.AppliesTo, groups)
 	if err := Validate(config, groups); err != nil {
 		return Config{}, err
 	}
@@ -167,16 +168,14 @@ func (s *Service) persist(ctx context.Context, config Config) (Config, error) {
 	return config, nil
 }
 
-func enabledAppliesTo(ids []string, groups []store.ProxyGroupRecord) []string {
-	enabled := make(map[string]struct{}, len(groups))
+func knownAppliesTo(ids []string, groups []store.ProxyGroupRecord) []string {
+	known := make(map[string]struct{}, len(groups))
 	for _, group := range groups {
-		if group.Enabled {
-			enabled[group.ID] = struct{}{}
-		}
+		known[group.ID] = struct{}{}
 	}
 	kept := make([]string, 0, len(ids))
 	for _, id := range ids {
-		if _, ok := enabled[id]; ok {
+		if _, ok := known[id]; ok {
 			kept = append(kept, id)
 		}
 	}
@@ -201,16 +200,16 @@ func Validate(config Config, groups []store.ProxyGroupRecord) error {
 		return fmt.Errorf("%w: applies_to requires a default of proxy, direct or reject", ErrInvalid)
 	}
 	groupIDs := make(map[string]struct{}, len(groups))
-	enabledIDs := make(map[string]struct{}, len(groups))
 	for _, group := range groups {
 		groupIDs[group.ID] = struct{}{}
-		if group.Enabled {
-			enabledIDs[group.ID] = struct{}{}
-		}
 	}
+	// Disabled groups are allowed. The compiler skips them, and TranslateYAML
+	// is what rejects a new document that names one. Deleting the group is a
+	// different problem: knownAppliesTo drops that id before this check, so a
+	// rules-page save does not 422.
 	for _, groupID := range config.AppliesTo {
-		if _, enabled := enabledIDs[groupID]; !enabled {
-			return fmt.Errorf("%w: applies_to references a missing or disabled group", ErrInvalid)
+		if _, exists := groupIDs[groupID]; !exists {
+			return fmt.Errorf("%w: applies_to references a missing group", ErrInvalid)
 		}
 	}
 	if len(config.RuleSets) > 100 {

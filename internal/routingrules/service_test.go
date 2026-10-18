@@ -55,7 +55,7 @@ func TestValidateRejectsUnsafeAndMissingReferences(t *testing.T) {
 		{RuleSets: []RuleSet{{ID: "bad", Name: "Bad", Enabled: true, Action: Action{Type: "reject"}, Rules: []Rule{{Type: "domain", Value: "example.com,REJECT"}}}}},
 		{RuleSets: []RuleSet{{ID: "bad", Name: "Bad", Enabled: true, AppliedGroupIDs: []string{"missing"}, Action: Action{Type: "direct"}, Rules: []Rule{{Type: "domain", Value: "example.com"}}}}},
 		{Default: "sideways", RuleSets: []RuleSet{{ID: "bad", Name: "Bad", Enabled: true, Action: Action{Type: "reject"}, Rules: []Rule{{Type: "domain", Value: "example.com"}}}}},
-		{AppliesTo: []string{"group-a"}, RuleSets: []RuleSet{{ID: "bad", Name: "Bad", Enabled: true, Action: Action{Type: "reject"}, Rules: []Rule{{Type: "domain", Value: "example.com"}}}}},
+		{Default: DefaultProxy, AppliesTo: []string{"missing"}, RuleSets: []RuleSet{{ID: "bad", Name: "Bad", Enabled: true, Action: Action{Type: "reject"}, Rules: []Rule{{Type: "domain", Value: "example.com"}}}}},
 	}
 	for index, config := range tests {
 		if err := Validate(config, groups); err == nil {
@@ -151,6 +151,21 @@ func TestUpdateDoesNotOverlapApply(t *testing.T) {
 	}
 }
 
+func TestValidateAllowsDisabledAppliesToGroup(t *testing.T) {
+	groups := []store.ProxyGroupRecord{{ID: "group-a", Enabled: false}}
+	config := Config{
+		Default: DefaultProxy, AppliesTo: []string{"group-a"},
+		RuleSets: []RuleSet{{
+			ID: "ads", Name: "Ads", Enabled: true,
+			Action: Action{Type: "reject"},
+			Rules:  []Rule{{Type: "domain", Value: "example.com"}},
+		}},
+	}
+	if err := Validate(config, groups); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestUpdateRejectsAppliesToWithoutDefault(t *testing.T) {
 	repository := &memoryRoutingRepository{groups: []store.ProxyGroupRecord{{ID: "group-a", Name: "A", Enabled: true}}}
 	service, err := NewService(repository, nil)
@@ -170,7 +185,7 @@ func TestUpdateRejectsAppliesToWithoutDefault(t *testing.T) {
 	}
 }
 
-func TestUpdateRuleSetsKeepsYAMLIntentAndDropsDisabledGroups(t *testing.T) {
+func TestUpdateRuleSetsKeepsDisabledGroupAndDropsDeletedID(t *testing.T) {
 	repository := &memoryRoutingRepository{groups: []store.ProxyGroupRecord{
 		{ID: "group-a", Name: "A", Enabled: true},
 		{ID: "group-b", Name: "B", Enabled: false},
@@ -181,7 +196,7 @@ func TestUpdateRuleSetsKeepsYAMLIntentAndDropsDisabledGroups(t *testing.T) {
 	}
 	stored := Config{
 		Default:   DefaultReject,
-		AppliesTo: []string{"group-a", "group-b"},
+		AppliesTo: []string{"group-a", "group-b", "deleted"},
 		RuleSets: []RuleSet{{
 			ID: "old", Name: "Old", Enabled: true,
 			Action: Action{Type: "reject"},
@@ -203,7 +218,7 @@ func TestUpdateRuleSetsKeepsYAMLIntentAndDropsDisabledGroups(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if updated.Default != DefaultReject || len(updated.AppliesTo) != 1 || updated.AppliesTo[0] != "group-a" || updated.RuleSets[0].ID != "ads" {
+	if updated.Default != DefaultReject || len(updated.AppliesTo) != 2 || updated.AppliesTo[0] != "group-a" || updated.AppliesTo[1] != "group-b" || updated.RuleSets[0].ID != "ads" {
 		t.Fatalf("updated = %+v", updated)
 	}
 }

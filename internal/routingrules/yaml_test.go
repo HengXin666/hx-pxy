@@ -127,3 +127,35 @@ func TestTranslateYAMLEmptyRulesWithDefaultProxyClearsDocument(t *testing.T) {
 		t.Fatalf("config = %+v", config)
 	}
 }
+
+func TestTranslateYAMLAppliesToResolvesNameIDAndWhitespace(t *testing.T) {
+	byName := "version: 1\nname: n\ndefault: proxy\napplies_to:\n  - github-group\nrules: []\n"
+	config, err := TranslateYAML(byName, groups())
+	if err != nil || len(config.AppliesTo) != 1 || config.AppliesTo[0] != "group-github" {
+		t.Fatalf("name = %+v, err = %v", config.AppliesTo, err)
+	}
+	byID := "version: 1\nname: n\ndefault: proxy\napplies_to:\n  - group-github\nrules: []\n"
+	config, err = TranslateYAML(byID, groups())
+	if err != nil || len(config.AppliesTo) != 1 || config.AppliesTo[0] != "group-github" {
+		t.Fatalf("id = %+v, err = %v", config.AppliesTo, err)
+	}
+	padded := "version: 1\nname: n\ndefault: proxy\napplies_to:\n  - \" github-group \"\nrules: []\n"
+	config, err = TranslateYAML(padded, groups())
+	if err != nil || len(config.AppliesTo) != 1 || config.AppliesTo[0] != "group-github" {
+		t.Fatalf("padded = %+v, err = %v", config.AppliesTo, err)
+	}
+	ambiguous := []store.ProxyGroupRecord{
+		{ID: "a", Name: "same", Enabled: true},
+		{ID: "b", Name: "same", Enabled: true},
+	}
+	if _, err := TranslateYAML("version: 1\nname: n\ndefault: proxy\napplies_to:\n  - same\nrules: []\n", ambiguous); err == nil || !strings.Contains(err.Error(), "ambiguous") {
+		t.Fatalf("ambiguous = %v", err)
+	}
+	disabled := []store.ProxyGroupRecord{{ID: "group-github", Name: "github-group", Enabled: false}}
+	if _, err := TranslateYAML(byName, disabled); err == nil || !strings.Contains(err.Error(), "disabled") {
+		t.Fatalf("disabled = %v", err)
+	}
+	if _, err := TranslateYAML("version: 1\nname: n\ndefault: proxy\napplies_to:\n  - missing\nrules: []\n", groups()); err == nil || !strings.Contains(err.Error(), "not found") {
+		t.Fatalf("missing = %v", err)
+	}
+}

@@ -20,7 +20,7 @@ Status: implemented
 
 有 YAML `default` 时的顺序是: 住宅会话规则, 住宅监听器的 `IN-NAME` 兜底, 钉节点的 `IN-USER`, 不在 `applies_to` 里的组用户, 站点规则, `applies_to` 里且 `default: proxy` 的组用户, 这些组的专用监听器兜底, TUN, 然后才是 `applies_to` 非空且 `default: reject` 时的 tcp/udp REJECT, 最后 `MATCH,DIRECT`。没分配节点的住宅会话因此进失败关闭组, 不会先吃到 YAML 的 direct。`default` 为空是旧 JSON 文档, 顺序和 `proxy` 字段都保持原样; 空 `default` 再配非空 `applies_to` 直接拒绝, 编译器也不会因为这份组合删掉 `proxy`。
 
-管理页 PUT 只提交 `rule_sets`。服务在同一把锁里读出已存文档, 只换规则集, 并丢掉已经不存在或已停用的 `applies_to`。请求里就算带了 `default` 或 `applies_to` 也不写入, 避免过期页面盖掉刚应用的 YAML。新的 YAML 文档仍然拒绝停用、重名或找不到的组。
+管理页 PUT 只提交 `rule_sets`。服务在同一把锁里读出已存文档, 只换规则集。已经删除的 `applies_to` 组 id 会丢掉, 停用的组还留着, 重新启用后作用范围还在。请求里就算带了 `default` 或 `applies_to` 也不写入, 避免过期页面盖掉刚应用的 YAML。新的 YAML 文档仍然拒绝停用、重名或找不到的组。`applies_to` 的组名会去掉首尾空白。MCP 工具失败时, 只有校验错误会把原文返回给调用方, 其余记日志后回一句通用失败。
 
 ## Alternatives considered
 
@@ -46,8 +46,8 @@ issue 初稿把翻译放在 `internal/compiler`。否决: 规则文本、作用�
 
 ## Consequences
 
-`process_name` 仍只能用 PUT JSON。`default` 不能写成一个组名。不写 `applies_to` 时, 站点规则碰不到已经有用户名兜底或 `proxy` 绑定的流量。空规则加 `default: proxy` 会清空已存规则。停用一个组不会让管理页的规则保存失败: 保存时会丢掉这个 id。`GET /api/v1/proxy-groups` 仍然是组列表的 HTTP 形式, MCP 的 `list_groups` 读的是同一份。
+`process_name` 仍只能用 PUT JSON。`default` 不能写成一个组名。不写 `applies_to` 时, 站点规则碰不到已经有用户名兜底或 `proxy` 绑定的流量, 也不会追加 REJECT。空规则加 `default: proxy` 会清空已存规则。停用一个已被 `applies_to` 点名的组不会让管理页保存失败, 删掉这个组则下次保存时去掉那个 id。`GET /api/v1/proxy-groups` 仍然是组列表的 HTTP 形式, MCP 的 `list_groups` 读的是同一份。
 
 ## Testing
 
-`yaml_test.go` 覆盖文档形状。`compiler_yaml_order_test.go` 覆盖未限定作用域时监听器仍带 `proxy` 且别的组用户在站点规则前面、`applies_to` 的兜底在站点规则之后、reject 只丢掉被点名的组、住宅兜底和 TUN 在拒绝规则之前、钉节点的身份在站点规则之前、组名含 `),` 时仍按组 id 排在站点规则后面, 以及空 `default` 不删 `proxy`。`service_test.go` 覆盖空 `default` 加 `applies_to` 被拒绝, 规则保存丢掉已停用的组并留下 YAML 的 default, 以及这次保存不会和 YAML 热更新重叠。`routing_rules_test.go` 覆盖 PUT 带上过期的 `default` 时仍保留原值, 以及 MCP 的 `apply_rules` 和 `tools/list`。
+`yaml_test.go` 覆盖文档形状, 以及 `applies_to` 按名称、id、空白、停用、重名和缺失解析。`compiler_yaml_order_test.go` 覆盖未限定作用域时监听器仍带 `proxy` 且别的组用户在站点规则前面、`applies_to` 的兜底在站点规则之后、direct 和 reject 都只丢掉被点名的组、住宅兜底和 TUN 在拒绝规则之前、钉节点的身份在站点规则之前、组名含 `),` 时仍按组 id 排在站点规则后面, 以及空 `default` 不删 `proxy`。`service_test.go` 覆盖空 `default` 加 `applies_to` 被拒绝, 停用的组可以留在 `applies_to` 里, 已删除的 id 在规则保存时丢掉, 以及这次保存不会和 YAML 热更新重叠。`routing_rules_test.go` 覆盖 PUT 带上过期的 `default` 时仍保留原值, MCP 的 `apply_rules` 和 `tools/list`, 尾随 JSON, 超限 413, 以及未分类工具错误不把内部文本返回给调用方。

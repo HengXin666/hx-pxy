@@ -1,8 +1,13 @@
 package api
 
 import (
+	"bytes"
 	"encoding/json"
+	"errors"
+	"io"
 	"net/http"
+
+	"github.com/HengXin666/hx-pxy/internal/routingrules"
 )
 
 // handleRoutingMCP is the MCP endpoint for the three routing operations the
@@ -15,10 +20,22 @@ func (s *Server) handleRoutingMCP(writer http.ResponseWriter, request *http.Requ
 		return
 	}
 	request.Body = http.MaxBytesReader(writer, request.Body, 64<<10)
+	raw, err := io.ReadAll(request.Body)
+	if err != nil {
+		if s.writeMCPTooLarge(writer, request, err) {
+			return
+		}
+		writeMCPError(writer, nil, -32700, "request body could not be read")
+		return
+	}
+	decoder := json.NewDecoder(bytes.NewReader(raw))
 	var call mcpRequest
-	decoder := json.NewDecoder(request.Body)
 	if err := decoder.Decode(&call); err != nil {
 		writeMCPError(writer, nil, -32700, "request body is not JSON")
+		return
+	}
+	if err := decoder.Decode(&struct{}{}); err != io.EOF {
+		writeMCPError(writer, call.ID, -32700, "request body must contain exactly one JSON value")
 		return
 	}
 	if call.JSONRPC != "2.0" || call.Method == "" {
@@ -97,8 +114,15 @@ func (s *Server) callRoutingTool(writer http.ResponseWriter, request *http.Reque
 		return
 	}
 	if err != nil {
+		text := "operation failed"
+		var safe mcpError
+		if errors.As(err, &safe) || errors.Is(err, routingrules.ErrInvalid) {
+			text = err.Error()
+		} else {
+			s.logger.ErrorContext(request.Context(), "MCP routing tool failed", "request_id", requestID(request), "error", err)
+		}
 		writeMCPResult(writer, call.ID, map[string]any{
-			"content": []map[string]any{{"type": "text", "text": err.Error()}},
+			"content": []map[string]any{{"type": "text", "text": text}},
 			"isError": true,
 		})
 		return
@@ -129,6 +153,15 @@ type mcpError string
 func errMCP(text string) error { return mcpError(text) }
 
 func (err mcpError) Error() string { return string(err) }
+
+func (s *Server) writeMCPTooLarge(writer http.ResponseWriter, request *http.Request, err error) bool {
+	var tooLarge *http.MaxBytesError
+	if !errors.As(err, &tooLarge) {
+		return false
+	}
+	s.writeAPIError(writer, request, http.StatusRequestEntityTooLarge, "payload_too_large", "json body is larger than 64KiB")
+	return true
+}
 
 func writeMCPResult(writer http.ResponseWriter, id any, result any) {
 	writeJSON(writer, http.StatusOK, map[string]any{"jsonrpc": "2.0", "id": id, "result": result})

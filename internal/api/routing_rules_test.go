@@ -3,6 +3,8 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -16,6 +18,7 @@ import (
 type fakeRoutingRulesService struct {
 	config  routingrules.Config
 	applied string
+	err     error
 }
 
 func (service *fakeRoutingRulesService) Get(context.Context) (routingrules.Config, error) {
@@ -31,6 +34,9 @@ func (service *fakeRoutingRulesService) UpdateRuleSets(_ context.Context, ruleSe
 }
 func (service *fakeRoutingRulesService) ApplyYAML(_ context.Context, raw string) (routingrules.Config, error) {
 	service.applied = raw
+	if service.err != nil {
+		return routingrules.Config{}, service.err
+	}
 	service.config = routingrules.Config{RuleSets: []routingrules.RuleSet{{ID: "yaml-01", Name: "from-yaml", Enabled: true}}}
 	return service.config, nil
 }
@@ -112,5 +118,49 @@ func TestRoutingMCPApplyAndRead(t *testing.T) {
 	server.Handler().ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, "/api/v1/mcp", strings.NewReader(`{"jsonrpc":"2.0","id":2,"method":"tools/list"}`)))
 	if recorder.Code != http.StatusOK || !strings.Contains(recorder.Body.String(), "list_groups") || !strings.Contains(recorder.Body.String(), "get_rules") {
 		t.Fatalf("tools/list = %s", recorder.Body.String())
+	}
+}
+
+func TestRoutingMCPRejectsTrailingJSONAndOversizedBody(t *testing.T) {
+	service := &fakeRoutingRulesService{}
+	server, err := NewServer(&stubBundleService{}, slog.New(slog.NewTextHandler(io.Discard, nil)), WithRoutingRules(service))
+	if err != nil {
+		t.Fatal(err)
+	}
+	recorder := httptest.NewRecorder()
+	body := `{"jsonrpc":"2.0","id":1,"method":"tools/list"}{"extra":true}`
+	server.Handler().ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, "/api/v1/mcp", strings.NewReader(body)))
+	if recorder.Code != http.StatusOK || !strings.Contains(recorder.Body.String(), "-32700") || strings.Contains(recorder.Body.String(), "list_groups") {
+		t.Fatalf("trailing = %d %s", recorder.Code, recorder.Body.String())
+	}
+	recorder = httptest.NewRecorder()
+	server.Handler().ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, "/api/v1/mcp", strings.NewReader(strings.Repeat("a", 64<<10+1))))
+	if recorder.Code != http.StatusRequestEntityTooLarge || !strings.Contains(recorder.Body.String(), "payload_too_large") {
+		t.Fatalf("oversize = %d %s", recorder.Code, recorder.Body.String())
+	}
+}
+
+func TestRoutingMCPHidesUnclassifiedToolErrors(t *testing.T) {
+	service := &fakeRoutingRulesService{err: errors.New("dial unix /run/secret.sock: connection refused")}
+	server, err := NewServer(&stubBundleService{}, slog.New(slog.NewTextHandler(io.Discard, nil)), WithRoutingRules(service))
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"apply_rules","arguments":{"yaml":"version: 1\n"}}}`
+	recorder := httptest.NewRecorder()
+	server.Handler().ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, "/api/v1/mcp", strings.NewReader(body)))
+	if recorder.Code != http.StatusOK || !strings.Contains(recorder.Body.String(), "operation failed") || strings.Contains(recorder.Body.String(), "secret") {
+		t.Fatalf("leaked = %s", recorder.Body.String())
+	}
+	service.err = fmt.Errorf("%w: yaml version must be 1", routingrules.ErrInvalid)
+	recorder = httptest.NewRecorder()
+	server.Handler().ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, "/api/v1/mcp", strings.NewReader(body)))
+	if !strings.Contains(recorder.Body.String(), "yaml version must be 1") {
+		t.Fatalf("validation hidden = %s", recorder.Body.String())
+	}
+	recorder = httptest.NewRecorder()
+	server.Handler().ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, "/api/v1/mcp", strings.NewReader(`{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"list_groups"}}`)))
+	if !strings.Contains(recorder.Body.String(), "proxy groups are not configured") {
+		t.Fatalf("safe mcp error hidden = %s", recorder.Body.String())
 	}
 }
