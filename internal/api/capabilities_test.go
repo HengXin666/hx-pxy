@@ -14,6 +14,7 @@ import (
 	"github.com/HengXin666/hx-pxy/internal/proxyservice"
 	"github.com/HengXin666/hx-pxy/internal/quickstart"
 	"github.com/HengXin666/hx-pxy/internal/residential"
+	"github.com/HengXin666/hx-pxy/internal/routingrules"
 	"github.com/HengXin666/hx-pxy/internal/subscription"
 )
 
@@ -139,6 +140,7 @@ func TestCapabilityCatalogEnumsAreLiveVocabulary(t *testing.T) {
 		{"node_protocol", nodeparse.SupportedProtocols()},
 		{"subscription_source_type", subscription.SupportedSourceTypes()},
 		{"source_class", subscription.SupportedSourceClasses()},
+		{"routing_default", routingrules.SupportedDefaults()},
 	}
 	for _, testCase := range cases {
 		got := catalogEnum(t, catalog, testCase.name).Values
@@ -266,7 +268,8 @@ var optionalAdminRoutes = []string{
 	"/api/v1/nodes", "/api/v1/nodes/", "/api/v1/node-settings",
 	"/api/v1/residential/presets", "/api/v1/residential/providers",
 	"/api/v1/residential/channels",
-	"/api/v1/settings", "/api/v1/routing-rules",
+	"/api/v1/settings", "/api/v1/routing-rules", "/api/v1/routing-rules/apply",
+	"/api/v1/mcp",
 	"/api/v1/docker-access",
 }
 

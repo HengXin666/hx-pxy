@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/HengXin666/hx-pxy/internal/store"
 )
@@ -64,7 +65,13 @@ type RuleSet struct {
 }
 
 type Config struct {
-	RuleSets []RuleSet `json:"rule_sets"`
+	// Default and AppliesTo are set by a YAML apply. Empty Default is a legacy
+	// JSON document. AppliesTo is the proxy group ids whose unmatched traffic
+	// follows Default; empty means "do not retarget other inbounds".
+	// See .agents/notes/implemented/feature/2026-10-18-yaml-routing-intent.md.
+	Default   string    `json:"default,omitempty"`
+	AppliesTo []string  `json:"applies_to,omitempty"`
+	RuleSets  []RuleSet `json:"rule_sets"`
 }
 
 func Default() Config {
@@ -90,6 +97,9 @@ func Load(ctx context.Context, reader Reader) (Config, error) {
 }
 
 type Service struct {
+	// mu covers save, apply and rollback. Overlapping updates let the slower
+	// rollback write the older document back over the newer one.
+	mu         sync.Mutex
 	repository Repository
 	applier    Applier
 }
@@ -106,11 +116,35 @@ func (s *Service) Get(ctx context.Context) (Config, error) {
 }
 
 func (s *Service) Update(ctx context.Context, config Config) (Config, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.persist(ctx, config)
+}
+
+// UpdateRuleSets replaces rule sets and keeps the stored YAML default and
+// applies_to. The read and the write share this lock, so a concurrent
+// ApplyYAML cannot be overwritten by a default the caller loaded earlier.
+// An applies_to id whose group was deleted is dropped. A disabled group stays,
+// so enabling it again keeps the scope. A new YAML document still rejects a
+// disabled, missing or ambiguous group in TranslateYAML.
+func (s *Service) UpdateRuleSets(ctx context.Context, ruleSets []RuleSet) (Config, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	current, err := Load(ctx, s.repository)
+	if err != nil {
+		return Config{}, err
+	}
+	current.RuleSets = ruleSets
+	return s.persist(ctx, current)
+}
+
+func (s *Service) persist(ctx context.Context, config Config) (Config, error) {
 	normalize(&config)
 	groups, err := s.repository.ListProxyGroups(ctx)
 	if err != nil {
 		return Config{}, err
 	}
+	config.AppliesTo = knownAppliesTo(config.AppliesTo, groups)
 	if err := Validate(config, groups); err != nil {
 		return Config{}, err
 	}
@@ -134,6 +168,20 @@ func (s *Service) Update(ctx context.Context, config Config) (Config, error) {
 	return config, nil
 }
 
+func knownAppliesTo(ids []string, groups []store.ProxyGroupRecord) []string {
+	known := make(map[string]struct{}, len(groups))
+	for _, group := range groups {
+		known[group.ID] = struct{}{}
+	}
+	kept := make([]string, 0, len(ids))
+	for _, id := range ids {
+		if _, ok := known[id]; ok {
+			kept = append(kept, id)
+		}
+	}
+	return kept
+}
+
 func save(ctx context.Context, repository Repository, config Config) error {
 	encoded, err := json.Marshal(config)
 	if err != nil {
@@ -143,12 +191,27 @@ func save(ctx context.Context, repository Repository, config Config) error {
 }
 
 func Validate(config Config, groups []store.ProxyGroupRecord) error {
-	if len(config.RuleSets) > 100 {
-		return fmt.Errorf("%w: at most 100 rule sets are allowed", ErrInvalid)
+	if config.Default != "" && !knownDefault(config.Default) {
+		return fmt.Errorf("%w: default must be proxy, direct or reject", ErrInvalid)
+	}
+	if config.Default == "" && len(config.AppliesTo) > 0 {
+		return fmt.Errorf("%w: applies_to requires a default of proxy, direct or reject", ErrInvalid)
 	}
 	groupIDs := make(map[string]struct{}, len(groups))
 	for _, group := range groups {
 		groupIDs[group.ID] = struct{}{}
+	}
+	// Disabled groups are allowed. The compiler skips them, and TranslateYAML
+	// is what rejects a new document that names one. Deleting the group is a
+	// different problem: knownAppliesTo drops that id before this check, so a
+	// rules-page save does not 422.
+	for _, groupID := range config.AppliesTo {
+		if _, exists := groupIDs[groupID]; !exists {
+			return fmt.Errorf("%w: applies_to references a missing group", ErrInvalid)
+		}
+	}
+	if len(config.RuleSets) > 100 {
+		return fmt.Errorf("%w: at most 100 rule sets are allowed", ErrInvalid)
 	}
 	seen := make(map[string]struct{}, len(config.RuleSets))
 	for _, set := range config.RuleSets {
@@ -317,6 +380,8 @@ func validateRule(rule Rule) error {
 }
 
 func normalize(config *Config) {
+	config.Default = strings.ToLower(strings.TrimSpace(config.Default))
+	config.AppliesTo = uniqueSorted(config.AppliesTo)
 	for setIndex := range config.RuleSets {
 		set := &config.RuleSets[setIndex]
 		set.ID = strings.ToLower(strings.TrimSpace(set.ID))

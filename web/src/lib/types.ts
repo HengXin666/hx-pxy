@@ -302,6 +302,8 @@ export interface RoutingGroupRoute {
 }
 
 export interface RoutingRulesConfig {
+  default?: "proxy" | "direct" | "reject"
+  applies_to?: string[]
   rule_sets: RoutingRuleSet[]
 }
 

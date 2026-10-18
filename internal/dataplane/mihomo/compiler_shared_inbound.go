@@ -37,7 +37,11 @@ type sharedMember struct {
 	// proxy that does not exist fails the whole configuration with
 	// "proxy [x] not found" rather than being ignored, which is what makes a
 	// pinned node safe to emit here.
-	action   string
+	action string
+	// groupID is set for a group-backed member and empty when the listener is
+	// pinned to one node. Callers use this instead of parsing the rule text,
+	// because a group name may itself contain the "), " separator.
+	groupID  string
 	kind     string
 	uuid     string
 	password string
@@ -49,15 +53,15 @@ type sharedMember struct {
 // The control plane keeps one aggregate Mixed listener for every HTTP / SOCKS /
 // Mixed service and one aggregate listener per WebSocket protocol for every
 // VLESS / VMess / Trojan service. Membership is resolved purely by username:
-// the compiler emits one IN-USER rule per member and places those rules before
-// the administrator's site routing rules, so a member can never fall through
-// into another member's egress.
+// the compiler emits one IN-USER rule per member. The caller places node pins
+// and groups the YAML document does not name before site rules, so one
+// environment cannot take another member's egress.
 func (c *Compiler) compileSharedInbounds(
 	settings systemsettings.Settings,
 	listeners []store.ListenerRecord,
 	enabledGroups map[string]store.ProxyGroupRecord,
 	nodeNameByID map[string]string,
-) ([]compiledSharedListener, []string, error) {
+) ([]compiledSharedListener, []sharedUserRule, error) {
 	shared := settings.SharedInbound
 	if !shared.Enabled() && !shared.AppliesToWebSocket() {
 		return nil, nil, nil
@@ -154,7 +158,7 @@ func (c *Compiler) compileSharedInbounds(
 	sort.Strings(order)
 
 	compiled := make([]compiledSharedListener, 0, len(order))
-	rules := make([]string, 0, len(order))
+	rules := make([]sharedUserRule, 0, len(order))
 	for _, key := range order {
 		entry := aggregates[key]
 		sort.Slice(entry.members, func(left, right int) bool {
@@ -227,6 +231,7 @@ func (c *Compiler) sharedMemberFor(
 	// only exists in the control plane. The lookup reads the same records the
 	// proxy list is built from, so the two cannot drift.
 	action := group.Name
+	groupID := group.ID
 	if nodeID := strings.TrimSpace(record.NodeID); nodeID != "" {
 		name, exists := recordedNodes[nodeID]
 		if !exists {
@@ -239,10 +244,12 @@ func (c *Compiler) sharedMemberFor(
 			)
 		}
 		action = name
+		groupID = ""
 	}
 	member := sharedMember{
 		username: strings.TrimSpace(auth.Username),
 		action:   action,
+		groupID:  groupID,
 		kind:     record.Kind,
 	}
 	if member.username == "" {
@@ -267,9 +274,9 @@ func (c *Compiler) compileSharedListenerConfig(
 	record store.ListenerRecord,
 	owner, kind string,
 	members []sharedMember,
-) (map[string]any, []string, error) {
+) (map[string]any, []sharedUserRule, error) {
 	users := make([]map[string]any, 0, len(members))
-	rules := make([]string, 0, len(members))
+	rules := make([]sharedUserRule, 0, len(members))
 	// The name is derived from the family, never from a row id: the aggregate
 	// row and its members are interchangeable carriers of the same listener,
 	// and an IN-NAME that moved with an arbitrary row would break the
@@ -293,7 +300,10 @@ func (c *Compiler) compileSharedListenerConfig(
 			user["password"] = member.password
 		}
 		users = append(users, user)
-		rules = append(rules, "AND,((IN-NAME,"+name+"),(IN-USER,"+member.username+")),"+member.action)
+		rules = append(rules, sharedUserRule{
+			Text:    "AND,((IN-NAME," + name + "),(IN-USER," + member.username + "))," + member.action,
+			GroupID: member.groupID,
+		})
 	}
 	if len(users) == 0 {
 		return nil, nil, nil
