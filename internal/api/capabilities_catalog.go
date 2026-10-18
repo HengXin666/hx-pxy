@@ -489,7 +489,8 @@ func capabilityEndpoints() []CapabilityEndpoint {
 			Fields: []CapabilityField{
 				{Name: "version", Type: "integer", Required: true, Description: "Document version. Only 1 is accepted.", Example: 1},
 				{Name: "name", Type: "string", Description: "Name copied onto each translated rule set.", Example: "env-xxx-proxy"},
-				{Name: "default", Type: "string", Default: "proxy", Description: "proxy keeps unmatched traffic on the inbound's own group, after the YAML rules. direct lets that traffic hit MATCH,DIRECT. reject appends tcp and udp REJECT after the residential fallback and TUN, still before MATCH,DIRECT. A proxy group is not a valid default."},
+				{Name: "default", Type: "string", Default: "proxy", Description: "Unmatched traffic for the groups in applies_to. proxy keeps that traffic on the group's own inbound. direct lets it hit MATCH,DIRECT. reject appends tcp and udp REJECT after residential fallback, node-pinned identities and TUN. Without applies_to, direct and reject do not retarget other inbounds."},
+				{Name: "applies_to", Type: "array<string>", Description: "Proxy group ids or unique names whose unmatched traffic follows default, and whose dedicated listeners consult rules. Omitted leaves every other listener's proxy binding and every node-pinned username in place.", Example: []any{"github-group"}},
 				{Name: "rules", Type: "array<object>", Description: "Earlier rules win. match has exactly one key (domain, domain_suffix, domain_keyword, geosite, geoip, ip_cidr, dst_port, network) whose value is a string or a list. action is proxy, direct or reject. proxy requires group, an id or a unique enabled group name.", Example: []any{map[string]any{"match": map[string]any{"domain_suffix": []any{".github.com"}}, "action": "proxy", "group": "github-group"}}},
 			},
 			Errors: []CapabilityError{
@@ -497,7 +498,23 @@ func capabilityEndpoints() []CapabilityEndpoint {
 				{Status: 413, Code: "payload_too_large", Meaning: "The YAML body is larger than 64KiB."},
 				{Status: 422, Code: "validation_failed", Meaning: "The document is not version 1, YAML is malformed or has a second document, a match or action is illegal, name is too long, or group does not name one enabled proxy group."},
 			},
-			SeeAlso: []string{"routing_rules.read", "routing_rules.update"},
+			SeeAlso: []string{"routing_rules.read", "routing_rules.update", "routing_rules.mcp"},
+		},
+		{
+			ID:      "routing_rules.mcp",
+			Method:  http.MethodPost,
+			Path:    "/api/v1/mcp",
+			Summary: "MCP JSON-RPC for apply_rules(yaml), list_groups() and get_rules(). Same auth, validation, hot reload and rollback as the HTTP routes.",
+			Auth:    "api-key",
+			Fields: []CapabilityField{
+				{Name: "method", Type: "string", Required: true, Description: "initialize, tools/list or tools/call.", Example: "tools/call"},
+				{Name: "params.name", Type: "string", Description: "Tool name when method is tools/call.", Example: "apply_rules"},
+				{Name: "params.arguments.yaml", Type: "string", Description: "YAML document for apply_rules."},
+			},
+			Errors: []CapabilityError{
+				{Status: 200, Code: "jsonrpc_error", Meaning: "Malformed JSON-RPC, or a tool call whose isError is true (validation, unknown group, groups unavailable)."},
+			},
+			SeeAlso: []string{"routing_rules.apply_yaml", "routing_rules.read"},
 		},
 		{
 			ID:          "residential.presets.read",

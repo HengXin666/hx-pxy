@@ -18,17 +18,37 @@ func (s *Server) handleRoutingRules(writer http.ResponseWriter, request *http.Re
 		}
 		writeJSON(writer, http.StatusOK, config)
 	case http.MethodPut:
-		var body routingrules.Config
+		var body routingRulesPut
 		if err := decodeJSONBody(writer, request, &body); err != nil {
 			s.writeAPIError(writer, request, http.StatusBadRequest, "invalid_request", err.Error())
 			return
 		}
-		config, err := s.routingRules.Update(request.Context(), body)
+		config := routingrules.Config{RuleSets: body.RuleSets}
+		if body.Default != nil || body.AppliesTo != nil {
+			config.Default = stringOrEmpty(body.Default)
+			if body.AppliesTo != nil {
+				config.AppliesTo = *body.AppliesTo
+			}
+		}
+		if body.Default == nil || body.AppliesTo == nil {
+			current, err := s.routingRules.Get(request.Context())
+			if err != nil {
+				s.handleError(writer, request, err)
+				return
+			}
+			if body.Default == nil {
+				config.Default = current.Default
+			}
+			if body.AppliesTo == nil {
+				config.AppliesTo = current.AppliesTo
+			}
+		}
+		updated, err := s.routingRules.Update(request.Context(), config)
 		if err != nil {
 			s.handleError(writer, request, err)
 			return
 		}
-		writeJSON(writer, http.StatusOK, config)
+		writeJSON(writer, http.StatusOK, updated)
 	default:
 		methodNotAllowed(writer, request, http.MethodGet, http.MethodPut)
 	}
@@ -59,4 +79,20 @@ func (s *Server) handleRoutingRulesApply(writer http.ResponseWriter, request *ht
 		return
 	}
 	writeJSON(writer, http.StatusOK, config)
+}
+
+// routingRulesPut distinguishes a missing default from an explicit empty one.
+// The rules UI sends rule_sets only; wiping Default on that save would put
+// browser inbounds back on the legacy proxy binding.
+type routingRulesPut struct {
+	Default   *string                `json:"default"`
+	AppliesTo *[]string              `json:"applies_to"`
+	RuleSets  []routingrules.RuleSet `json:"rule_sets"`
+}
+
+func stringOrEmpty(value *string) string {
+	if value == nil {
+		return ""
+	}
+	return *value
 }

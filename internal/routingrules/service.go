@@ -65,12 +65,13 @@ type RuleSet struct {
 }
 
 type Config struct {
-	// Default is set by a YAML apply. Empty means a legacy JSON document:
-	// listeners keep their proxy binding and shared-inbound users still win
-	// before site rules. proxy, direct and reject change that order; see
-	// .agents/notes/implemented/feature/2026-10-18-yaml-routing-intent.md.
-	Default  string    `json:"default,omitempty"`
-	RuleSets []RuleSet `json:"rule_sets"`
+	// Default and AppliesTo are set by a YAML apply. Empty Default is a legacy
+	// JSON document. AppliesTo is the proxy group ids whose unmatched traffic
+	// follows Default; empty means "do not retarget other inbounds".
+	// See .agents/notes/implemented/feature/2026-10-18-yaml-routing-intent.md.
+	Default   string    `json:"default,omitempty"`
+	AppliesTo []string  `json:"applies_to,omitempty"`
+	RuleSets  []RuleSet `json:"rule_sets"`
 }
 
 func Default() Config {
@@ -159,12 +160,21 @@ func Validate(config Config, groups []store.ProxyGroupRecord) error {
 	default:
 		return fmt.Errorf("%w: default must be proxy, direct or reject", ErrInvalid)
 	}
-	if len(config.RuleSets) > 100 {
-		return fmt.Errorf("%w: at most 100 rule sets are allowed", ErrInvalid)
-	}
 	groupIDs := make(map[string]struct{}, len(groups))
+	enabledIDs := make(map[string]struct{}, len(groups))
 	for _, group := range groups {
 		groupIDs[group.ID] = struct{}{}
+		if group.Enabled {
+			enabledIDs[group.ID] = struct{}{}
+		}
+	}
+	for _, groupID := range config.AppliesTo {
+		if _, enabled := enabledIDs[groupID]; !enabled {
+			return fmt.Errorf("%w: applies_to references a missing or disabled group", ErrInvalid)
+		}
+	}
+	if len(config.RuleSets) > 100 {
+		return fmt.Errorf("%w: at most 100 rule sets are allowed", ErrInvalid)
 	}
 	seen := make(map[string]struct{}, len(config.RuleSets))
 	for _, set := range config.RuleSets {
@@ -334,6 +344,7 @@ func validateRule(rule Rule) error {
 
 func normalize(config *Config) {
 	config.Default = strings.ToLower(strings.TrimSpace(config.Default))
+	config.AppliesTo = uniqueSorted(config.AppliesTo)
 	for setIndex := range config.RuleSets {
 		set := &config.RuleSets[setIndex]
 		set.ID = strings.ToLower(strings.TrimSpace(set.ID))

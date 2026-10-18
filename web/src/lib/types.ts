@@ -302,6 +302,8 @@ export interface RoutingGroupRoute {
 }
 
 export interface RoutingRulesConfig {
+  default?: string
+  applies_to?: string[]
   rule_sets: RoutingRuleSet[]
 }
 

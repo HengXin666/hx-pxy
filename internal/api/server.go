@@ -524,6 +524,7 @@ func (s *Server) routes() *http.ServeMux {
 	if s.routingRules != nil {
 		mux.HandleFunc("/api/v1/routing-rules", s.handleRoutingRules)
 		mux.HandleFunc("/api/v1/routing-rules/apply", s.handleRoutingRulesApply)
+		mux.HandleFunc("/api/v1/mcp", s.handleRoutingMCP)
 	}
 	if s.overview != nil {
 		mux.HandleFunc("/api/v1/overview/stream", s.handleOverviewStream)

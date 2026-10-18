@@ -3,7 +3,6 @@ package mihomo
 import (
 	"context"
 	"encoding/json"
-	"strings"
 	"testing"
 
 	"github.com/HengXin666/hx-pxy/internal/listener"
@@ -19,6 +18,7 @@ type yamlOrderRepository struct {
 	groups    []store.ProxyGroupRecord
 	listeners []store.ListenerRecord
 	clients   []store.ResidentialClientRouteRecord
+	nodes     []store.NodeConfigRecord
 }
 
 func (repository yamlOrderRepository) ListProxyGroups(context.Context) ([]store.ProxyGroupRecord, error) {
@@ -28,7 +28,7 @@ func (repository yamlOrderRepository) ListListeners(context.Context) ([]store.Li
 	return repository.listeners, nil
 }
 func (repository yamlOrderRepository) ListNodeConfigs(context.Context, []string) ([]store.NodeConfigRecord, error) {
-	return nil, nil
+	return repository.nodes, nil
 }
 func (repository yamlOrderRepository) ListGroupNodeCandidates(context.Context) ([]store.GroupNodeCandidate, error) {
 	return nil, nil
@@ -88,63 +88,85 @@ func compileYAMLOrder(t *testing.T, repository yamlOrderRepository) (map[string]
 	return document, rulesOf(t, document)
 }
 
-func TestYAMLDefaultProxyRoutesBrowsersBeforeTheirGroup(t *testing.T) {
+func TestYAMLDefaultProxyKeepsOtherListenersAndFollowsSiteRules(t *testing.T) {
 	document, rules := compileYAMLOrder(t, yamlOrderRepository{
 		routes:    routingrules.Config{Default: routingrules.DefaultProxy, RuleSets: []routingrules.RuleSet{yamlSiteRule()}},
+		groups:    []store.ProxyGroupRecord{testGroup("group-a"), testGroup("group-b")},
+		listeners: browserListeners(t),
+	})
+	keptProxy := false
+	for _, entry := range listenersOf(t, document) {
+		if entry["name"] == listenerConfigName("listener-browser") && entry["proxy"] == "group-a" {
+			keptProxy = true
+		}
+	}
+	if !keptProxy {
+		t.Fatalf("unscoped default removed another listener's proxy: %+v", listenersOf(t, document))
+	}
+	site := indexOfRule(rules, "DOMAIN,keep.example,DIRECT")
+	shared := indexOfRule(rules, "AND,((IN-NAME,"+SharedListenerConfigName(listener.SharedInboundStandardOwner, "mixed")+"),(IN-USER,svc-b)),group-b")
+	fallback := indexOfRule(rules, "MATCH,DIRECT")
+	if site < 0 || shared < 0 || fallback < 0 || !(site < shared && shared < fallback) {
+		t.Fatalf("site rule must precede the group-user catch-all: %v", rules)
+	}
+}
+
+func TestYAMLAppliesToScopesDedicatedFallbackAfterSiteRule(t *testing.T) {
+	document, rules := compileYAMLOrder(t, yamlOrderRepository{
+		routes: routingrules.Config{
+			Default: routingrules.DefaultProxy, AppliesTo: []string{"group-a"},
+			RuleSets: []routingrules.RuleSet{yamlSiteRule()},
+		},
 		groups:    []store.ProxyGroupRecord{testGroup("group-a"), testGroup("group-b")},
 		listeners: browserListeners(t),
 	})
 	for _, entry := range listenersOf(t, document) {
 		if entry["name"] == listenerConfigName("listener-browser") {
 			if _, forced := entry["proxy"]; forced {
-				t.Fatalf("browser listener still forces proxy: %+v", entry)
+				t.Fatalf("scoped listener still forces proxy: %+v", entry)
 			}
 		}
 	}
-	site := "DOMAIN,keep.example,DIRECT"
-	shared := "AND,((IN-NAME," + SharedListenerConfigName(listener.SharedInboundStandardOwner, "mixed") + "),(IN-USER,svc-b)),group-b"
-	ownGroup := "IN-NAME," + listenerConfigName("listener-browser") + ",group-a"
-	if indexOfRule(rules, site) < 0 || indexOfRule(rules, shared) < 0 || indexOfRule(rules, ownGroup) < 0 {
-		t.Fatalf("rules = %v", rules)
-	}
-	if !(indexOfRule(rules, site) < indexOfRule(rules, shared) && indexOfRule(rules, shared) < indexOfRule(rules, "MATCH,DIRECT")) {
-		t.Fatalf("site rule must precede the shared-user catch-all: %v", rules)
-	}
-	if indexOfRule(rules, ownGroup) > indexOfRule(rules, "MATCH,DIRECT") {
-		t.Fatalf("dedicated catch-all must precede MATCH,DIRECT: %v", rules)
+	site := indexOfRule(rules, "DOMAIN,keep.example,DIRECT")
+	ownGroup := indexOfRule(rules, "IN-NAME,"+listenerConfigName("listener-browser")+",group-a")
+	end := indexOfRule(rules, "MATCH,DIRECT")
+	if site < 0 || ownGroup < 0 || end < 0 || !(site < ownGroup && ownGroup < end) {
+		t.Fatalf("want site < own group < MATCH, rules = %v", rules)
 	}
 }
 
-func TestYAMLDefaultDirectAndRejectDoNotReuseTheInboundGroup(t *testing.T) {
-	shared := "AND,((IN-NAME," + SharedListenerConfigName(listener.SharedInboundStandardOwner, "mixed") + "),(IN-USER,svc-b)),group-b"
-	ownGroup := "IN-NAME," + listenerConfigName("listener-browser") + ",group-a"
-	for _, fallback := range []string{routingrules.DefaultDirect, routingrules.DefaultReject} {
-		document, rules := compileYAMLOrder(t, yamlOrderRepository{
-			routes:    routingrules.Config{Default: fallback, RuleSets: []routingrules.RuleSet{yamlSiteRule()}},
-			groups:    []store.ProxyGroupRecord{testGroup("group-a"), testGroup("group-b")},
-			listeners: browserListeners(t),
-		})
-		for _, entry := range listenersOf(t, document) {
-			if entry["name"] == listenerConfigName("listener-browser") {
-				if _, forced := entry["proxy"]; forced {
-					t.Fatalf("%s listener still forces proxy", fallback)
-				}
-			}
-		}
-		if indexOfRule(rules, shared) >= 0 || indexOfRule(rules, ownGroup) >= 0 {
-			t.Fatalf("%s reused the inbound group: %v", fallback, rules)
-		}
-		if indexOfRule(rules, "DOMAIN,keep.example,DIRECT") > indexOfRule(rules, "MATCH,DIRECT") {
-			t.Fatalf("%s site rule landed after MATCH: %v", fallback, rules)
-		}
+func TestYAMLDirectAndRejectStayInsideAppliesTo(t *testing.T) {
+	listeners := browserListeners(t)
+	listeners = append(listeners, memberListener(t, "member-a", "service-a", "mixed", "group-a", "svc-a", "pass-a", listener.SharedInboundStandardOwner, 7890))
+	_, rules := compileYAMLOrder(t, yamlOrderRepository{
+		routes: routingrules.Config{
+			Default: routingrules.DefaultReject, AppliesTo: []string{"group-b"},
+			RuleSets: []routingrules.RuleSet{yamlSiteRule()},
+		},
+		groups:    []store.ProxyGroupRecord{testGroup("group-a"), testGroup("group-b")},
+		listeners: listeners,
+	})
+	site := indexOfRule(rules, "DOMAIN,keep.example,DIRECT")
+	kept := indexOfRule(rules, "AND,((IN-NAME,"+SharedListenerConfigName(listener.SharedInboundStandardOwner, "mixed")+"),(IN-USER,svc-a)),group-a")
+	dropped := indexOfRule(rules, "AND,((IN-NAME,"+SharedListenerConfigName(listener.SharedInboundStandardOwner, "mixed")+"),(IN-USER,svc-b)),group-b")
+	reject := indexOfRule(rules, "NETWORK,tcp,REJECT")
+	end := indexOfRule(rules, "MATCH,DIRECT")
+	if site < 0 || kept < 0 || reject < 0 || end < 0 || dropped >= 0 {
+		t.Fatalf("scoped reject rules = %v", rules)
+	}
+	if !(site < kept && kept < reject && reject < end) {
+		t.Fatalf("reject must follow the untouched group and precede MATCH: %v", rules)
 	}
 }
 
 func TestYAMLDefaultRejectFollowsResidentialFallbackAndTUN(t *testing.T) {
 	_, rules := compileYAMLOrder(t, yamlOrderRepository{
 		settings: `{"tun":{"enabled":true,"proxy_group_id":"group-a"}}`,
-		routes:   routingrules.Config{Default: routingrules.DefaultReject, RuleSets: []routingrules.RuleSet{yamlSiteRule()}},
-		groups:   []store.ProxyGroupRecord{testGroup("group-a")},
+		routes: routingrules.Config{
+			Default: routingrules.DefaultReject, AppliesTo: []string{"group-a"},
+			RuleSets: []routingrules.RuleSet{yamlSiteRule()},
+		},
+		groups: []store.ProxyGroupRecord{testGroup("group-a")},
 		listeners: []store.ListenerRecord{{
 			ID: "listener-res", Name: "residential", Kind: "mixed", BindAddress: "127.0.0.1", Port: 18081,
 			ProxyGroupID: "group-a", AuthMode: "none", TransportJSON: "{}", PublicEndpointJSON: "{}", Enabled: true,
@@ -158,10 +180,9 @@ func TestYAMLDefaultRejectFollowsResidentialFallbackAndTUN(t *testing.T) {
 			ListenerID: "listener-res", ChannelEnabled: true,
 		}},
 	})
-	residential := "IN-NAME," + listenerConfigName("listener-res") + ",group-a"
 	order := []string{
+		"IN-NAME," + listenerConfigName("listener-res") + ",group-a",
 		"DOMAIN,keep.example,DIRECT",
-		residential,
 		"IN-TYPE,TUN,group-a",
 		"NETWORK,tcp,REJECT",
 		"NETWORK,udp,REJECT",
@@ -175,8 +196,30 @@ func TestYAMLDefaultRejectFollowsResidentialFallbackAndTUN(t *testing.T) {
 		}
 		previous = index
 	}
-	if strings.Contains(strings.Join(rules, "\n"), "IN-USER,lazy-user") {
+	if indexOfRule(rules, "AND,((IN-NAME,"+listenerConfigName("listener-res")+"),(IN-USER,lazy-user)),group-a") >= 0 {
 		t.Fatalf("unallocated residential session emitted its own rule: %v", rules)
+	}
+}
+
+func TestPinnedIdentityBeatsYAMLSiteRule(t *testing.T) {
+	pinned := memberListener(t, "member-pin", "pinned", "mixed", "group-b", "gh-pool", "pass-pin", listener.SharedInboundStandardOwner, 7890)
+	pinned.NodeID = "node-1"
+	_, rules := compileYAMLOrder(t, yamlOrderRepository{
+		routes: routingrules.Config{Default: routingrules.DefaultProxy, RuleSets: []routingrules.RuleSet{yamlSiteRule()}},
+		groups: []store.ProxyGroupRecord{testGroup("group-a"), testGroup("group-b")},
+		listeners: []store.ListenerRecord{
+			aggregateListener("agg-standard", "mixed", listener.SharedInboundStandardOwner, 7890),
+			pinned,
+		},
+		nodes: []store.NodeConfigRecord{{
+			ID: "node-1", Fingerprint: "abcdef1234567890", DisplayName: "pin", Protocol: "http", LifecycleState: "healthy",
+			CanonicalConfigEncrypted: []byte(`{"type":"http","server":"1.2.3.4","port":8080}`),
+		}},
+	})
+	identity := indexOfRule(rules, "AND,((IN-NAME,"+SharedListenerConfigName(listener.SharedInboundStandardOwner, "mixed")+"),(IN-USER,gh-pool)),"+nodeProxyName("abcdef1234567890"))
+	site := indexOfRule(rules, "DOMAIN,keep.example,DIRECT")
+	if identity < 0 || site < 0 || identity > site {
+		t.Fatalf("pinned identity must precede the site rule: %v", rules)
 	}
 }
 

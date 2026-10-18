@@ -446,7 +446,7 @@ function GroupRoutingPanel({ group, groups, config, onSaved, onNotice }: { group
   async function save() {
     setSaving(true)
     try {
-      const next: RoutingRulesConfig = { rule_sets: config.rule_sets.map((set) => {
+      const next: RoutingRulesConfig = { ...config, rule_sets: config.rule_sets.map((set) => {
         const routes = expandedRoutes(set, groups).filter((route) => route.proxy_group_id !== group.id)
         const action = actionFromValue(values[set.id] ?? "")
         if (action) routes.push({ proxy_group_id: group.id, action })

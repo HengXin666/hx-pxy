@@ -76,3 +76,37 @@ func TestRoutingRulesApplyRejectsOversizedBody(t *testing.T) {
 		t.Fatalf("status = %d, applied = %q, body = %s", recorder.Code, service.applied, recorder.Body.String())
 	}
 }
+
+func TestRoutingRulesPutKeepsYAMLDefaultWhenOmitted(t *testing.T) {
+	service := &fakeRoutingRulesService{config: routingrules.Config{Default: routingrules.DefaultReject, AppliesTo: []string{"group-a"}}}
+	server, err := NewServer(&stubBundleService{}, slog.New(slog.NewTextHandler(io.Discard, nil)), WithRoutingRules(service))
+	if err != nil {
+		t.Fatal(err)
+	}
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPut, "/api/v1/routing-rules", strings.NewReader(`{"rule_sets":[]}`))
+	request.Header.Set("Content-Type", "application/json")
+	server.Handler().ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusOK || service.config.Default != routingrules.DefaultReject || len(service.config.AppliesTo) != 1 {
+		t.Fatalf("status = %d, config = %+v", recorder.Code, service.config)
+	}
+}
+
+func TestRoutingMCPApplyAndRead(t *testing.T) {
+	service := &fakeRoutingRulesService{}
+	server, err := NewServer(&stubBundleService{}, slog.New(slog.NewTextHandler(io.Discard, nil)), WithRoutingRules(service))
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"apply_rules","arguments":{"yaml":"version: 1\n"}}}`
+	recorder := httptest.NewRecorder()
+	server.Handler().ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, "/api/v1/mcp", strings.NewReader(body)))
+	if recorder.Code != http.StatusOK || service.applied == "" || !strings.Contains(recorder.Body.String(), `"isError":false`) {
+		t.Fatalf("status = %d, applied = %q, body = %s", recorder.Code, service.applied, recorder.Body.String())
+	}
+	recorder = httptest.NewRecorder()
+	server.Handler().ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, "/api/v1/mcp", strings.NewReader(`{"jsonrpc":"2.0","id":2,"method":"tools/list"}`)))
+	if recorder.Code != http.StatusOK || !strings.Contains(recorder.Body.String(), "list_groups") || !strings.Contains(recorder.Body.String(), "get_rules") {
+		t.Fatalf("tools/list = %s", recorder.Body.String())
+	}
+}

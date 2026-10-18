@@ -249,7 +249,12 @@ func (c *Compiler) Compile(ctx context.Context) (Compiled, error) {
 		if err != nil {
 			return Compiled{}, err
 		}
-		if routeConfig.Default != "" && len(clientRoutesForListener) == 0 {
+		// Only a group named by applies_to loses its forced proxy, and only
+		// when that listener is not pinned to a node. Every other dedicated
+		// listener keeps bypassing rules, so one browser document cannot
+		// retarget the rest of the instance.
+		_, inScope := scopeSet(routeConfig.AppliesTo)[record.ProxyGroupID]
+		if len(clientRoutesForListener) == 0 && strings.TrimSpace(record.NodeID) == "" && inScope {
 			delete(config, "proxy")
 			if routeConfig.Default == routingrules.DefaultProxy {
 				dedicatedFallbacks = append(dedicatedFallbacks, "IN-NAME,"+listenerConfigName(record.ID)+","+egressName)
@@ -314,26 +319,32 @@ func (c *Compiler) Compile(ctx context.Context) (Compiled, error) {
 	}
 	siteRules := routingrules.Compile(routeConfig, groups, listeners, listenerConfigName)
 	switch routeConfig.Default {
-	case "":
-		// No YAML default: a shared-inbound username matches before site
-		// rules, so two services on one port cannot leak into each other.
-		// Dedicated listeners still carry `proxy` and do not reach here.
-		compiledRules = append(compiledRules, sharedInboundRules...)
-		compiledRules = append(compiledRules, siteRules...)
-	case routingrules.DefaultProxy:
-		// Site rules first. Unmatched traffic then hits the inbound's own
-		// group (shared IN-USER, or the dedicated IN-NAME recorded above).
-		compiledRules = append(compiledRules, siteRules...)
-		compiledRules = append(compiledRules, sharedInboundRules...)
-		compiledRules = append(compiledRules, dedicatedFallbacks...)
-	case routingrules.DefaultDirect, routingrules.DefaultReject:
-		// No inbound catch-all. Unmatched browser traffic falls through to
-		// MATCH,DIRECT, or to the reject lines inserted after TUN.
-		compiledRules = append(compiledRules, siteRules...)
+	case "", routingrules.DefaultProxy, routingrules.DefaultDirect, routingrules.DefaultReject:
 	default:
 		return Compiled{}, fmt.Errorf("routing default %q is unsupported", routeConfig.Default)
 	}
-	compiledRules = append(compiledRules, residentialFallbackRules...)
+	pinnedUsers, groupedUsers := partitionSharedRules(sharedInboundRules, groupNames)
+	if routeConfig.Default == "" {
+		// Legacy documents: usernames win before site rules, and the
+		// residential listener fallback stays behind those site rules.
+		compiledRules = append(compiledRules, sharedInboundRules...)
+		compiledRules = append(compiledRules, siteRules...)
+		compiledRules = append(compiledRules, residentialFallbackRules...)
+	} else {
+		// Unallocated residential sessions and node-pinned identities match
+		// before any YAML site rule. Group users (browser identities) match
+		// after it, so a destination can still leave their group. direct and
+		// reject drop that catch-all only for groups listed in applies_to.
+		compiledRules = append(compiledRules, residentialFallbackRules...)
+		compiledRules = append(compiledRules, pinnedUsers...)
+		compiledRules = append(compiledRules, siteRules...)
+		grouped := groupedUsers
+		if routeConfig.Default == routingrules.DefaultDirect || routeConfig.Default == routingrules.DefaultReject {
+			grouped = withoutScopedGroups(groupedUsers, groupNames, scopeSet(routeConfig.AppliesTo))
+		}
+		compiledRules = append(compiledRules, grouped...)
+		compiledRules = append(compiledRules, dedicatedFallbacks...)
+	}
 	tun, tunRule, err := compileTUN(settings, groups)
 	if err != nil {
 		return Compiled{}, err
@@ -341,14 +352,14 @@ func (c *Compiler) Compile(ctx context.Context) (Compiled, error) {
 	if tunRule != "" {
 		compiledRules = append(compiledRules, tunRule)
 	}
-	if routeConfig.Default == routingrules.DefaultReject {
-		// After residential fallback and TUN, before the final line, so a
-		// reject default does not swallow those inbounds.
+	if routeConfig.Default == routingrules.DefaultReject && len(routeConfig.AppliesTo) > 0 {
+		// The groups in applies_to had their catch-all removed above, so this
+		// is what their unmatched traffic hits. Everyone else already matched.
 		compiledRules = append(compiledRules, "NETWORK,tcp,REJECT", "NETWORK,udp,REJECT")
 	}
-	// Not the inbound's proxy group. That group is the listener `proxy`
-	// field, or an IN-NAME/IN-USER rule above. This line is only what is
-	// left. See .agents/notes/implemented/feature/2026-10-18-yaml-routing-intent.md
+	// Not an inbound's proxy group. That group is a listener `proxy` field
+	// or an IN-NAME/IN-USER rule above.
+	// See .agents/notes/implemented/feature/2026-10-18-yaml-routing-intent.md
 	compiledRules = append(compiledRules, "MATCH,DIRECT")
 	document := map[string]any{
 		"tun":       tun,

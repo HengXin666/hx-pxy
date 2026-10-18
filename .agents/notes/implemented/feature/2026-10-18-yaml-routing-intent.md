@@ -4,49 +4,50 @@ Status: implemented
 
 ## Problem
 
-指纹浏览器不能在运行中换代理。一个环境要按目标分流 (GitHub 走一组、国内直连、广告拒绝), 就得在 hx-pxy 热更新规则, 而且调用方拿的是一份通用 YAML, 不是 Mihomo 规则文本, 也不是现在这份 JSON 规则文档。
+指纹浏览器不能在运行中换代理。一个环境要按目标分流, 就得在 hx-pxy 热更新规则, 而且调用方拿的是一份通用 YAML, 不是 Mihomo 规则文本, 也不是现在这份 JSON 规则文档。
 
-直接把 YAML 交给 Mihomo, 或者在 `internal/compiler` 再写一个编译器, 会绕开现有的校验、保存和失败回滚。`Service.Update` 已经做完这三件事。
-
-浏览器实际走的入站还有一层障碍: 普通监听器写了 `proxy: <组名>`, Mihomo 就不再看全局 `rules`; 共享入口的 `IN-USER` 规则又排在站点规则前面, 用户名一命中就结束。不改这两处, 翻译出来的规则对浏览器是空操作。
+直接把 YAML 交给 Mihomo, 或者再写一个编译器, 会绕开现有的校验、保存和失败回滚。浏览器走的是共享入口: 用户名决定出口。普通监听器上的 `proxy` 字段则让 Mihomo 根本不看全局规则。与此同时, 同一个共享入口上还有按用户名钉死到某个节点的身份 (gh-pool), 住宅监听器在没分到节点时必须进失败关闭组。一份给浏览器写的 YAML 不能把这三类流量一起改掉。
 
 ## Decision
 
-`POST /api/v1/routing-rules/apply` 的正文就是 YAML 文档本身 (上限 64KB, 超出是 413)。正文必须是一份文档, 第二份或尾随语法直接 422。`routingrules.TranslateYAML` 把它翻成一份完整的 `Config` (含 `default`), 然后走 `Service.Update`。`Update` 持有锁盖住保存、热更新和失败回滚, 所以并发 POST 不会让较慢的回滚盖掉较新的文档。翻译是整份替换, 不和已存规则合并。
+`POST /api/v1/routing-rules/apply` 收 YAML 正文 (上限 64KB, 超出 413)。必须是一份文档。`TranslateYAML` 把它翻成完整的 `Config`, 再走 `Service.Update`。`Update` 的锁盖住保存、热更新和回滚。
 
-一条 YAML 规则变成一个规则集, 按书写顺序给 `yaml-01` 起的 id 和 10、20、30 的优先级。`match` 恰好一个键, 值是字符串或列表; 列表是同一个规则集里的多条规则, 同一动作。支持的键就是现有规则类型去掉 `process_name`。`domain_suffix` 去掉开头的点, `geoip` 大写, `network` 小写。`action: proxy` 的 `group` 先按 id 再按唯一名称解析, 禁用或重名都拒绝。
+`POST /api/v1/mcp` 是同一套操作的 MCP JSON-RPC: `apply_rules(yaml)`、`list_groups()`、`get_rules()`。工具调用进的是同一个 `ApplyYAML` / 组列表 / `Get`, 不另做校验。
 
-`default` 只接受 `proxy`、`direct`、`reject`。它不产生站点规则, 编译器按它改入站和收尾的顺序:
+一条 YAML 规则变成一个规则集, id 从 `yaml-01` 起, 优先级 10、20、30。`match` 恰好一个键。`domain_suffix` 去掉开头的点, `geoip` 大写, `network` 小写。`group` 先按 id 再按唯一的启用名称解析。
 
-- 三个值都会拿掉普通监听器上的 `proxy` 字段, 流量才进得了 `rules`。
-- `proxy`: 站点规则在前, 然后才是共享入口的 `IN-USER` 和这条入站的 `IN-NAME,<监听器>,<原组>`。没命中的浏览器流量仍进原来的组。
-- `direct`: 不加这些兜底。没命中的浏览器流量落到最后一条 `MATCH,DIRECT`。
-- `reject`: 同样不加这些兜底。`NETWORK,tcp,REJECT` 和 `NETWORK,udp,REJECT` 插在住宅监听器兜底和 TUN 规则之后、`MATCH,DIRECT` 之前。
+`applies_to` 是这张默认值管到的代理组。不写它, `default: direct` 和 `default: reject` 不会拆掉其他监听器的 `proxy`, 也不会丢掉共享入口的用户名规则。写了它, 只有这些组的普通监听器去掉 `proxy` 改走规则, 也只有这些组里未钉节点的用户名会在 direct/reject 时去掉兜底。钉死到节点的用户名始终排在站点规则前面。
 
-住宅会话自己的规则仍在站点规则之前。没有分配节点的会话继续靠后面的 `IN-NAME` 兜底, 不被 `default: reject` 抢走。TUN 的 `IN-TYPE,TUN,<组>` 也排在拒绝规则之前。`default` 为空的旧 JSON 文档保持原样: 监听器仍写 `proxy`, 共享入口的用户名仍先于站点规则。
+有 YAML `default` 时的顺序是: 住宅会话规则, 住宅监听器的 `IN-NAME` 兜底, 钉节点的 `IN-USER`, 站点规则, 其余组用户的 `IN-USER`, `applies_to` 里 `default: proxy` 的监听器兜底, TUN, 然后才是 `applies_to` 非空时的 tcp/udp REJECT, 最后 `MATCH,DIRECT`。没分配节点的住宅会话因此进失败关闭组, 不会先吃到 YAML 的 direct。旧 JSON 文档 `default` 为空, 顺序和 `proxy` 字段都保持原样。
+
+管理页 PUT 只提交 `rule_sets`。请求里没有 `default` 或 `applies_to` 键时, 沿用已存的值。显式带上才覆盖。前端保存时把这两个字段原样带回去。
 
 ## Alternatives considered
 
 ### 让调用方继续 PUT JSON
 
-现有的 `PUT /api/v1/routing-rules` 已经能整份替换并回滚。否决把它当作这次的接口: 浏览器环境手里是一份通用 YAML, 不是这套 rule set JSON。逼它自己拼 JSON 会把组名、优先级和 `default` 的语义散到每个调用方。PUT 留着, 给已经在用 JSON 的客户端。
+`PUT /api/v1/routing-rules` 已经能整份替换并回滚。否决把它当作这次的接口: 浏览器环境手里是 YAML。PUT 留着给管理页, 并且缺省字段不再把 YAML 的 default 清掉。
 
 ### 另写一个 Mihomo YAML 编译器
 
-issue 初稿把翻译放在 `internal/compiler`。否决: 规则文本、AND/IN-NAME 作用域、组名解析和回滚都已经在 `routingrules.Compile` 和 `Service.Update` 里。第二套编译器会在两者不一致时静默分流。
+issue 初稿把翻译放在 `internal/compiler`。否决: 规则文本、作用域、组名和回滚已经在 `routingrules.Compile` 和 `Service.Update` 里。
 
 ### 把 `MATCH,DIRECT` 改成可配置
 
-`default: reject` 看起来该替换最后那条 MATCH。否决: 那一行不是“把流量送回入站组”的开关。入站组来自监听器的 `proxy` 字段, 或显式的 `IN-NAME` / `IN-USER` 规则。改 MATCH 会让没有 YAML 的旧文档也变行为。拒绝规则只插在住宅兜底和 TUN 之后, 不替换 MATCH。
+否决。那一行不是“送回入站组”。入站组来自监听器的 `proxy`, 或显式的 `IN-NAME` / `IN-USER`。拒绝规则只加在这些兜底和 TUN 之后, 而且只在 `applies_to` 非空时加。
+
+### 不区分钉节点的身份和浏览器组
+
+把所有 `IN-USER` 都放在站点规则前面, YAML 对浏览器不生效。都放在后面, gh-pool 的 GitHub 流量会被站点规则抢走。现在只把动作是节点名、不是组名的那些规则留在站点规则前面。
 
 ### 只接受代理组 id
 
-调用方写的是组名。只认 id 会强迫它先查一遍组。名称必须唯一且启用, 因为编译器对重名启用组是整份失败, 对禁用组是把动作收成 REJECT。
+调用方写的是组名。名称必须唯一且启用。
 
 ## Consequences
 
-`process_name` 不能从这份 YAML 表达, 仍可用 PUT JSON 写。`default` 不能指向一个代理组。空规则加 `default: proxy` 会清空已存规则, 并让此后的浏览器流量改走规则而不是监听器上的 `proxy`。`default: direct` 不会把 TUN 或已分配的住宅会话改成直连。`GET /api/v1/proxy-groups` 已经能列出组, 这里不加第二个列表接口, 也没有 MCP。
+`process_name` 仍只能用 PUT JSON。`default` 不能写成一个组名。不写 `applies_to` 时, `default: direct` 不会把整个实例的未命中流量改成直连。空规则加 `default: proxy` 会清空已存规则。`GET /api/v1/proxy-groups` 仍然是组列表的 HTTP 形式, MCP 的 `list_groups` 读的是同一份。
 
 ## Testing
 
-`internal/routingrules/yaml_test.go` 覆盖 issue 文档、多文档、组名和非法形状。`internal/dataplane/mihomo/compiler_yaml_order_test.go` 断言三种 default 下浏览器入站、共享用户、住宅兜底、TUN 和 `MATCH,DIRECT` 的先后, 以及旧文档仍保留 `proxy`。`internal/routingrules/service_test.go` 断言两次 `Update` 的 apply 不会重叠。
+`yaml_test.go` 覆盖文档形状。`compiler_yaml_order_test.go` 覆盖未限定作用域时监听器仍带 `proxy`、`applies_to` 的兜底在站点规则之后、reject 只丢掉被点名的组、住宅兜底和 TUN 在拒绝规则之前、钉节点的身份在站点规则之前, 以及旧文档的原顺序。`routing_rules_test.go` 覆盖 PUT 省略 `default` 时保留原值, 以及 MCP 的 `apply_rules` 和 `tools/list`。

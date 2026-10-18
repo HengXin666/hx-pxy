@@ -25,10 +25,11 @@ const (
 // Translate turns it into the routing Config that Update already validates,
 // saves and applies.
 type yamlDocument struct {
-	Version int        `yaml:"version"`
-	Name    string     `yaml:"name"`
-	Default string     `yaml:"default"`
-	Rules   []yamlRule `yaml:"rules"`
+	Version   int        `yaml:"version"`
+	Name      string     `yaml:"name"`
+	Default   string     `yaml:"default"`
+	AppliesTo []string   `yaml:"applies_to"`
+	Rules     []yamlRule `yaml:"rules"`
 }
 
 type yamlRule struct {
@@ -65,7 +66,11 @@ func TranslateYAML(raw string, groups []store.ProxyGroupRecord) (Config, error) 
 	if err != nil {
 		return Config{}, err
 	}
-	config := Config{Default: fallback, RuleSets: make([]RuleSet, 0, len(document.Rules))}
+	appliesTo, err := translateAppliesTo(document.AppliesTo, groups)
+	if err != nil {
+		return Config{}, err
+	}
+	config := Config{Default: fallback, AppliesTo: appliesTo, RuleSets: make([]RuleSet, 0, len(document.Rules))}
 	for index, rule := range document.Rules {
 		set, err := translateRule(index, name, rule, groups)
 		if err != nil {
@@ -219,6 +224,21 @@ func resolveGroup(wanted string, groups []store.ProxyGroupRecord) (store.ProxyGr
 		return store.ProxyGroupRecord{}, fmt.Errorf("proxy group name %q is ambiguous", wanted)
 	}
 	return store.ProxyGroupRecord{}, fmt.Errorf("proxy group %q was not found", wanted)
+}
+
+func translateAppliesTo(values []string, groups []store.ProxyGroupRecord) ([]string, error) {
+	if len(values) == 0 {
+		return nil, nil
+	}
+	resolved := make([]string, 0, len(values))
+	for _, value := range values {
+		group, err := resolveGroup(value, groups)
+		if err != nil {
+			return nil, fmt.Errorf("%w: applies_to: %v", ErrInvalid, err)
+		}
+		resolved = append(resolved, group.ID)
+	}
+	return resolved, nil
 }
 
 func translateDefault(value string) (string, error) {
