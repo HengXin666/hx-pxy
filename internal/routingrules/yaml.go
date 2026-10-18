@@ -3,22 +3,22 @@ package routingrules
 import (
 	"context"
 	"fmt"
+	"io"
 	"strings"
 
 	"github.com/HengXin666/hx-pxy/internal/store"
 	"gopkg.in/yaml.v3"
 )
 
-// DefaultProxy is the YAML default that adds no rule. Unmatched traffic then
-// stays on the inbound's proxy group, because the Mihomo compiler already ends
-// the rule list with MATCH,DIRECT and the inbound listener's own rule sends
-// its traffic to that group.
+// DefaultProxy, DefaultDirect and DefaultReject are the only YAML defaults.
+// None of them is a Mihomo rule by itself. The compiler reads Config.Default
+// and places the inbound catch-all, or the reject lines, around TUN and the
+// residential fallback. See
+// .agents/notes/implemented/feature/2026-10-18-yaml-routing-intent.md.
 const (
 	DefaultProxy  = "proxy"
 	DefaultDirect = "direct"
 	DefaultReject = "reject"
-
-	fallbackSetID = "yaml-default"
 )
 
 // yamlDocument is the intent layer from issue #3. It is not a Mihomo document:
@@ -39,22 +39,17 @@ type yamlRule struct {
 
 // TranslateYAML turns one intent document into a whole routing Config.
 // Applying it replaces the stored document; it does not merge with it.
-//
-// default:proxy adds nothing. Unmatched traffic stays on the inbound's proxy
-// group because the Mihomo compiler ends every document with MATCH,DIRECT and
-// the inbound's own rule already sends its traffic to that group.
-// default:direct is that same MATCH,DIRECT, so it also adds nothing.
-// default:reject becomes one final rule set (tcp and udp) compiled before
-// MATCH,DIRECT, so it wins without a second compiler and without editing the
-// hardcoded line. A default that names a proxy group is rejected: the inbound
-// already is a proxy group, and a document-wide override would have to replace
-// MATCH,DIRECT itself.
+// A second YAML document, or trailing syntax, is rejected rather than ignored.
 func TranslateYAML(raw string, groups []store.ProxyGroupRecord) (Config, error) {
 	var document yamlDocument
 	decoder := yaml.NewDecoder(strings.NewReader(raw))
 	decoder.KnownFields(true)
 	if err := decoder.Decode(&document); err != nil {
 		return Config{}, fmt.Errorf("%w: yaml: %v", ErrInvalid, err)
+	}
+	var extra yaml.Node
+	if err := decoder.Decode(&extra); err != io.EOF {
+		return Config{}, fmt.Errorf("%w: yaml must contain exactly one document", ErrInvalid)
 	}
 	if document.Version != 1 {
 		return Config{}, fmt.Errorf("%w: yaml version must be 1", ErrInvalid)
@@ -66,20 +61,17 @@ func TranslateYAML(raw string, groups []store.ProxyGroupRecord) (Config, error) 
 	if len(name) > 40 {
 		return Config{}, fmt.Errorf("%w: yaml name is too long", ErrInvalid)
 	}
-	config := Config{RuleSets: make([]RuleSet, 0, len(document.Rules)+1)}
+	fallback, err := translateDefault(document.Default)
+	if err != nil {
+		return Config{}, err
+	}
+	config := Config{Default: fallback, RuleSets: make([]RuleSet, 0, len(document.Rules))}
 	for index, rule := range document.Rules {
 		set, err := translateRule(index, name, rule, groups)
 		if err != nil {
 			return Config{}, err
 		}
 		config.RuleSets = append(config.RuleSets, set)
-	}
-	fallback, err := translateDefault(document.Default)
-	if err != nil {
-		return Config{}, err
-	}
-	if fallback != nil {
-		config.RuleSets = append(config.RuleSets, *fallback)
 	}
 	return config, nil
 }
@@ -229,22 +221,16 @@ func resolveGroup(wanted string, groups []store.ProxyGroupRecord) (store.ProxyGr
 	return store.ProxyGroupRecord{}, fmt.Errorf("proxy group %q was not found", wanted)
 }
 
-func translateDefault(value string) (*RuleSet, error) {
+func translateDefault(value string) (string, error) {
 	value = strings.ToLower(strings.TrimSpace(value))
 	if value == "" {
 		value = DefaultProxy
 	}
 	switch value {
-	case DefaultProxy, DefaultDirect:
-		return nil, nil
-	case DefaultReject:
-		return &RuleSet{
-			ID: fallbackSetID, Name: "yaml default", Enabled: true, Priority: 10000,
-			Action: Action{Type: value},
-			Rules:  []Rule{{Type: "network", Value: "tcp"}, {Type: "network", Value: "udp"}},
-		}, nil
+	case DefaultProxy, DefaultDirect, DefaultReject:
+		return value, nil
 	default:
-		return nil, fmt.Errorf("%w: default must be proxy, direct or reject", ErrInvalid)
+		return "", fmt.Errorf("%w: default must be proxy, direct or reject", ErrInvalid)
 	}
 }
 

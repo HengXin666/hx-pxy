@@ -489,11 +489,13 @@ func capabilityEndpoints() []CapabilityEndpoint {
 			Fields: []CapabilityField{
 				{Name: "version", Type: "integer", Required: true, Description: "Document version. Only 1 is accepted.", Example: 1},
 				{Name: "name", Type: "string", Description: "Name copied onto each translated rule set.", Example: "env-xxx-proxy"},
-				{Name: "default", Type: "string", Default: "proxy", Description: "proxy and direct add no rule: unmatched traffic hits the compiler's MATCH,DIRECT and stays on the inbound group. reject adds a final tcp/udp rule so it wins over that line. A proxy group is not a valid default."},
+				{Name: "default", Type: "string", Default: "proxy", Description: "proxy keeps unmatched traffic on the inbound's own group, after the YAML rules. direct lets that traffic hit MATCH,DIRECT. reject appends tcp and udp REJECT after the residential fallback and TUN, still before MATCH,DIRECT. A proxy group is not a valid default."},
 				{Name: "rules", Type: "array<object>", Description: "Earlier rules win. match has exactly one key (domain, domain_suffix, domain_keyword, geosite, geoip, ip_cidr, dst_port, network) whose value is a string or a list. action is proxy, direct or reject. proxy requires group, an id or a unique enabled group name.", Example: []any{map[string]any{"match": map[string]any{"domain_suffix": []any{".github.com"}}, "action": "proxy", "group": "github-group"}}},
 			},
 			Errors: []CapabilityError{
-				{Status: 422, Code: "validation_failed", Meaning: "The document is not version 1, a match key is unknown, or group does not name one enabled proxy group."},
+				{Status: 400, Code: "invalid_request", Meaning: "The body could not be read."},
+				{Status: 413, Code: "payload_too_large", Meaning: "The YAML body is larger than 64KiB."},
+				{Status: 422, Code: "validation_failed", Meaning: "The document is not version 1, YAML is malformed or has a second document, a match or action is illegal, name is too long, or group does not name one enabled proxy group."},
 			},
 			SeeAlso: []string{"routing_rules.read", "routing_rules.update"},
 		},

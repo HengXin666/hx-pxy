@@ -1,6 +1,7 @@
 package api
 
 import (
+	"errors"
 	"io"
 	"net/http"
 
@@ -44,7 +45,12 @@ func (s *Server) handleRoutingRulesApply(writer http.ResponseWriter, request *ht
 	request.Body = http.MaxBytesReader(writer, request.Body, 64<<10)
 	raw, err := io.ReadAll(request.Body)
 	if err != nil {
-		s.writeAPIError(writer, request, http.StatusBadRequest, "invalid_request", "yaml body is missing or too large")
+		var tooLarge *http.MaxBytesError
+		if errors.As(err, &tooLarge) {
+			s.writeAPIError(writer, request, http.StatusRequestEntityTooLarge, "payload_too_large", "yaml body is larger than 64KiB")
+			return
+		}
+		s.writeAPIError(writer, request, http.StatusBadRequest, "invalid_request", "yaml body could not be read")
 		return
 	}
 	config, err := s.routingRules.ApplyYAML(request.Context(), string(raw))

@@ -187,6 +187,10 @@ func (c *Compiler) Compile(ctx context.Context) (Compiled, error) {
 	endpoints := make([]Endpoint, 0, len(listeners))
 	residentialFallbackRules := make([]string, 0)
 	sharedInboundRules := make([]string, 0)
+	// Dedicated listeners normally set `proxy`, which never consults rules.
+	// A YAML default removes that binding and, for default:proxy only, records
+	// an IN-NAME catch-all so unmatched traffic still reaches the same group.
+	dedicatedFallbacks := make([]string, 0)
 	usedEndpoints := make(map[string]string)
 	usedEdgeRoutes := make(map[string]string)
 	routesByListener := make(map[string][]store.ResidentialClientRouteRecord)
@@ -245,6 +249,12 @@ func (c *Compiler) Compile(ctx context.Context) (Compiled, error) {
 		if err != nil {
 			return Compiled{}, err
 		}
+		if routeConfig.Default != "" && len(clientRoutesForListener) == 0 {
+			delete(config, "proxy")
+			if routeConfig.Default == routingrules.DefaultProxy {
+				dedicatedFallbacks = append(dedicatedFallbacks, "IN-NAME,"+listenerConfigName(record.ID)+","+egressName)
+			}
+		}
 		if len(clientRoutesForListener) > 0 {
 			residentialFallbackRules = append(
 				residentialFallbackRules,
@@ -302,12 +312,27 @@ func (c *Compiler) Compile(ctx context.Context) (Compiled, error) {
 	if err != nil {
 		return Compiled{}, err
 	}
-	// Service selection runs before the administrator's site routing: a member
-	// username must always reach its own proxy group, whatever the
-	// destination, otherwise two services sharing one port would leak into
-	// each other's egress.
-	compiledRules = append(compiledRules, sharedInboundRules...)
-	compiledRules = append(compiledRules, routingrules.Compile(routeConfig, groups, listeners, listenerConfigName)...)
+	siteRules := routingrules.Compile(routeConfig, groups, listeners, listenerConfigName)
+	switch routeConfig.Default {
+	case "":
+		// No YAML default: a shared-inbound username matches before site
+		// rules, so two services on one port cannot leak into each other.
+		// Dedicated listeners still carry `proxy` and do not reach here.
+		compiledRules = append(compiledRules, sharedInboundRules...)
+		compiledRules = append(compiledRules, siteRules...)
+	case routingrules.DefaultProxy:
+		// Site rules first. Unmatched traffic then hits the inbound's own
+		// group (shared IN-USER, or the dedicated IN-NAME recorded above).
+		compiledRules = append(compiledRules, siteRules...)
+		compiledRules = append(compiledRules, sharedInboundRules...)
+		compiledRules = append(compiledRules, dedicatedFallbacks...)
+	case routingrules.DefaultDirect, routingrules.DefaultReject:
+		// No inbound catch-all. Unmatched browser traffic falls through to
+		// MATCH,DIRECT, or to the reject lines inserted after TUN.
+		compiledRules = append(compiledRules, siteRules...)
+	default:
+		return Compiled{}, fmt.Errorf("routing default %q is unsupported", routeConfig.Default)
+	}
 	compiledRules = append(compiledRules, residentialFallbackRules...)
 	tun, tunRule, err := compileTUN(settings, groups)
 	if err != nil {
@@ -316,10 +341,14 @@ func (c *Compiler) Compile(ctx context.Context) (Compiled, error) {
 	if tunRule != "" {
 		compiledRules = append(compiledRules, tunRule)
 	}
-	// YAML default:proxy is not a rule: unmatched traffic stays on the inbound
-	// proxy group, and this line is what puts it there. default:direct is the
-	// same line. default:reject is a rule compiled above, so it wins first.
-	// See .agents/notes/implemented/feature/2026-10-18-yaml-routing-intent.md
+	if routeConfig.Default == routingrules.DefaultReject {
+		// After residential fallback and TUN, before the final line, so a
+		// reject default does not swallow those inbounds.
+		compiledRules = append(compiledRules, "NETWORK,tcp,REJECT", "NETWORK,udp,REJECT")
+	}
+	// Not the inbound's proxy group. That group is the listener `proxy`
+	// field, or an IN-NAME/IN-USER rule above. This line is only what is
+	// left. See .agents/notes/implemented/feature/2026-10-18-yaml-routing-intent.md
 	compiledRules = append(compiledRules, "MATCH,DIRECT")
 	document := map[string]any{
 		"tun":       tun,

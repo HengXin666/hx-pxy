@@ -62,3 +62,17 @@ func TestRoutingRulesApplyPostsYAMLBody(t *testing.T) {
 		t.Fatalf("status = %d, applied = %q, config = %+v", recorder.Code, service.applied, service.config)
 	}
 }
+
+func TestRoutingRulesApplyRejectsOversizedBody(t *testing.T) {
+	service := &fakeRoutingRulesService{}
+	server, err := NewServer(&stubBundleService{}, slog.New(slog.NewTextHandler(io.Discard, nil)), WithRoutingRules(service))
+	if err != nil {
+		t.Fatal(err)
+	}
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/routing-rules/apply", strings.NewReader(strings.Repeat("a", 64<<10+1)))
+	server.Handler().ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusRequestEntityTooLarge || service.applied != "" || !strings.Contains(recorder.Body.String(), "payload_too_large") {
+		t.Fatalf("status = %d, applied = %q, body = %s", recorder.Code, service.applied, recorder.Body.String())
+	}
+}

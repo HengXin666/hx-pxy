@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/HengXin666/hx-pxy/internal/store"
 )
@@ -64,6 +65,11 @@ type RuleSet struct {
 }
 
 type Config struct {
+	// Default is set by a YAML apply. Empty means a legacy JSON document:
+	// listeners keep their proxy binding and shared-inbound users still win
+	// before site rules. proxy, direct and reject change that order; see
+	// .agents/notes/implemented/feature/2026-10-18-yaml-routing-intent.md.
+	Default  string    `json:"default,omitempty"`
 	RuleSets []RuleSet `json:"rule_sets"`
 }
 
@@ -90,6 +96,9 @@ func Load(ctx context.Context, reader Reader) (Config, error) {
 }
 
 type Service struct {
+	// mu covers save, apply and rollback. Overlapping updates let the slower
+	// rollback write the older document back over the newer one.
+	mu         sync.Mutex
 	repository Repository
 	applier    Applier
 }
@@ -106,6 +115,8 @@ func (s *Service) Get(ctx context.Context) (Config, error) {
 }
 
 func (s *Service) Update(ctx context.Context, config Config) (Config, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	normalize(&config)
 	groups, err := s.repository.ListProxyGroups(ctx)
 	if err != nil {
@@ -143,6 +154,11 @@ func save(ctx context.Context, repository Repository, config Config) error {
 }
 
 func Validate(config Config, groups []store.ProxyGroupRecord) error {
+	switch config.Default {
+	case "", DefaultProxy, DefaultDirect, DefaultReject:
+	default:
+		return fmt.Errorf("%w: default must be proxy, direct or reject", ErrInvalid)
+	}
 	if len(config.RuleSets) > 100 {
 		return fmt.Errorf("%w: at most 100 rule sets are allowed", ErrInvalid)
 	}
@@ -317,6 +333,7 @@ func validateRule(rule Rule) error {
 }
 
 func normalize(config *Config) {
+	config.Default = strings.ToLower(strings.TrimSpace(config.Default))
 	for setIndex := range config.RuleSets {
 		set := &config.RuleSets[setIndex]
 		set.ID = strings.ToLower(strings.TrimSpace(set.ID))
