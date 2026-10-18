@@ -18,6 +18,10 @@ Status: implemented
 
 ## Alternatives considered
 
+### 继续使用现有 PUT JSON 接口
+
+保留现有接口最简单，也避免增加一种文档格式；已有管理端仍然可以用它维护规则。否决: HX-Jungle 的浏览器调用方拿到的是通用 YAML 意图文档，并需要在运行中一次性替换规则，要求它们改写为内部 JSON 结构会增加耦合，不能满足这些调用方的输入约束。
+
 ### 另写一个 Mihomo YAML 编译器
 
 issue 初稿把翻译放在 `internal/compiler`。否决: 规则文本、AND/IN-NAME 作用域、组名解析和回滚都已经在 `routingrules.Compile` 和 `Service.Update` 里。第二套编译器会在两者不一致时静默分流。
