@@ -1,6 +1,7 @@
 package api
 
 import (
+	"io"
 	"net/http"
 
 	"github.com/HengXin666/hx-pxy/internal/routingrules"
@@ -30,4 +31,26 @@ func (s *Server) handleRoutingRules(writer http.ResponseWriter, request *http.Re
 	default:
 		methodNotAllowed(writer, request, http.MethodGet, http.MethodPut)
 	}
+}
+
+// handleRoutingRulesApply accepts the YAML intent document and replaces the
+// stored routing rules. The body is the document itself, not a JSON wrapper,
+// so a fingerprint-browser profile can post the file it already keeps.
+func (s *Server) handleRoutingRulesApply(writer http.ResponseWriter, request *http.Request) {
+	if request.Method != http.MethodPost {
+		methodNotAllowed(writer, request, http.MethodPost)
+		return
+	}
+	request.Body = http.MaxBytesReader(writer, request.Body, 64<<10)
+	raw, err := io.ReadAll(request.Body)
+	if err != nil {
+		s.writeAPIError(writer, request, http.StatusBadRequest, "invalid_request", "yaml body is missing or too large")
+		return
+	}
+	config, err := s.routingRules.ApplyYAML(request.Context(), string(raw))
+	if err != nil {
+		s.handleError(writer, request, err)
+		return
+	}
+	writeJSON(writer, http.StatusOK, config)
 }

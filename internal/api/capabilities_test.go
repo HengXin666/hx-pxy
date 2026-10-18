@@ -266,7 +266,7 @@ var optionalAdminRoutes = []string{
 	"/api/v1/nodes", "/api/v1/nodes/", "/api/v1/node-settings",
 	"/api/v1/residential/presets", "/api/v1/residential/providers",
 	"/api/v1/residential/channels",
-	"/api/v1/settings", "/api/v1/routing-rules",
+	"/api/v1/settings", "/api/v1/routing-rules", "/api/v1/routing-rules/apply",
 	"/api/v1/docker-access",
 }
 

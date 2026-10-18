@@ -316,6 +316,10 @@ func (c *Compiler) Compile(ctx context.Context) (Compiled, error) {
 	if tunRule != "" {
 		compiledRules = append(compiledRules, tunRule)
 	}
+	// YAML default:proxy is not a rule: unmatched traffic stays on the inbound
+	// proxy group, and this line is what puts it there. default:direct is the
+	// same line. default:reject is a rule compiled above, so it wins first.
+	// See .agents/notes/implemented/feature/2026-10-18-yaml-routing-intent.md
 	compiledRules = append(compiledRules, "MATCH,DIRECT")
 	document := map[string]any{
 		"tun":       tun,
