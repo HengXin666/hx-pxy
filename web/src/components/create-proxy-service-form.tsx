@@ -173,9 +173,14 @@ export function CreateProxyServiceForm({ nodes, subscriptions, residentialChanne
     finally { setSubmitting(false) }
   }
 
+  // A group is a selection, so a rule-shaped source that resolves to exactly one
+  // member is the same handle-in-disguise the server refuses. estimated === 0 is
+  // allowed: a source that has not produced a snapshot yet is dormant, not a
+  // one-node group. See internal/proxygroup/single_node_rule.go.
+  const singleMemberRule = sourceMode === "rule" && selectedSubscriptions.length > 0 && estimated === 1
   const validSource = sourceMode === "direct"
     || (sourceMode === "pinned" ? pinnedNode !== ""
-      : sourceMode === "rule" ? selectedSubscriptions.length > 0
+      : sourceMode === "rule" ? selectedSubscriptions.length > 0 && !singleMemberRule
         : sourceMode === "manual" ? selectedNodes.length >= 2
           : selectedChannel !== undefined)
   const nonLoopback = bindAddress.trim() !== "" && !["127.0.0.1", "::1", "localhost"].includes(bindAddress.trim())
@@ -226,12 +231,15 @@ export function CreateProxyServiceForm({ nodes, subscriptions, residentialChanne
               </div>
               {knobs.regions && <Field label="地区"><MultiChipSet values={regionChoices} current={selectedRegions} onChange={setSelectedRegions} /></Field>}
               <div className="grid gap-3 sm:grid-cols-2">
-                {knobs.limit && <Field label="最多节点"><Input type="number" min={1} max={500} value={limit} onChange={(event) => setLimit(Number(event.target.value))} /></Field>}
+                {knobs.limit && <Field label="最多节点"><Input type="number" min={2} max={500} value={limit} onChange={(event) => setLimit(Number(event.target.value))} /></Field>}
                 {knobs.maxLatency && <Field label="最大延迟 ms"><Input type="number" min={1} max={60000} value={maxLatency} onChange={(event) => setMaxLatency(Number(event.target.value))} /></Field>}
               </div>
               {/* 池的成员大多从未测速过: 说明"不可用"与"没测过"不是一回事。 */}
               {!knobs.maxLatency && <p className="text-[11px] leading-4 text-muted-foreground">该来源不按延迟筛选：未测速的成员同样会被选中，实际可用性由数据面健康检查决定。</p>}
               <div className="flex items-center gap-2 rounded-md border bg-muted/60 px-3 py-2 text-xs"><Gauge className="size-4 text-info" />当前指标预计命中 {estimated} 个节点</div>
+              {/* 与服务端同一条判据: 订阅当前只有一个成员、或 limit/筛选择出只剩一个,
+                  都不能建组。0 个是「还没刷新」的休眠态, 不拦。 */}
+              {singleMemberRule && <p className="text-[11px] leading-4 text-destructive">这次规则当前只能解析出 1 个节点，不能建组。只让一个服务走一个节点请改用「单节点出口」（listener.node_id）；要给组留选择余地，请放宽筛选或多选订阅。</p>}
             </> : sourceMode === "pinned" ? <>
               {/* 单节点出口: 钉住一个节点, 不建组。这是服务端推荐的形态, 也是
                   「一个节点 = 一个组」被拒绝之后唯一还成立的一条路。 */}

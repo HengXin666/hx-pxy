@@ -2,6 +2,12 @@
 
 Status: implemented
 
+**2026-10-18 收紧**: 本文的「判据只看静态 `node_ids`」已由
+`.agents/notes/implemented/architecture/2026-10-18-a-group-size-is-its-members.md`
+改为「按解析后的成员数判」。下面关于单订阅、`allow_empty`、`limit=1` 仍可放行的段落
+是**上一版**的记录, 不再是当前行为; 其余决策 (在 `normalize` 里判、`listener.node_id`、
+`AllowSingleNode`、存量行可编辑) 仍然有效。
+
 推翻
 .agents/notes/implemented/architecture/2026-10-01-api-cannot-grow-the-group-graph.md
 中「不在 `proxygroup.Service.Create` 里按成员数拒绝」的那条判断。该 note 的其余部分
@@ -189,10 +195,11 @@ len(spec.GroupIDs) == 0 && !spec.IncludeDirect && !spec.AllowEmpty
   `香港专线04` 被包了两次, 这才是真正的浪费。否决理由: 它需要历史对照, 单次调用看不到;
   而且它允许第一个单节点组通过, 于是「每个节点各建一个」这个最常见的形态完全不受约束。
 
-- **只拦 `NodeIDs`, 不看 `IncludeDirect` / `AllowEmpty` / `SubscriptionIDs`。** 这正是最终
-  采用的实现, 但值得写下来它为什么不是「漏判」: 一个订阅今天有 1305 个节点、明天可能只有
-  1 个, 而那是**快照**的属性, 不是请求的属性 —— 按它拒绝会让一次改名因为调用方无法在本次
-  请求里修的事实而失败。`include_direct` 是第二个成员; `allow_empty` 是「以后才填」。
+- **只拦 `NodeIDs`, 不看 `IncludeDirect` / `AllowEmpty` / `SubscriptionIDs`。** 这是上一版
+  采用的实现, 2026-10-18 收紧后已不成立。它最强的理由是动态快照: 一个订阅今天有 1305 个
+  节点、明天可能只有 1 个, 按快照拒绝会让一次改名因为调用方无法在本次请求里修的事实而
+  失败。否决理由: 实测中「单订阅当前只有 1 个节点」「`limit=1`」「筛选后只剩 1 个」都是
+  **请求本身**只选一个成员的形状, 不是快照缩水; 放行它们等于规则只拦一种 JSON 拼写。
 
 ## Consequences
 
@@ -203,15 +210,18 @@ len(spec.GroupIDs) == 0 && !spec.IncludeDirect && !spec.AllowEmpty
 
 - 住宅渠道的四个写点显式传 `AllowSingleNode: true`, 行为不变;
 - 存量的单节点组仍可改名/停用/换策略(成员集合不变时), 因此收敛路径不被堵死;
-- 单订阅组、单组组合、DIRECT-only、`allow_empty` 组全部不受影响 —— 生产库现存的 6 个组
-  (`良心云` / `proxyscrape-pool` / `shadowmere` / `doulor-gh-pool` 走订阅,
-  `residential-linkup` 是 2 节点, `residential-WsPxy-colo` 是 3 订阅)一个都不会被这条规则拒绝。
+- 单组组合、DIRECT-only、0 个成员的 `allow_empty` 休眠组不受影响。**单订阅与
+  `allow_empty`+单节点不再豁免**: 它们当前解析出的成员数是 1, 现在由
+  `2026-10-18-a-group-size-is-its-members.md` 拒绝。多节点订阅组
+  (`良心云` / `proxyscrape-pool` / `shadowmere` / `doulor-gh-pool`)、2 节点的
+  `residential-linkup`、3 订阅的 `residential-WsPxy-colo` 仍然不受影响。
 
 **实测验证**:
 
 - `internal/proxygroup/single_node_rule_test.go`: 拒绝单节点、拒绝 `["n1","n1"]` 去重后仍
-  只有一个、拒绝两节点缩成一个、放行两节点/节点+DIRECT/DIRECT-only/`allow_empty`/单订阅、
-  放行 `AllowSingleNode`、放行存量单节点组的改名停用。
+  只有一个、拒绝两节点缩成一个、放行两节点/节点+DIRECT/DIRECT-only/0 成员的 `allow_empty`、
+  放行 `AllowSingleNode`、放行存量单节点组的改名停用。单订阅与 `allow_empty`+单节点的拒绝
+  见 `2026-10-18-a-group-size-is-its-members.md`。
 - `internal/api/proxy_group_single_node_test.go`: 走真实 store + 真实领域服务的 HTTP 路径,
   断言 422 `validation_failed`、消息含补救方式、且**被拒绝的请求没有留下任何组行**。
 - `internal/proxyservice/reuse_test.go`: `proxy_service.create` 在单节点来源上返回
@@ -221,9 +231,10 @@ len(spec.GroupIDs) == 0 && !spec.IncludeDirect && !spec.AllowEmpty
 
 **已知边界**:
 
-- 判据只看**静态**的 `node_ids`。一个单订阅组如果其快照只有一个节点, 仍然能建 —— 这是
-  刻意的, 理由见上。所以这条规则治的是「为单个节点建组」这个**动作**, 不是「组恰好只有
-  一个成员」这个**状态**。
+- 判据只看**静态** `node_ids` 的版本已被收紧为「解析后的成员数」。当前行为见
+  `2026-10-18-a-group-size-is-its-members.md`: 单订阅快照只有一个节点、`limit=1`、筛选项
+  只剩一个、`allow_empty`+一个节点都会被拒; 创建**之后**快照缩水成 1 个仍是状态变化,
+  不在创建期拦截。
 - 存量单节点组不会自动清理。它们的收敛仍然要靠把 listener 改成 `node_id` 再删组
   (顺序不能倒: `listeners.proxy_group_id` 是 `ON DELETE RESTRICT`)。
 - 钉住的服务仍然在行上引用一个**锚组**: `listeners.proxy_group_id` 是 NOT NULL 外键, 编译器
@@ -231,5 +242,5 @@ len(spec.GroupIDs) == 0 && !spec.IncludeDirect && !spec.AllowEmpty
   组**; 库里仍然需要一个已启用的组作为锚, 否则 listener 服务会拒绝
   (`create and enable at least one proxy group before naming a node directly`)。这是既有语义,
   本次没有改动, 但把它写下来, 免得下一个人以为「pinned 不需要任何组」而把锚组删掉。
-- 前端只在「固定节点」模式下限制 < 2; 跨订阅规则模式下的 `limit=1` 不被拦, 因为那描述的是
-  「从一个大池里只留最快的那个」, 池本身仍然是选择 —— 与用户说的「一个大节点组」一致。
+- 前端现在也在「跨订阅规则」模式下拦截预计命中 1 个节点的情况 (含 `limit=1` 与筛选后只剩
+  一个), 提示改用 `listener.node_id`; 服务端才是最终判据, 前端只是提前说明。

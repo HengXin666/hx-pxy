@@ -21,7 +21,24 @@ type singleNodeHarness struct {
 	nodes   []string
 }
 
+// candidateRepository lets a test control what a subscription resolves to
+// without building a full snapshot. Only ListGroupNodeCandidates is overridden;
+// every other store method is promoted from the real store.
+type candidateRepository struct {
+	*store.Store
+	candidates []store.GroupNodeCandidate
+}
+
+func (r candidateRepository) ListGroupNodeCandidates(context.Context) ([]store.GroupNodeCandidate, error) {
+	return r.candidates, nil
+}
+
 func newSingleNodeHarness(t *testing.T, nodeCount int) *singleNodeHarness {
+	t.Helper()
+	return newSingleNodeHarnessWithCandidates(t, nodeCount, nil)
+}
+
+func newSingleNodeHarnessWithCandidates(t *testing.T, nodeCount int, candidates []store.GroupNodeCandidate) *singleNodeHarness {
 	t.Helper()
 	ctx := context.Background()
 	database, err := store.Open(ctx, filepath.Join(t.TempDir(), "state.db"))
@@ -29,7 +46,7 @@ func newSingleNodeHarness(t *testing.T, nodeCount int) *singleNodeHarness {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = database.Close() })
-	service, err := NewService(database, &testReconciler{})
+	service, err := NewService(candidateRepository{Store: database, candidates: candidates}, &testReconciler{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -85,6 +102,101 @@ func TestCreateRejectsOneNodeGroupAfterDeduplication(t *testing.T) {
 	}
 }
 
+// TestCreateRejectsResolvedSingleMemberShapes closes the paths that survived
+// the static node_ids check: allow_empty did not make a one-node group dormant,
+// a subscription can currently hold one node, and limit=1 over a pool asks for
+// exactly one member. All three are measured 2026-10-18 against the running
+// service, which is why the criterion is the resolved member count.
+func TestCreateRejectsResolvedSingleMemberShapes(t *testing.T) {
+	harness := newSingleNodeHarnessWithCandidates(t, 3, []store.GroupNodeCandidate{
+		candidateNode("node-a", "sub-1", "HK 01"),
+		candidateNode("node-b", "sub-1", "HK 02"),
+		candidateNode("node-c", "sub-2", "HK 03"),
+	})
+	for _, id := range []string{"sub-1", "sub-2"} {
+		if _, err := harness.store.CreateSubscription(harness.ctx, store.SubscriptionRecord{
+			ID: id, Name: id, SourceType: "inline", SourceClass: "pool",
+			SourceConfigEncrypted: []byte{0x01}, Enabled: true, Version: 1,
+			RefreshIntervalSeconds: 3600,
+			CreatedAt:              time.Now().UTC(), UpdatedAt: time.Now().UTC(),
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	cases := []struct {
+		name string
+		spec SourceSpec
+	}{
+		{name: "allow-empty-plus-one-node", spec: SourceSpec{NodeIDs: harness.nodes[:1], AllowEmpty: true}},
+		{name: "subscription-with-one-node", spec: SourceSpec{SubscriptionIDs: []string{"sub-2"}}},
+		{name: "subscription-limit-one", spec: SourceSpec{SubscriptionIDs: []string{"sub-1"}, Limit: 1}},
+		{name: "subscription-filtered-to-one", spec: SourceSpec{SubscriptionIDs: []string{"sub-1"}, NameKeywords: []string{"HK 01"}}},
+	}
+	for _, testCase := range cases {
+		_, err := harness.service.Create(harness.ctx, CreateRequest{
+			Name: "solo-" + testCase.name, Strategy: "manual", SourceSpec: testCase.spec,
+		})
+		if !errors.Is(err, ErrInvalid) || !strings.Contains(err.Error(), "代理组节点必须 > 1") {
+			t.Fatalf("%s: Create() error = %v, want the one-member rejection", testCase.name, err)
+		}
+	}
+	records, err := harness.store.ListProxyGroups(harness.ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(records) != 0 {
+		t.Fatalf("rejected creates left %d group(s) behind", len(records))
+	}
+}
+
+// TestCreateAllowsResolvedMultiMemberShapes is the negative control for the
+// resolved count: a two-node subscription, a one-member subscription plus an
+// explicit node, and an unrefreshed subscription must all stay creatable.
+func TestCreateAllowsResolvedMultiMemberShapes(t *testing.T) {
+	harness := newSingleNodeHarnessWithCandidates(t, 3, []store.GroupNodeCandidate{
+		candidateNode("node-a", "sub-1", "HK 01"),
+		candidateNode("node-b", "sub-1", "HK 02"),
+	})
+	for _, id := range []string{"sub-1", "sub-empty"} {
+		if _, err := harness.store.CreateSubscription(harness.ctx, store.SubscriptionRecord{
+			ID: id, Name: id, SourceType: "inline", SourceClass: "pool",
+			SourceConfigEncrypted: []byte{0x01}, Enabled: true, Version: 1,
+			RefreshIntervalSeconds: 3600,
+			CreatedAt:              time.Now().UTC(), UpdatedAt: time.Now().UTC(),
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	cases := []struct {
+		name string
+		spec SourceSpec
+	}{
+		{name: "two-node-subscription", spec: SourceSpec{SubscriptionIDs: []string{"sub-1"}}},
+		{name: "node-plus-two-node-subscription", spec: SourceSpec{NodeIDs: harness.nodes[:1], SubscriptionIDs: []string{"sub-1"}}},
+		{name: "unrefreshed-subscription", spec: SourceSpec{SubscriptionIDs: []string{"sub-empty"}}},
+	}
+	for _, testCase := range cases {
+		if _, err := harness.service.Create(harness.ctx, CreateRequest{
+			Name: "pool-" + testCase.name, Strategy: "manual", SourceSpec: testCase.spec,
+		}); err != nil {
+			t.Fatalf("%s: Create() error = %v, want success", testCase.name, err)
+		}
+	}
+}
+
+func candidateNode(id, subscriptionID, displayName string) store.GroupNodeCandidate {
+	return store.GroupNodeCandidate{
+		NodeConfigRecord: store.NodeConfigRecord{
+			ID: id, Fingerprint: "fingerprint-" + id, DisplayName: displayName,
+			Protocol: "http", LifecycleState: "healthy",
+			CanonicalConfigEncrypted: []byte{0x01},
+		},
+		SubscriptionIDs: []string{subscriptionID},
+	}
+}
+
 // TestCreateAcceptsEveryOtherSingleSourceShape is the negative control. Without
 // it, "reject everything" would pass the test above. Each case is a shape that
 // is genuinely not a node handle.
@@ -98,6 +210,12 @@ func TestCreateAcceptsEveryOtherSingleSourceShape(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
+	anchor, err := harness.service.Create(harness.ctx, CreateRequest{
+		Name: "anchor", Strategy: "manual", SourceSpec: SourceSpec{NodeIDs: harness.nodes},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	cases := []struct {
 		name   string
@@ -106,9 +224,10 @@ func TestCreateAcceptsEveryOtherSingleSourceShape(t *testing.T) {
 	}{
 		{name: "two-nodes", spec: SourceSpec{NodeIDs: harness.nodes}, reason: "the group is a real selection"},
 		{name: "node-plus-direct", spec: SourceSpec{NodeIDs: harness.nodes[:1], IncludeDirect: true}, reason: "DIRECT is a second member"},
-		{name: "direct-only", spec: SourceSpec{IncludeDirect: true}, reason: "server direct is a real single-member policy"},
-		{name: "dormant", spec: SourceSpec{NodeIDs: harness.nodes[:1], AllowEmpty: true}, reason: "allow_empty means it fills in later"},
-		{name: "one-subscription", spec: SourceSpec{SubscriptionIDs: []string{"sub-1"}}, reason: "size is a property of the snapshot, not the request"},
+		{name: "direct-only", spec: SourceSpec{IncludeDirect: true}, reason: "server direct is a real single-member policy and the anchor for pinned listeners"},
+		{name: "dormant", spec: SourceSpec{AllowEmpty: true}, reason: "zero members until it fills in later"},
+		{name: "unrefreshed-subscription", spec: SourceSpec{SubscriptionIDs: []string{"sub-1"}}, reason: "zero resolved members until the snapshot arrives"},
+		{name: "single-group-composition", spec: SourceSpec{GroupIDs: []string{anchor.ID}}, reason: "a composition of one group is a policy reference, not a node handle"},
 	}
 	for _, testCase := range cases {
 		_, err := harness.service.Create(harness.ctx, CreateRequest{
@@ -179,6 +298,43 @@ func TestUpdateStillRenamesALegacyOneNodeGroup(t *testing.T) {
 		t.Fatalf("Update() of an existing one-node group error = %v, want success", err)
 	}
 	if renamed.Name != "legacy-solo-renamed" || renamed.Enabled {
+		t.Fatalf("Update() = %+v, want the rename and disable applied", renamed)
+	}
+}
+
+// TestUpdateStillRenamesALegacyOneMemberSubscriptionGroup covers the legacy row
+// whose one member comes from a subscription that currently holds one node.
+// The stored shape is already one member; freezing it would make the row
+// impossible to rename or disable, so the exemption is based on the stored
+// shape, not on the candidate carrying an explicit node_ids list.
+func TestUpdateStillRenamesALegacyOneMemberSubscriptionGroup(t *testing.T) {
+	harness := newSingleNodeHarnessWithCandidates(t, 1, []store.GroupNodeCandidate{
+		candidateNode("node-a", "sub-1", "HK 01"),
+	})
+	if _, err := harness.store.CreateSubscription(harness.ctx, store.SubscriptionRecord{
+		ID: "sub-1", Name: "sub-1", SourceType: "inline", SourceClass: "pool",
+		SourceConfigEncrypted: []byte{0x01}, Enabled: true, Version: 1,
+		RefreshIntervalSeconds: 3600,
+		CreatedAt:              time.Now().UTC(), UpdatedAt: time.Now().UTC(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	legacy, err := harness.service.Create(harness.ctx, CreateRequest{
+		Name: "legacy-sub-solo", Strategy: "manual",
+		SourceSpec:      SourceSpec{SubscriptionIDs: []string{"sub-1"}},
+		AllowSingleNode: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	renamed, err := harness.service.Update(harness.ctx, legacy.ID, UpdateRequest{
+		Version: legacy.Version, Name: "legacy-sub-solo-renamed", Strategy: "manual",
+		SourceSpec: SourceSpec{SubscriptionIDs: []string{"sub-1"}}, Enabled: false,
+	})
+	if err != nil {
+		t.Fatalf("Update() of an existing one-member subscription group error = %v, want success", err)
+	}
+	if renamed.Name != "legacy-sub-solo-renamed" || renamed.Enabled {
 		t.Fatalf("Update() = %+v, want the rename and disable applied", renamed)
 	}
 }

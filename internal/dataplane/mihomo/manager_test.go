@@ -339,6 +339,10 @@ func TestManagerRunsSOCKS5ListenerThroughSelectedNode(t *testing.T) {
 	group, err := groupService.Create(ctx, proxygroup.CreateRequest{
 		Name: "selected-upstream", Strategy: "manual",
 		SourceSpec: proxygroup.SourceSpec{SubscriptionIDs: []string{subscriptionRecord.ID}},
+		// This fixture deliberately has exactly one upstream so the dataplane
+		// test can prove which node a listener selected. That is the managed
+		// exemption, not an API caller wrapping a node in a group.
+		AllowSingleNode: true,
 	})
 	if err != nil {
 		t.Fatal(err)

@@ -137,11 +137,17 @@ auth:     svc-... / ...           ← 已生成的凭据
   用后者时，被指向的节点消失/停用会让整份配置编译失败并**指名那条 Listener**，不会静默退化成别的出口。
   反例（别再这么干）：为一个节点建一个 `manual` 组、里面只放它一个 —— 那正是「组当句柄用」，
   实测本机一度积出 57 个单成员组却只指向 28 个不同节点。
-  **服务端现在直接拒绝**：`source_spec` 只含一个 `node_id`（且没有订阅、没有组引用、
-  没有 `include_direct`、没有 `allow_empty`）的建组/更新返回 422 `validation_failed`，
-  消息里给出 `node_id` 这条正确用法。不要试图绕过它（拆成两次调用也不行：
-  把两节点组改成一节点同样被拒）。`quickstart` 的 `node_ids` 也必须 ≥ 2。
-  见 `.agents/notes/implemented/architecture/2026-10-18-a-group-is-not-a-node-handle.md`。
+  **服务端按解析后的成员数拒绝**：只要 `source_spec` 当前会解析出 1 个成员，建组/更新就返回
+  422 `validation_failed`，消息里给出 `node_id` 这条正确用法。算数的包括：一个 `node_id`、
+  当前快照只有一个节点的订阅、筛选项（`name_keywords` / `regions` / `states` / `max_latency_ms`）
+  或 `limit=1` 之后只剩一个、以及 `allow_empty` 配一个节点。**没有任何 JSON 字段可以绕过**；
+  `allow_empty` 只放行 0 个成员（休眠态），不放行 1 个。不要试图拆成两次调用：
+  把两节点组改成一节点同样被拒。只有 `include_direct` 单独成组（服务器直连锚组）和
+  单个 `group_ids` 引用（组合策略）是例外；它们不是节点句柄。
+  `quickstart` 的 `node_ids` 也必须 ≥ 2；`subscription_url` / `subscription_inline` 刷新后只剩
+  1 个节点也会在创建组之前被拒并回滚订阅。
+  见 `.agents/notes/implemented/architecture/2026-10-18-a-group-is-not-a-node-handle.md`
+  与 `.agents/notes/implemented/architecture/2026-10-18-a-group-size-is-its-members.md`。
 - **代理组和节点是两种对象，id 不能互换**。两者的 id 都长得像不透明字符串，字段名只差一个
   复数 `s`，所以最容易犯的错是把 `GET /api/v1/proxy-groups` 拿到的 id 填进
   `source_spec.node_ids`。判据看前缀：`node-…` 是节点（`GET /api/v1/nodes`）、`group-…`

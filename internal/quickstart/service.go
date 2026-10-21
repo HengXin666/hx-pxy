@@ -265,6 +265,13 @@ func (s *Service) Create(ctx context.Context, request Request) (result Result, r
 		workflow = append(workflow, fmt.Sprintf("refreshed subscription, %d node(s) detected", refresh.EstimatedNodes))
 		result.Refresh = &refresh
 		result.EstimatedNodes = refresh.EstimatedNodes
+		// The group service refuses a one-member group by resolved count; check
+		// the snapshot here too so a one-node inline/remote source gets the
+		// remedy before the group call, not after it. Zero nodes is allowed:
+		// that is a dormant source, not a one-node group.
+		if refresh.EstimatedNodes == 1 {
+			return Result{}, fmt.Errorf("%w: quickstart builds a proxy group, and a group is a selection; this source resolved to exactly one node. Publish that node with listener.node_id (POST /api/v1/listeners) instead of creating a group", ErrInvalid)
+		}
 		sourceSpec.subscriptionIDs = []string{created.ID}
 	}
 

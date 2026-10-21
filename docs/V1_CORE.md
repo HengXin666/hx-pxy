@@ -198,7 +198,7 @@ score = availability_score
 - [x] 支持按来源订阅、名称地区标签、协议、生命周期和最新延迟动态筛选、排序与 Top N；结构化 Geo、ASN、自定义标签和完整规则 Trace 仍待规则流水线补齐。
 - [x] 禁止形成代理组循环依赖，并在保存时返回完整依赖链。
 - [x] 代理组为空时支持 `fail-closed` 或回退到 `DIRECT`；指定节点/组回退仍未完成。
-- [x] 默认拒绝「只含一个节点」的代理组（创建与更新同判）：组是在一批节点里挑一个，不是指向某个节点的句柄。正确形态是一个大组 + `listener.node_id` 钉具体节点；`proxy_service.create` 的 `listener.node_id` 不建任何组。住宅渠道等由聚合托管成员的组走 `AllowSingleNode` 豁免。
+- [x] 默认拒绝「解析后只含一个成员」的代理组（创建与更新同判）：判据看当前快照解析出的成员数，不只看 `node_ids` 长度。一个 `node_id`、当前只有一个节点的订阅、筛选项或 `limit=1` 之后只剩一个、以及 `allow_empty` 配一个节点都会被拒；0 个成员（休眠/未刷新）放行。组是在一批节点里挑一个，不是指向某个节点的句柄。正确形态是一个大组 + `listener.node_id` 钉具体节点；`proxy_service.create` 的 `listener.node_id` 不建任何组。`include_direct` 单独成组与单个 `group_ids` 组合是策略例外；住宅渠道等由聚合托管成员的组走 `AllowSingleNode` 豁免。
 - [x] 代理组 ID 与节点 ID 是两套 id 空间：`node_ids` / `group_ids` / `subscription_ids` 各只收对应类型，放错按**类型**错误报（点名该放哪个字段），不被数量规则抢先回答；`GET /api/v1/capabilities` 的 `object_model` 段机器可读地陈述该区别。
 
 ### 5.2 出站策略

@@ -307,7 +307,13 @@ func (s *Service) Update(ctx context.Context, id string, request UpdateRequest) 
 	if err != nil {
 		return Group{}, mapStoreError(err)
 	}
-	allowSingleNode := updateMayKeepSingleNode(request, existing.SourceSpecJSON)
+	// Existing one-member rows must stay editable even when their membership no
+	// longer comes from an explicit node_ids list (a legacy subscription group,
+	// or a row created through the old allow_empty hole). legacySingleMember
+	// checks the stored shape, not the candidate, so it cannot be used to reach
+	// a one-member shape from a larger one.
+	allowSingleNode := updateMayKeepSingleNode(request, existing.SourceSpecJSON) ||
+		s.legacySingleMember(ctx, existing.SourceSpecJSON)
 	normalized, err := s.normalize(ctx, id, request.Name, request.Strategy, request.SourceSpec, request.Enabled, request.EmptyBehavior, request.FallbackTarget, request.DialerProxyGroup, allowSingleNode)
 	if err != nil {
 		return Group{}, err
@@ -473,9 +479,11 @@ func (s *Service) normalize(
 			)
 		}
 	}
-	// Checked after NodeIDs are deduplicated, so ["n1","n1"] counts as the
-	// one-node group it really is. See single_node_rule.go.
-	if err := rejectSingleNodeGroup(spec, allowSingleNode); err != nil {
+	// Checked after NodeIDs are deduplicated and after subscription members are
+	// resolved, so ["n1","n1"], one subscription holding one node, and
+	// limit=1 over a pool all count as the one-member group they really are.
+	// See single_node_rule.go.
+	if err := s.rejectSingleMemberGroup(ctx, spec, allowSingleNode); err != nil {
 		return normalizedGroup{}, err
 	}
 	// Reject a chained group that also offers DIRECT: DIRECT is a builtin and

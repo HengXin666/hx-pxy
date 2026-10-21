@@ -32,7 +32,7 @@ func capabilityEndpoints() []CapabilityEndpoint {
 				{Name: "node_ids", Type: "array<string>", Description: "Select explicit nodes instead of a subscription. Must name at least two nodes: quickstart builds a group, and a group is a selection, not a handle for one node. To publish one specific node, create the listener with listener.node_id instead."},
 				{Name: "source_class", Type: "string", Enum: "source_class", Description: "Required when subscription_url or subscription_inline creates a source: it selects the failure policy its nodes obey. Rejected with subscription_ids or node_ids, whose sources already carry their own classification.", Example: "subscription"},
 				{Name: "strategy", Type: "string", Enum: "proxy_group_strategy", Description: "Selection strategy. Omitted uses the service default."},
-				{Name: "limit", Type: "integer", Description: "Cap how many members the group keeps. 0 keeps every match."},
+				{Name: "limit", Type: "integer", Description: "Cap how many members the group keeps. 0 keeps every match. 1 is rejected: it would resolve to a one-member group. Use listener.node_id for a single-node exit."},
 				{Name: "kind", Type: "string", Enum: "listener_kind", Default: "mixed", Description: "Protocol to publish."},
 				{Name: "bind_address", Type: "string", Default: "127.0.0.1", Description: "Bind address. Loopback by default so exposure is deliberate."},
 				{Name: "port", Type: "integer", Default: 7890, Description: "Listen port. In shared-inbound mode the aggregate entry point owns the port and this value is ignored."},
@@ -49,8 +49,8 @@ func capabilityEndpoints() []CapabilityEndpoint {
 				"port":             7890,
 			},
 			Errors: []CapabilityError{
-				{Status: 422, Code: "invalid_quickstart", Meaning: "The request is missing a source or mixes mutually exclusive fields, or a source-creating call omitted source_class.", Remediation: "Provide exactly one of subscription_url, subscription_inline, subscription_ids, or node_ids; add source_class when creating a subscription."},
-				{Status: 422, Code: "quickstart_failed", Meaning: "A step failed after the request was accepted. Everything this call created is removed first, so an error never leaves a half-built service. A node_ids list holding a single node fails here, because the group it would build is a one-node handle.", Remediation: "Read the message: it names the failing step. For a single node, skip quickstart and publish a listener with listener.node_id; otherwise pass at least two node_ids or a subscription."},
+				{Status: 422, Code: "invalid_quickstart", Meaning: "The request is missing a source, mixes mutually exclusive fields, a source-creating call omitted source_class, or the refreshed source resolved to exactly one node.", Remediation: "Provide exactly one of subscription_url, subscription_inline, subscription_ids, or node_ids; add source_class when creating a subscription. For a single node, skip quickstart and publish a listener with listener.node_id."},
+				{Status: 422, Code: "quickstart_failed", Meaning: "A step failed after the request was accepted. Everything this call created is removed first, so an error never leaves a half-built service. A node_ids list holding a single node fails here, because the group it would build is a one-node handle.", Remediation: "Read the message: it names the failing step. For a single node, skip quickstart and publish a listener with listener.node_id; otherwise pass at least two node_ids or a subscription that currently resolves to at least two nodes."},
 			},
 			ResponseRef: "The created group and listener, plus share_path and consumer_nodes_path.",
 			SeeAlso:     []string{"capabilities.read", "listener.share.read"},
@@ -66,12 +66,12 @@ func capabilityEndpoints() []CapabilityEndpoint {
 				{Name: "strategy", Type: "string", Enum: "proxy_group_strategy", Description: "Selection strategy for a new group; omit when reusing one.", Example: "url-test"},
 				{Name: "empty_behavior", Type: "string", Enum: "empty_behavior", Default: "fail-closed", Description: "Behaviour when the source selects no node.", Example: "fail-closed"},
 				{Name: "enabled", Type: "boolean", Default: true, Description: "Whether the group starts enabled."},
-				{Name: "source_spec", Type: "object", Description: "Required for a new group; omit when reusing one. See source_spec.* fields. A new group must resolve to more than one node: a source_spec naming exactly one node_id (no subscription, no group, no include_direct, no allow_empty) is rejected. Use listener.node_id to point a single service at a single node.", Example: map[string]any{"subscription_ids": []string{"<subscription-id>"}, "sort_by": "latency", "limit": 20}},
+				{Name: "source_spec", Type: "object", Description: "Required for a new group; omit when reusing one. See source_spec.* fields. A new group must resolve to at least two members: one node_id, a subscription whose current snapshot holds one node, a filter or limit that leaves one member, and allow_empty combined with one node are all rejected. Two exceptions are policies, not node handles: include_direct alone, and a single group reference with no other member. Use listener.node_id to point a single service at a single node.", Example: map[string]any{"subscription_ids": []string{"<subscription-id>"}, "sort_by": "latency", "limit": 20}},
 				{Name: "listener", Type: "object", Required: true, Description: "How the service is published. See listener.* fields.", Example: map[string]any{"name": "hk-pool", "kind": "mixed", "bind_address": "127.0.0.1", "port": 7890}},
-				{Name: "source_spec.allow_empty", Type: "boolean", Description: "Permit a deliberately dormant fail-closed group.", Default: false},
-				{Name: "source_spec.node_ids", Type: "array<string>", Description: "Explicit node ids. Must name at least two nodes unless combined with a subscription, another group, include_direct, or allow_empty: a one-node group is a handle for that node, not a selection. Pin the service with listener.node_id instead."},
+				{Name: "source_spec.allow_empty", Type: "boolean", Description: "Permit a deliberately dormant fail-closed group with zero members. It does NOT exempt a one-node group: allow_empty plus one node_id is rejected because the group is already a handle for that node.", Default: false},
+				{Name: "source_spec.node_ids", Type: "array<string>", Description: "Explicit node ids. The request must resolve to at least two members overall; one node_id alone is rejected even with allow_empty, and a subscription/filter/limit that leaves only one member is rejected too. A one-node group is a handle for that node, not a selection. Pin the service with listener.node_id instead."},
 				{Name: "source_spec.group_ids", Type: "array<string>", Description: "Other groups used as members, enabling serial fallback and parallel composition. References must stay acyclic.", SeeAlso: []string{"proxy_group.create"}},
-				{Name: "source_spec.subscription_ids", Type: "array<string>", Description: "Subscriptions whose current nodes become members.", SeeAlso: []string{"subscription.create", "subscription.refresh"}},
+				{Name: "source_spec.subscription_ids", Type: "array<string>", Description: "Subscriptions whose current nodes become members. The current snapshot is resolved before creation: a subscription holding exactly one node, or a rule/limit that leaves one member, is rejected. An unrefreshed subscription resolves to zero members and may be created dormant.", SeeAlso: []string{"subscription.create", "subscription.refresh"}},
 				{Name: "source_spec.name_keywords", Type: "array<string>", Description: "Substring filters on node name."},
 				{Name: "source_spec.regions", Type: "array<string>", Description: "Region filters, upper-cased before matching."},
 				{Name: "source_spec.protocols", Type: "array<string>", Description: "Protocol filters.", Enum: "node_protocol"},
@@ -111,7 +111,7 @@ func capabilityEndpoints() []CapabilityEndpoint {
 				},
 			},
 			Errors: []CapabilityError{
-				{Status: 422, Code: "proxy_service_create_failed", Meaning: "The group or its listener was rejected. The proxy group is rolled back, so nothing half-created remains. A source_spec that resolves to exactly one node is rejected here, not created.", Remediation: "Read the message: it names the offending field. If the service should exit through one node, send listener.node_id and omit the group fields: no group is created. If several nodes should be selectable, send at least two node_ids or one subscription_ids entry."},
+				{Status: 422, Code: "proxy_service_create_failed", Meaning: "The group or its listener was rejected. The proxy group is rolled back, so nothing half-created remains. A source_spec that resolves to exactly one member is rejected here, not created.", Remediation: "Read the message: it names the offending field. If the service should exit through one node, send listener.node_id and omit the group fields: no group is created. If several nodes should be selectable, make the source resolve to at least two members (two or more node_ids, or a subscription whose current snapshot plus filters leaves at least two)."},
 				{Status: 400, Code: "invalid_request", Meaning: "The body did not decode, or contained an unknown field.", Remediation: "Send only the documented fields; unknown fields are rejected, not ignored."},
 			},
 			ResponseRef: "Returns the created group and listener, including the listener's share_path.",
@@ -276,14 +276,14 @@ func capabilityEndpoints() []CapabilityEndpoint {
 			Fields: []CapabilityField{
 				{Name: "name", Type: "string", Required: true, Description: "Display name."},
 				{Name: "strategy", Type: "string", Required: true, Enum: "proxy_group_strategy", Description: "Selection strategy."},
-				{Name: "source_spec", Type: "object", Required: true, Description: "Member selection. Same fields as the proxy service source_spec. A group must resolve to more than one node: a source_spec naming exactly one node_id (with no subscription, no group, no include_direct and no allow_empty) is rejected, because that group would be a handle for that one node rather than a selection."},
+				{Name: "source_spec", Type: "object", Required: true, Description: "Member selection. Same fields as the proxy service source_spec. A group must resolve to at least two members: one node_id, a one-node subscription, a filter/limit leaving one member, and allow_empty plus one node are rejected, because that group would be a handle for that one node rather than a selection. include_direct alone and a single group reference with no other member remain valid policies."},
 				{Name: "enabled", Type: "boolean", Default: true},
 				{Name: "empty_behavior", Type: "string", Enum: "empty_behavior", Default: "fail-closed"},
 				{Name: "fallback_target_id", Type: "string", Description: "Group to fall back to when empty_behavior is not enough."},
 				{Name: "dialer_proxy_group_id", Type: "string", Description: "Group this group's egress is tunnelled through, at any depth. Every member this group selects is dialled through that group. The target must exist, be enabled, and must not close a cycle; a group that also sets source_spec.include_direct is rejected because DIRECT would bypass the chain. This is the group-level chain; upstream_proxy_group_id on a provider is the node-level equivalent."},
 			},
 			Errors: []CapabilityError{
-				{Status: 422, Code: "invalid_proxy_group", Meaning: "Validation failed, for example a disabled or missing referenced group, a reference cycle, or a source_spec that resolves to exactly one node.", Remediation: "Read the message; it names the group that broke the reference. For the one-node case do not build a group per node: keep one group per source (a subscription is already a group) and pin the individual service with listener.node_id, which needs no group at all."},
+				{Status: 422, Code: "invalid_proxy_group", Meaning: "Validation failed, for example a disabled or missing referenced group, a reference cycle, or a source_spec that resolves to exactly one member.", Remediation: "Read the message; it names the group that broke the reference. For the one-member case do not build a group per node: keep one group per multi-node source and pin the individual service with listener.node_id, which needs no group at all."},
 			},
 		},
 		{
@@ -579,7 +579,7 @@ func capabilityNotSupported() []string {
 		"Chaining is residential-only. A plain subscription node cannot chain; upstream_proxy_group_id on a residential provider is the only chain entry point.",
 		"'Supports all protocols' is false and must not be claimed: the supported set is what the installed Mihomo build supports, exposed as the node_protocol enum.",
 		"WebSocket paths are not an authentication mechanism. A published ws service still requires credentials.",
-		"A proxy group is not a handle for one node. A source_spec that resolves to exactly one node_id (no subscription, no group, no include_direct, no allow_empty) is rejected with 422; publish the service with listener.node_id instead. Build one group per source, not one group per node.",
+		"A proxy group is not a handle for one node. A source_spec that resolves to exactly one member is rejected with 422: one node_id, a one-node subscription, a filter/limit leaving one member, and allow_empty plus one node all count. include_direct alone and a single group reference with no other member are policies, not node handles, and stay valid. Publish a single-node service with listener.node_id instead. Build one group per multi-node source, not one group per node.",
 	}
 }
 

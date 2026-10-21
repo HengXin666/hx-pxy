@@ -51,28 +51,35 @@ func TestProxyGroupCreateRejectsOneNodeWithRemedy(t *testing.T) {
 	}
 	handler := server.Handler()
 
-	body := `{"name":"solo-hk","strategy":"manual","source_spec":{"node_ids":["` + nodeID + `"]}}`
-	recorder := httptest.NewRecorder()
-	handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, "/api/v1/proxy-groups", strings.NewReader(body)))
+	// allow_empty used to be advertised as an exemption for a one-node group;
+	// it only makes a zero-member group dormant. Both spellings are refused.
+	bodies := []string{
+		`{"name":"solo-hk","strategy":"manual","source_spec":{"node_ids":["` + nodeID + `"]}}`,
+		`{"name":"solo-hk-empty","strategy":"manual","source_spec":{"node_ids":["` + nodeID + `"],"allow_empty":true}}`,
+	}
+	for _, body := range bodies {
+		recorder := httptest.NewRecorder()
+		handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, "/api/v1/proxy-groups", strings.NewReader(body)))
 
-	if recorder.Code != http.StatusUnprocessableEntity {
-		t.Fatalf("status = %d, want 422; body = %s", recorder.Code, recorder.Body.String())
-	}
-	var payload struct {
-		Error struct {
-			Code    string `json:"code"`
-			Message string `json:"message"`
-		} `json:"error"`
-	}
-	if err := json.Unmarshal(recorder.Body.Bytes(), &payload); err != nil {
-		t.Fatalf("decode body %q: %v", recorder.Body.String(), err)
-	}
-	if payload.Error.Code != "validation_failed" {
-		t.Fatalf("code = %q, want validation_failed", payload.Error.Code)
-	}
-	for _, want := range []string{"代理组节点必须 > 1", "listener.node_id"} {
-		if !strings.Contains(payload.Error.Message, want) {
-			t.Fatalf("message = %q, want it to mention %q", payload.Error.Message, want)
+		if recorder.Code != http.StatusUnprocessableEntity {
+			t.Fatalf("status = %d, want 422; body = %s", recorder.Code, recorder.Body.String())
+		}
+		var payload struct {
+			Error struct {
+				Code    string `json:"code"`
+				Message string `json:"message"`
+			} `json:"error"`
+		}
+		if err := json.Unmarshal(recorder.Body.Bytes(), &payload); err != nil {
+			t.Fatalf("decode body %q: %v", recorder.Body.String(), err)
+		}
+		if payload.Error.Code != "validation_failed" {
+			t.Fatalf("code = %q, want validation_failed", payload.Error.Code)
+		}
+		for _, want := range []string{"代理组节点必须 > 1", "listener.node_id"} {
+			if !strings.Contains(payload.Error.Message, want) {
+				t.Fatalf("message = %q, want it to mention %q", payload.Error.Message, want)
+			}
 		}
 	}
 	// Nothing may be written by a rejected create.

@@ -124,6 +124,32 @@ func TestCreateRefreshesBeforePublishing(t *testing.T) {
 	}
 }
 
+// TestCreateRejectsOneNodeSourceBeforeBuildingTheGroup keeps the quickstart
+// error next to the cause. The group service would reject the same request two
+// steps later (after registering and refreshing a subscription), but the caller
+// would have to read through a wrapped failure to find listener.node_id.
+func TestCreateRejectsOneNodeSourceBeforeBuildingTheGroup(t *testing.T) {
+	t.Parallel()
+
+	service, subscriptions, services := newTestService(t)
+	subscriptions.refreshResult = subscription.RefreshResult{SubscriptionID: "sub-1", EstimatedNodes: 1}
+
+	_, err := service.Create(context.Background(), Request{
+		Name:               "solo",
+		SubscriptionInline: "1.2.3.4:8080",
+		SourceClass:        "pool",
+	})
+	if !errors.Is(err, ErrInvalid) || !strings.Contains(err.Error(), "listener.node_id") {
+		t.Fatalf("Create() error = %v, want ErrInvalid naming listener.node_id", err)
+	}
+	if services.received.Name != "" {
+		t.Fatalf("group was created despite the single-node source: %+v", services.received)
+	}
+	if len(subscriptions.deleted) != 1 || subscriptions.deleted[0] != "sub-1" {
+		t.Fatalf("deleted = %v, want the created subscription rolled back", subscriptions.deleted)
+	}
+}
+
 func TestCreateRollsBackSubscriptionWhenPublishFails(t *testing.T) {
 	t.Parallel()
 
